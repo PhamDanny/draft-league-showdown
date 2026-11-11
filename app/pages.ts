@@ -178,7 +178,7 @@ export function pageRoutes(app: Express) {
 		if (leagues.length) return res.redirect(`/l/${leagues[0].id}`);
 		render(req, res, {
 			title: 'Draft League',
-			body: `<h1>Draft League</h1>${req.user!.is_admin ? newLeagueForm() : '<p class="muted">No leagues yet.</p>'}`,
+			body: `<h1>Draft League</h1>${req.user!.is_admin ? newLeagueForm() : '<p class="muted">You\'re not in a league yet. Ask your commissioner for an invite link.</p>'}`,
 		});
 	});
 
@@ -203,7 +203,7 @@ export function pageRoutes(app: Express) {
 	app.get('/join/:code', requireUser, (req, res) => {
 		const id = L.joinLeague(String(req.params.code), req.user!.id);
 		if (!id) {
-			render(req, res, { title: 'Invite', body: '<h1>This invite link doesn\'t work.</h1>' });
+			render(req, res, { title: 'Invite', body: '<h1>This invite link doesn\'t work.</h1><p class="muted">Ask your commissioner for a new one.</p>' });
 			return;
 		}
 		res.redirect(`/l/${id}`);
@@ -261,7 +261,7 @@ export function pageRoutes(app: Express) {
 			const mine = state.onClock?.user_id === me;
 			main = `<section class="panel"><h2>Draft</h2>
 				${mine ? `<div class="callout"><b>It's your pick.</b> Round ${state.round + 1}.</div>` : ''}
-				<p>${state.onClock ? (mine ? '' : `<b>${esc(state.onClock.showdown_name)}</b> is on the clock (round ${state.round + 1}).`) : 'Done.'}</p>
+				<p>${state.onClock ? (mine ? '' : `<b>${esc(state.onClock.showdown_name)}</b> is on the clock (round ${state.round + 1}).`) : 'The draft is complete. Waiting for the commissioner to make the schedule.'}</p>
 				<a class="btn primary" href="/l/${league.id}/draft">Draft room</a></section>`;
 		} else {
 			const my = ms.find(m => m.p1 === me || m.p2 === me);
@@ -276,7 +276,7 @@ export function pageRoutes(app: Express) {
 						${final ? `<a class="btn primary" href="/l/${league.id}/series/${my.id}">View series</a>` :
 							`<a class="btn" href="/l/${league.id}/builder#week-${my.week}">Build team</a><a class="btn primary" href="/l/${league.id}/battle/${my.id}">Play week ${my.week}</a>`}</div></section>`;
 			} else {
-				card = `<section class="panel your-match"><p class="eyebrow">Week ${week} · Your match</p><p style="margin:4px 0 0">No match this week.</p></section>`;
+				card = `<section class="panel your-match"><p class="eyebrow">Week ${week} · Your match</p><p style="margin:4px 0 0">${ms.length ? 'No match this week.' : 'No matches this week.'}</p></section>`;
 			}
 			const others = ms.filter(m => m !== my);
 			main = `${card}<div class="grid g2" style="margin-top:16px">
@@ -351,7 +351,7 @@ export function pageRoutes(app: Express) {
 					if (!sets.has(key)) sets.set(key, set);
 				}
 			}
-			return `<section class="panel"><h2>${esc(n.get(uid))}</h2>${setList([...sets].map(([text, set]) => ({ set, text })), 'No games recorded.')}</section>`;
+			return `<section class="panel"><h2>${esc(n.get(uid))}</h2>${setList([...sets].map(([text, set]) => ({ set, text })), 'No games were recorded for this player (result entered by a commissioner).')}</section>`;
 		};
 		const mine = m.p1 === req.user!.id || m.p2 === req.user!.id;
 		render(req, res, {
@@ -410,6 +410,7 @@ export function pageRoutes(app: Express) {
 		render(req, res, {
 			title: 'Teams', tab: 'teams',
 			body: `<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Teams</h1><span class="spacer"></span>${season.status === 'regular' ? teamsSeg(league.id, 'rosters') : ''}</div>
+			${season.status === 'setup' ? '<p class="muted">Teams appear here once the draft starts.</p>' : ''}
 			<div class="grid g3" id="live">${players.map(p => {
 				const r = L.roster(season.id, p.user_id);
 				const pts = r.reduce((a, x) => a + x.cost, 0);
@@ -463,7 +464,7 @@ export function pageRoutes(app: Express) {
 		const me = req.user!.id;
 		const isComm = league.role === 'commissioner';
 		if (season.status === 'setup') {
-			render(req, res, { title: 'Draft', tab: 'draft', body: '<h1>Draft</h1><p class="muted">Not started.</p>' });
+			render(req, res, { title: 'Draft', tab: 'draft', body: '<h1>Draft</h1><p class="muted">The draft hasn\'t started. The commissioner starts it from Admin once everyone has joined.</p>' });
 			return;
 		}
 		const state = L.draftState(season, settings);

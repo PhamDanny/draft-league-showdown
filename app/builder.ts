@@ -142,7 +142,9 @@ export function builderRoutes(lg: Router) {
 	lg.get('/builder', (req, res) => {
 		const ctx = builderContext(req);
 		if (!ctx.roster.length) {
-			return render(req, res, 'Teambuilder', 'builder', '<h1>Teambuilder</h1><p class="muted">No roster yet.</p>');
+			const { league, season } = req as LReq;
+			return render(req, res, 'Teambuilder', 'builder', `<h1>Teambuilder</h1><p class="muted">You don't have a roster yet. It appears here once you've drafted.</p>
+				${season.status === 'drafting' ? `<a class="btn primary" href="/l/${league.id}/draft">Draft room</a>` : ''}`);
 		}
 		render(req, res, 'Teambuilder', 'builder', '<div id="builder"></div>',
 			`<script>window.BUILDER = ${json(ctx)};</script><script src="/static/calc/data.js"></script><script src="/static/calc/calc.js"></script>
