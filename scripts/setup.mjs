@@ -24,8 +24,8 @@ function run(cmd, args, cwd, opts = {}) {
 	console.log(`> ${cmd} ${args.join(' ')}  (${path.relative(ROOT, cwd) || '.'})`);
 	execFileSync(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' && cmd === npm, ...opts });
 }
-function git(args, cwd) {
-	return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+function git(args, cwd, quiet = false) {
+	return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', quiet ? 'ignore' : 'inherit'] }).trim();
 }
 
 function fetchPinned(url, sha, dir) {
@@ -35,7 +35,7 @@ function fetchPinned(url, sha, dir) {
 		git(['remote', 'add', 'origin', url], dir);
 	}
 	let head = '';
-	try { head = git(['rev-parse', 'HEAD'], dir); } catch {}
+	try { head = git(['rev-parse', 'HEAD'], dir, true); } catch {}
 	if (head !== sha) {
 		console.log(`Fetching ${url} @ ${sha.slice(0, 8)}...`);
 		run('git', ['fetch', '--depth', '1', 'origin', sha], dir);

@@ -12,7 +12,10 @@ const SRC = path.join(CLIENT, 'play.pokemonshowdown.com', 'src');
 
 function edit(file, edits) {
 	const full = path.join(SRC, file);
-	let text = fs.readFileSync(full, 'utf8');
+	// Git on Windows may check files out with CRLF; match on LF and restore afterwards.
+	const raw = fs.readFileSync(full, 'utf8');
+	const crlf = raw.includes('\r\n');
+	let text = crlf ? raw.replace(/\r\n/g, '\n') : raw;
 	for (const [from, to, all] of edits) {
 		const count = text.split(from).length - 1;
 		if (!count || (!all && count !== 1)) {
@@ -20,7 +23,7 @@ function edit(file, edits) {
 		}
 		text = text.split(from).join(to);
 	}
-	fs.writeFileSync(full, text);
+	fs.writeFileSync(full, crlf ? text.replace(/\n/g, '\r\n') : text);
 }
 
 const HTTPS_ROUTE = 'https://${Config.routes.client}';
