@@ -69,7 +69,18 @@ function score(m: L.Match) {
 }
 function render(req: Request, res: Response, o: Omit<Parameters<typeof page>[0], 'user' | 'leagues'>) {
 	const lr = req as LReq;
-	res.send(page({ ...o, user: req.user, leagues: req.user ? L.leaguesFor(req.user.id) : [], league: o.league ?? lr.league }));
+	res.send(page({
+		...o, user: req.user, leagues: req.user ? L.leaguesFor(req.user.id) : [], league: o.league ?? lr.league,
+		seasonStatus: lr.season?.status, play: playButton(req),
+	}));
+}
+/** Header Play button: names the week of the viewer's next unfinished series, or is absent. */
+export function playButton(req: Request, exceptMatchId?: number) {
+	const lr = req as LReq;
+	if (!req.user || !lr.league || !lr.season) return undefined;
+	const m = L.nextMatchFor(lr.season.id, req.user.id);
+	if (!m || m.id === exceptMatchId) return undefined;
+	return { href: `/l/${lr.league.id}/battle/${m.id}`, label: `Play week ${m.week}` };
 }
 function back(req: Request, res: Response, fallback: string, flash?: string) {
 	const url = new URL(req.get('referer') || fallback, PUBLIC_URL);
@@ -165,9 +176,10 @@ export function pageRoutes(app: Express) {
 
 	app.get('/account', requireUser, (req, res) => {
 		const u = req.user!;
+		const first = L.leaguesFor(u.id)[0];
 		render(req, res, {
 			title: 'Account', flash: req.query.msg as string,
-			body: `<h1>Account</h1><section class="panel" style="max-width:480px">
+			body: `${first ? `<a class="eyebrow back" href="/l/${first.id}">← Back to ${esc(first.name)}</a>` : ''}<h1>Account</h1><section class="panel" style="max-width:480px">
 				<form method="post" action="/account" class="stack" style="gap:10px">
 					<label class="f">Showdown name<input name="showdown_name" value="${esc(u.showdown_name)}" maxlength="18" required></label>
 					<button class="btn primary" type="submit">Save</button>
@@ -236,13 +248,9 @@ export function pageRoutes(app: Express) {
 		</tbody></table></div>`;
 	}
 
+	// Standings live on Home now
 	lg.get('/standings', (req, res) => {
-		const { league, season } = req as LReq;
-		const st = L.standings(season.id);
-		render(req, res, {
-			title: 'Standings', tab: 'standings',
-			body: `<h1>Standings</h1><section class="panel">${standingsTable(league.id, st, names(league.id), req.user!.id, st)}</section>`,
-		});
+		res.redirect(`/l/${(req as LReq).league.id}#standings`);
 	});
 
 	lg.get('/schedule', (req, res) => {
@@ -293,7 +301,7 @@ export function pageRoutes(app: Express) {
 		};
 		render(req, res, {
 			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule',
-			body: `<p class="eyebrow">Week ${m.week} · Bo${settings.bestOf} · ${esc(league.format_name)}</p>
+			body: `<a class="eyebrow back" href="/l/${league.id}/schedule#wk${m.week}">← Schedule · Week ${m.week} · Bo${settings.bestOf}</a>
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">${esc(n.get(m.p1))} ${score(m)} ${esc(n.get(m.p2))}</h1>${statusPill(m.status)}<span class="spacer"></span>
 				${!final && (m.p1 === req.user!.id || m.p2 === req.user!.id) ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Battle</a>` : ''}</div>
 
@@ -479,7 +487,7 @@ export function pageRoutes(app: Express) {
 			return;
 		}
 		render(req, res, {
-			title: 'Draft', tab: 'draft', wide: true, body,
+			title: 'Draft', tab: season.status === 'regular' ? 'teams' : 'draft', wide: true, body,
 			scripts: POOL_FILTER_SCRIPT + LIVE_SCRIPT(league.id, 'draft-root'),
 		});
 	});

@@ -66,7 +66,7 @@
 		const gameNo = r ? r.game : nextGameNo();
 		return `<div class="bt-head">
 			<div class="bt-title">
-				<p class="eyebrow">Week ${C.week} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</p>
+				<a class="eyebrow back" href="/l/${C.leagueId}/series/${C.matchId}">← Series · Week ${C.week} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</a>
 				<h1><span>${esc(C.myName)}</span> <span class="bt-score num">${S.series.mine}–${S.series.theirs}</span> <span>${esc(C.oppName)}</span></h1>
 			</div>
 			${pips()}

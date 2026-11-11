@@ -352,13 +352,12 @@
 	function header() {
 		const [a, b] = R.series.score;
 		return `<div class="rp-head">
-			<div><p class="eyebrow">Week ${R.week} · Game ${R.game} · ${esc(R.series.p1)} ${a}–${b} ${esc(R.series.p2)}</p>
+			<div><a class="eyebrow back" href="/l/${R.leagueId}/series/${R.matchId}">← Series · Week ${R.week} · Game ${R.game} · ${esc(R.series.p1)} ${a}–${b} ${esc(R.series.p2)}</a>
 			<h1>${esc(R.players.p1)} <span class="muted">vs</span> ${esc(R.players.p2)}</h1>
 			<p class="muted" style="margin:2px 0 0">${R.winner ? `<b class="rp-win">${esc(R.winner)}</b> won` : 'Tie'}${R.turns ? ` · ${R.turns} turns` : ''}</p></div>
 			<span class="spacer"></span>
 			${R.games.length > 1 ? `<nav class="seg" aria-label="Games">${R.games.map(g => `<a class="${g.no === R.game ? 'on' : ''}" href="/l/${R.leagueId}/replay/${g.id}">Game ${g.no}</a>`).join('')}</nav>` : ''}
 			<div class="seg" role="group" aria-label="Detail"><button data-mode="spectator" class="${mode === 'spectator' ? 'on' : ''}">Spectator</button><button data-mode="full" class="${mode === 'full' ? 'on' : ''}" ${R.fullLog ? '' : 'disabled'}>Full info</button></div>
-			<a class="btn" href="/l/${R.leagueId}/series/${R.matchId}">Series</a>
 		</div>`;
 	}
 	function controls() {

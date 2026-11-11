@@ -5,6 +5,7 @@ import { all, one } from './db.ts';
 import { descs, dex, mon, rosterIds, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
+import { playButton } from './pages.ts';
 import { notify } from './events.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
@@ -123,9 +124,12 @@ function json(value: unknown) {
 	return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
-function render(req: Request, res: Response, title: string, tab: string, body: string, scripts = '', wide = false) {
+function render(req: Request, res: Response, title: string, tab: string, body: string, scripts = '', wide = false, matchId?: number) {
 	const lr = req as LReq;
-	res.send(page({ title, tab, body, scripts, wide, user: req.user, leagues: L.leaguesFor(req.user!.id), league: lr.league }));
+	res.send(page({
+		title, tab, body, scripts, wide, user: req.user, leagues: L.leaguesFor(req.user!.id), league: lr.league,
+		seasonStatus: lr.season?.status, play: playButton(req, matchId),
+	}));
 }
 
 // ---------- routes ----------
@@ -146,11 +150,10 @@ export function builderRoutes(lg: Router) {
 	});
 
 	lg.get('/play', (req, res) => {
+		// Old links: the header's Play button now links straight to the battle page
 		const { league, season } = req as LReq;
-		const me = req.user!.id;
-		const m = one<L.Match>(`SELECT * FROM matches WHERE season_id = ? AND status != 'final' AND (p1 = ? OR p2 = ?)
-			ORDER BY week LIMIT 1`, season?.id ?? 0, me, me);
-		res.redirect(m ? `/l/${league.id}/battle/${m.id}` : `/l/${league.id}/builder`);
+		const m = season ? L.nextMatchFor(season.id, req.user!.id) : undefined;
+		res.redirect(m ? `/l/${league.id}/battle/${m.id}` : `/l/${league.id}/schedule`);
 	});
 
 	/** Score-only view of a series for the battle page. Never includes sets or logs. */
@@ -207,6 +210,6 @@ export function builderRoutes(lg: Router) {
 			state: seriesState(m, me, settings.bestOf),
 		};
 		render(req, res, `vs ${oppUser.showdown_name}`, 'schedule', '<div id="battle"></div>',
-			`<script>window.BATTLE = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/battle.js"></script>`, true);
+			`<script>window.BATTLE = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/battle.js"></script>`, true, m.id);
 	});
 }
