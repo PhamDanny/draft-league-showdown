@@ -129,7 +129,8 @@ export function builderRoutes(lg: Router) {
 			return render(req, res, 'Teambuilder', 'builder', '<h1>Teambuilder</h1><p class="muted">No roster yet.</p>');
 		}
 		render(req, res, 'Teambuilder', 'builder', '<div id="builder"></div>',
-			`<script>window.BUILDER = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/builder.js"></script>`, true);
+			`<script>window.BUILDER = ${json(ctx)};</script><script src="/static/calc/data.js"></script><script src="/static/calc/calc.js"></script>
+			<script src="/static/sets.js"></script><script src="/static/builder.js"></script>`, true);
 	});
 
 	lg.get('/play', (req, res) => {

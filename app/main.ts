@@ -16,6 +16,10 @@ const server = http.createServer(app);
 
 attachShowdownProxy(server, app);
 app.use('/static', express.static(path.join(import.meta.dirname, 'public'), { maxAge: '1h' }));
+// Smogon's damage calculator, run in the browser so teams never leave it
+const CALC = path.join(import.meta.dirname, '..', 'node_modules', '@smogon', 'calc', 'dist');
+app.get('/static/calc/data.js', (_req, res) => res.sendFile(path.join(CALC, 'data', 'production.min.js'), { maxAge: '1d' }));
+app.get('/static/calc/calc.js', (_req, res) => res.sendFile(path.join(CALC, 'production.min.js'), { maxAge: '1d' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(attachUser);
 authRoutes(app);

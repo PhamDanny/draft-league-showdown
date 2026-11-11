@@ -27,7 +27,7 @@ Setup copies `.env.example` to `.env`. Fill in:
 
 ```
 browser ──► league site (app/, port 8000)
-             ├─ league pages, draft room, teambuilder, Discord sign-in
+             ├─ league pages, draft room, teambuilder (with Smogon's damage calc, run in the browser), Discord sign-in
              ├─ /l/:id/battle/:match: challenge page with Showdown's battle screen embedded
              ├─ /play.html: the Showdown client (vendor/pokemon-showdown-client, patched), used only for that embed
              ├─ /~~draftleague/action.php: Showdown login, signed for the signed-in user
