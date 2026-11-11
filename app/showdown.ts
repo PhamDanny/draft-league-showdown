@@ -54,8 +54,10 @@ export function startShowdown() {
 		},
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
-	const tag = (chunk: Buffer) => chunk.toString().split('\n').filter(Boolean).map(l => `[showdown] ${l}`).join('\n');
-	child.stdout!.on('data', c => console.log(tag(c)));
+	// Showdown's own startup hint points at its internal port, which isn't the site; hide it.
+	const tag = (chunk: Buffer) => chunk.toString().split('\n').filter(l => l.trim() && !l.includes('Test your server'))
+		.map(l => `[showdown] ${l}`).join('\n');
+	child.stdout!.on('data', c => { const t = tag(c); if (t) console.log(t); });
 	child.stderr!.on('data', c => console.error(tag(c)));
 	child.on('exit', code => {
 		child = null;
