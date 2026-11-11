@@ -414,9 +414,13 @@
 	}
 	function teams() {
 		if (mode !== 'full' || !R.teams) return '';
-		return `<div class="grid g2" style="margin-top:16px">${['p1', 'p2'].map(side => `<section class="panel"><h2>${esc(R.players[side])}</h2><div class="list">
-			${(R.teams[side]?.team || []).map((set, i) => `<div><div class="row">${sprite(set.species)}<b>${esc(set.species)}</b>${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</div>
-				<pre class="set">${esc(R.exports[side][i])}</pre></div>`).join('')}</div></section>`).join('')}</div>`;
+		// Same markup as setList() in views/layout.ts; the page's Expand all script handles the toggle
+		return `<div class="grid g2" style="margin-top:16px">${['p1', 'p2'].map(side => `<section class="panel"><h2>${esc(R.players[side])}</h2>
+			<div class="setlist"><div class="row setlist-bar"><button class="btn sm" type="button" data-sets-toggle>Expand all</button></div>
+			${(R.teams[side]?.team || []).map((set, i) => `<details class="setd"><summary>${sprite(set.species)}<b>${esc(set.species)}</b>
+				<span class="muted setd-meta">${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span>
+				${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</summary>
+				<div class="set">${esc(R.exports[side][i])}</div></details>`).join('')}</div></section>`).join('')}</div>`;
 	}
 
 	function render() {

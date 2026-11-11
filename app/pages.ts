@@ -7,7 +7,7 @@ import * as L from './league.ts';
 import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
 import { builderRoutes } from './builder.ts';
-import { esc, monLabel, page, sprite } from './views/layout.ts';
+import { esc, monChip, monLabel, page, setList, sprite } from './views/layout.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
 
@@ -303,8 +303,8 @@ export function pageRoutes(app: Express) {
 		const final = m.status === 'final';
 		const teamCol = (uid: number) => {
 			if (!final) {
-				return `<section class="panel"><h2>${esc(n.get(uid))}</h2><div class="list">${L.roster(season.id, uid).map(r =>
-					`<div>${monLabel(r.species_id, { captain: !!r.captain })}</div>`).join('')}</div></section>`;
+				return `<section class="panel"><h2>${esc(n.get(uid))}</h2><div class="bench">${L.roster(season.id, uid).map(r =>
+					monChip(r.species_id, { name: r.name, captain: !!r.captain })).join('')}</div></section>`;
 			}
 			const sets = new Map<string, any>();
 			for (const g of games) {
@@ -316,27 +316,29 @@ export function pageRoutes(app: Express) {
 					if (!sets.has(key)) sets.set(key, set);
 				}
 			}
-			return `<section class="panel"><h2>${esc(n.get(uid))}</h2><div class="list">${[...sets.values()].map(set =>
-				`<div>${monLabel(toID(set.species))}<div class="set">${esc(exportSet(set))}</div></div>`).join('') || '<div class="muted">No games recorded.</div>'}</div></section>`;
+			return `<section class="panel"><h2>${esc(n.get(uid))}</h2>${setList([...sets].map(([text, set]) => ({ set, text })), 'No games recorded.')}</section>`;
 		};
+		const mine = m.p1 === req.user!.id || m.p2 === req.user!.id;
 		render(req, res, {
 			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule',
 			body: `<a class="eyebrow back" href="/l/${league.id}/schedule#wk${m.week}">← Schedule · Week ${m.week} · Bo${settings.bestOf}</a>
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">${esc(n.get(m.p1))} ${score(m)} ${esc(n.get(m.p2))}</h1>${statusPill(m.status)}<span class="spacer"></span>
-				${!final && (m.p1 === req.user!.id || m.p2 === req.user!.id) ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Battle</a>` : ''}</div>
+				${!final && mine ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Play game ${games.length + 1}</a>` : ''}</div>
 
 			<div id="live">
 			${games.length ? `<div class="grid g3" style="margin-bottom:16px">${games.map(g => {
-		const inner = `<p class="eyebrow">Game ${g.game_no}</p><p style="margin:4px 0 0"><b>${esc(n.get(g.winner) || 'Tie')}</b>${g.turns ? ` · ${g.turns} turns` : ''}</p>`;
-		return final ? `<a class="panel" href="/l/${league.id}/replay/${g.id}" style="text-decoration:none">${inner}</a>` : `<div class="panel">${inner}</div>`;
+		const inner = `<p class="eyebrow">Game ${g.game_no}</p><p style="margin:4px 0 0"><b>${g.winner && n.get(g.winner) ? `${esc(n.get(g.winner))} won` : 'Tie'}</b>${g.turns ? ` · ${g.turns} turns` : ''}</p>
+			${final ? '<p class="game-link">Watch replay →</p>' : '<p class="muted game-note">Replay opens when the series is final.</p>'}`;
+		return final ? `<a class="panel game-card" href="/l/${league.id}/replay/${g.id}">${inner}</a>` : `<div class="panel game-card">${inner}</div>`;
 	}).join('')}</div>` : ''}
 			<div class="grid g2">${teamCol(m.p1)}${teamCol(m.p2)}</div></div>
-			${league.role === 'commissioner' ? `<section class="panel" style="margin-top:16px"><h2>Result</h2>
-				<form method="post" action="/l/${league.id}/admin/result/${m.id}" class="row">
+			${league.role === 'commissioner' ? `<details class="panel fold override" style="margin-top:16px"><summary><h3>Override result (commissioner)</h3></summary>
+				<form method="post" action="/l/${league.id}/admin/result/${m.id}" class="row" style="margin-top:10px" data-p1="${esc(n.get(m.p1))}" data-p2="${esc(n.get(m.p2))}"
+					onsubmit="return confirm('Save the result ' + this.dataset.p1 + ' ' + this.p1.value + '–' + this.p2.value + ' ' + this.dataset.p2 + '? This replaces the recorded score.')">
 					<label class="f">${esc(n.get(m.p1))}<input class="inp" name="p1" type="number" min="0" max="${settings.bestOf}" value="${m.p1_wins}" style="width:80px"></label>
 					<label class="f">${esc(n.get(m.p2))}<input class="inp" name="p2" type="number" min="0" max="${settings.bestOf}" value="${m.p2_wins}" style="width:80px"></label>
-					<button class="btn" type="submit" style="align-self:flex-end">Set</button>
-				</form></section>` : ''}`,
+					<button class="btn" type="submit" style="align-self:flex-end">Save result</button>
+				</form></details>` : ''}`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
 		});
 	});
@@ -393,15 +395,14 @@ export function pageRoutes(app: Express) {
 		const rec = st.find(x => x.userId === uid);
 		const ms = L.matches(season.id).filter(m => m.p1 === uid || m.p2 === uid);
 		// Set history: every set from a final series, grouped by Pokémon
-		const history = new Map<string, Map<string, string>>();
+		const history = new Map<string, Map<string, any>>();
 		for (const b of all<any>(`SELECT battles.* FROM battles JOIN matches ON matches.id = battles.match_id
 			WHERE matches.season_id = ? AND matches.status = 'final' AND battles.teams IS NOT NULL AND (battles.p1 = ? OR battles.p2 = ?)`, season.id, uid, uid)) {
 			const slot = b.p1 === uid ? 'p1' : 'p2';
 			for (const set of JSON.parse(b.teams)[slot]?.team || []) {
 				const id = toID(set.species);
 				if (!history.has(id)) history.set(id, new Map());
-				const text = exportSet(set);
-				history.get(id)!.set(text, text);
+				history.get(id)!.set(exportSet(set), set);
 			}
 		}
 		render(req, res, {
@@ -415,8 +416,7 @@ export function pageRoutes(app: Express) {
 				const res2 = m.status === 'final' ? (m.winner === uid ? '<span class="pill w">W</span>' : '<span class="pill l">L</span>') : statusPill(m.status);
 				return `<div class="row"><span class="num muted">Wk ${m.week}</span><a href="/l/${league.id}/series/${m.id}">vs ${esc(n.get(opp))}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
 			}).join('')}</div></section>` : ''}
-			${history.size ? `<section class="panel" style="margin-top:16px"><h2>Sets</h2><div class="list">${[...history].map(([id, sets]) =>
-				`<div>${monLabel(id)}${[...sets.values()].map(t => `<div class="set">${esc(t)}</div>`).join('')}</div>`).join('')}</div></section>` : ''}`,
+			${history.size ? `<section class="panel" style="margin-top:16px"><h2>Sets</h2>${setList([...history.values()].flatMap(sets => [...sets].map(([text, set]) => ({ set, text }))))}</section>` : ''}`,
 		});
 	});
 

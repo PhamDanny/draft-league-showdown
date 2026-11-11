@@ -104,6 +104,47 @@ ${o.flash ? `<div class="flash">${esc(o.flash)}</div>` : ''}
 ${o.body}
 </main>
 ${o.league && u ? TABS_SCRIPT : ''}
+${o.body.includes('data-sets-toggle') || o.scripts?.includes('replay.js') ? SETS_SCRIPT : ''}
 ${o.scripts || ''}
 </body></html>`;
 }
+
+/** A roster entry as a compact chip: sprite, visible name, and a TC pill for captains. */
+export function monChip(speciesId: string, opts: { name?: string, captain?: boolean } = {}) {
+	return `<span class="monchip">${sprite(speciesId, 'sm')}<span>${esc(opts.name || mon(speciesId).name)}</span>${opts.captain ? '<span class="pill tc">TC</span>' : ''}</span>`;
+}
+
+/**
+ * Sets as a collapsed list (series page, team page; replay.js renders the same markup).
+ * Each set is a <details>: the summary shows sprite, species, item, ability and Tera type;
+ * the body is the full export text, which stays in the HTML while collapsed.
+ */
+export function setList(sets: { set: any, text: string }[], empty = '') {
+	if (!sets.length) return empty ? `<p class="muted" style="margin:0">${esc(empty)}</p>` : '';
+	return `<div class="setlist">
+		<div class="row setlist-bar"><button class="btn sm" type="button" data-sets-toggle>Expand all</button></div>
+		${sets.map(({ set, text }) => `<details class="setd"><summary>${sprite(set.species, 'sm')}<b>${esc(set.species)}</b>
+			<span class="muted setd-meta">${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span>
+			${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</summary>
+			<div class="set">${esc(text)}</div></details>`).join('')}
+	</div>`;
+}
+
+// Expand all / Collapse all for every set list on the page (including ones rendered or replaced later).
+const SETS_SCRIPT = `<script>
+document.addEventListener('click', e => {
+	const b = e.target.closest('[data-sets-toggle]');
+	if (!b) return;
+	const list = b.closest('.setlist');
+	const open = b.textContent === 'Expand all';
+	list.querySelectorAll('details.setd').forEach(d => { d.open = open; });
+	b.textContent = open ? 'Collapse all' : 'Expand all';
+});
+document.addEventListener('toggle', e => {
+	const list = e.target.closest?.('.setlist');
+	const b = list?.querySelector('[data-sets-toggle]');
+	if (!b) return;
+	const all = [...list.querySelectorAll('details.setd')];
+	b.textContent = all.every(d => d.open) ? 'Collapse all' : 'Expand all';
+}, true);
+</script>`;

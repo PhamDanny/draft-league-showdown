@@ -486,3 +486,21 @@ tr.me td:first-child{box-shadow:inset 3px 0 0 var(--fg)}
 .rowlink.sched .num{min-width:28px;text-align:right}
 .rowlink.me{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--fg);border-radius:0 8px 8px 0}
 .panel[id]{scroll-margin-top:112px}
+/* Series page: game cards, roster chips, collapsed sets */
+a.game-card{text-decoration:none;color:inherit;transition:border-color .15s,background .15s}
+a.game-card:hover{border-color:var(--fg);background:var(--surface-2)}
+.game-link{margin:6px 0 0;font-weight:500;color:var(--fg)}
+.game-note{margin:6px 0 0;font-size:12.5px}
+.monchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:1px 10px 1px 1px;font-size:13px;background:var(--surface);color:var(--fg);white-space:nowrap}
+.monchip img.spr.sm{margin:-2px 0}
+.monchip .pill{margin-left:2px;padding:1px 6px}
+.setlist-bar{justify-content:flex-end;margin:0 0 6px}
+.setd{border-bottom:1px solid var(--line)}
+.setd:last-child{border-bottom:0}
+.setd summary{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;list-style:none;min-width:0}
+.setd summary::-webkit-details-marker{display:none}
+.setd summary::before{content:"▸";color:var(--muted);width:10px;flex:none}
+.setd[open] summary::before{content:"▾"}
+.setd-meta{font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.setd .set{margin:0 0 10px}
+.override summary h3{display:inline}
