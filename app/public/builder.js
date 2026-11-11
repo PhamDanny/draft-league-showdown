@@ -1,4 +1,5 @@
 // In-house teambuilder: one team per week, built from your roster, saved in this browser only.
+// Layout follows Showdown's: team on the left, set card + browse list in the middle, tools on the right.
 // Damage calcs run here too (Smogon's calculator, loaded as window.calc), so sets never leave the browser.
 (async () => {
 	const B = window.BUILDER;
@@ -13,12 +14,17 @@
 	const teraAllowed = id => B.teraMode === 'all' || isCaptain(id);
 	const allowed = new Set(B.roster.flatMap(r => r.formes));
 	const EV_MAX = 508;
+	const POPULAR = ['Leftovers', 'Heavy-Duty Boots', 'Choice Scarf', 'Choice Band', 'Choice Specs', 'Life Orb', 'Booster Energy', 'Assault Vest',
+		'Focus Sash', 'Rocky Helmet', 'Black Sludge', 'Eviolite', 'Covert Cloak', 'Loaded Dice', 'Air Balloon', 'Sitrus Berry', 'Lum Berry',
+		'Expert Belt', 'Light Clay', 'Weakness Policy', 'Clear Amulet', 'Mirror Herb', 'Throat Spray', 'Red Card', 'Eject Button', 'Eject Pack',
+		'Toxic Orb', 'Flame Orb', 'Damp Rock', 'Heat Rock', 'Terrain Extender', 'Protective Pads', 'Punching Glove', 'Shed Shell'].filter(i => D.itemDesc[i] !== undefined);
 
 	const hashWeek = Number((/week-(\d+)/.exec(location.hash) || [])[1]);
 	let week = B.weeks.find(w => w.week === hashWeek) || B.weeks.find(w => w.week === B.current) || B.weeks[0] || null;
 	let slot = 0;
 	let data = load();
 	let C = null; // calc state, per week
+	let pick = '', q = '', hi = 0, rows = []; // browse list: which field, filter text, highlighted row, current rows
 
 	function load() {
 		const d = Sets.load(B.leagueId, B.seasonId, week ? week.week : 0);
@@ -34,6 +40,7 @@
 			species: id, item: ps.item || '', ability: ps.ability || '', nature: ps.nature || 'Serious', gender: ps.gender || '',
 			moves: [...(ps.moves || []).map(toID), '', '', '', ''].slice(0, 4), evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0, ...ps.evs },
 			ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31, ...ps.ivs }, teraType: ps.teraType, level: ps.level,
+			nickname: ps.name && ps.name !== ps.species ? ps.name : '', shiny: !!ps.shiny,
 		};
 	};
 	/** The team shown: what was played for a final week, otherwise what's saved here. */
@@ -48,8 +55,14 @@
 	const img = (id, cls = '') => `<img class="spr ${cls}" src="${esc(D.species[id]?.sprite || '')}" alt="">`;
 	const nameOf = id => D.species[id]?.name || id;
 	const typeTag = t => `<span class="type t-${toID(t)}">${esc(t)}</span>`;
+	const catTag = c => `<span class="cat cat-${toID(c)}">${c === 'Physical' ? 'Phys' : c === 'Special' ? 'Spec' : 'Status'}</span>`;
 	const moveName = id => D.moves[id]?.name || id;
 	const editableWeek = () => B.weeks.find(w => w.week === B.current && w.status !== 'final') || B.weeks.find(w => w.status !== 'final');
+	const weekLabel = w => {
+		const done = w.status === 'final';
+		const tag = done ? `${w.score[0] > w.score[1] ? 'W' : 'L'} ${w.score[0]}–${w.score[1]}` : w.status === 'live' ? 'Live' : w.week === B.current ? 'Next' : '';
+		return `Week ${w.week} · vs ${w.oppName}${tag ? ` (${tag})` : ''}`;
+	};
 
 	// ---------- page ----------
 
@@ -57,37 +70,34 @@
 		const ro = readOnly();
 		const target = editableWeek();
 		root.innerHTML = `
-			<div class="row tb-top">
-				<div><p class="eyebrow">${week ? `Week ${week.week} · vs ${esc(week.oppName)}` : 'No schedule yet'}</p><h1 style="margin:0">Teambuilder</h1></div>
-				<span class="spacer"></span>
-				${ro ? `<a class="btn" href="/l/${B.leagueId}/series/${week.matchId}">Week ${week.week} series</a>
-					${target ? `<button class="btn" type="button" data-act="copy-to" data-target="${target.week}">Copy to week ${target.week}</button>` : ''}` : `
-					${B.weeks.length > 1 ? `<select class="switch" data-act="copy" aria-label="Copy a team from another week"><option value="">Copy from…</option>${B.weeks.filter(w => w !== week).map(w =>
-						`<option value="${w.week}">Week ${w.week} · ${esc(w.oppName)}</option>`).join('')}</select>` : ''}
-					<button class="btn" type="button" data-act="import">Import</button>
-					<button class="btn" type="button" data-act="export">Export</button>
-					${week ? `<a class="btn primary" href="/l/${B.leagueId}/battle/${week.matchId}">Play</a>` : ''}`}
-			</div>
-			${B.weeks.length ? `<div class="weeks">${B.weeks.map(w => {
-				const done = w.status === 'final';
-				const won = done && w.score[0] > w.score[1];
-				const pill = done ? `<span class="pill ${won ? 'w' : 'l'}">${won ? 'W' : 'L'} ${w.score[0]}–${w.score[1]}</span>` :
-					w.status === 'live' ? '<span class="pill live">Live</span>' : w.week === B.current ? '<span class="pill live">Next</span>' : '<span class="pill">—</span>';
-				return `<button class="wk ${w === week ? 'on' : ''} ${done ? 'past' : ''}" type="button" data-week="${w.week}"><span class="eyebrow">Wk ${w.week}</span><b>${esc(w.oppName)}</b>${pill}</button>`;
-			}).join('')}</div>` : ''}
-			<div class="teambar" id="tb-team"></div>
-			<div class="tbmain">
-				<div class="stack">
-					<section class="panel ${ro ? 'ro' : ''}" id="tb-edit"></section>
-					${ro ? '' : '<section class="panel" id="tb-calc"></section>'}
-				</div>
-				<div class="stack">
+			<h1 class="sr-only">Teambuilder</h1>
+			<div class="tb3">
+				<aside class="tb-l">
+					<section class="panel tb-teampanel">
+						${B.weeks.length ? `<label class="f">Week<select class="inp" data-act="week">${B.weeks.map(w =>
+							`<option value="${w.week}" ${w === week ? 'selected' : ''}>${esc(weekLabel(w))}</option>`).join('')}</select></label>` : '<p class="eyebrow">No schedule yet</p>'}
+						<div class="tb-team" id="tb-team"></div>
+						<div class="tb-acts">
+							${ro ? `<a class="btn" href="/l/${B.leagueId}/series/${week.matchId}">Series</a>
+								${target ? `<button class="btn" type="button" data-act="copy-to" data-target="${target.week}">Copy to wk ${target.week}</button>` : ''}
+								<button class="btn" type="button" data-act="export">Export</button>` : `
+								<button class="btn" type="button" data-act="import">Import</button>
+								<button class="btn" type="button" data-act="export">Export</button>
+								${B.weeks.length > 1 ? `<select class="inp" data-act="copy" aria-label="Copy a team from another week"><option value="">Copy from…</option>${B.weeks.filter(w => w !== week).map(w =>
+									`<option value="${w.week}">Week ${w.week} · ${esc(w.oppName)}</option>`).join('')}</select>` : ''}
+								${week ? `<a class="btn primary" href="/l/${B.leagueId}/battle/${week.matchId}">Play week ${week.week}</a>` : ''}`}
+						</div>
+					</section>
+				</aside>
+				<section class="panel sd" id="tb-edit"></section>
+				<aside class="stack tb-r">
 					${ro ? `<section class="panel"><p class="eyebrow">Week ${week.week}</p><h2 style="margin:4px 0">vs ${esc(week.oppName)}</h2>
 						<span class="pill ${week.score[0] > week.score[1] ? 'w' : 'l'}">${week.score[0] > week.score[1] ? 'Won' : 'Lost'} ${week.score[0]}–${week.score[1]}</span>
-						${week.played?.length ? '' : '<p class="muted" style="margin:8px 0 0;font-size:13px">No revealed team, showing what you saved.</p>'}</section>` : ''}
+						${week.played?.length ? '' : '<p class="muted" style="margin:8px 0 0;font-size:13px">No revealed team, showing what you saved.</p>'}</section>` :
+						'<section class="panel" id="tb-calc"></section>'}
 					${week && !ro ? '<section class="panel" id="tb-speed"></section>' : ''}
-					<section class="panel"><h3>Notes</h3><textarea id="tb-notes" class="inp" rows="5" aria-label="Notes" ${ro ? 'readonly' : ''}>${esc(data.notes || '')}</textarea></section>
-				</div>
+					<section class="panel"><h3>Notes</h3><textarea id="tb-notes" class="inp" rows="4" aria-label="Notes" ${ro ? 'readonly' : ''}>${esc(data.notes || '')}</textarea></section>
+				</aside>
 			</div>
 			<dialog id="tb-dialog" class="panel"></dialog>`;
 		renderTeam();
@@ -100,59 +110,176 @@
 		const el = document.getElementById('tb-team');
 		el.innerHTML = team().map((s, i) => s ? `
 			<button type="button" class="tslot ${i === slot ? 'on' : ''}" data-slot="${i}">${img(s.species)}
-				<span class="tmeta"><b>${esc(nameOf(s.species))}</b><small>${esc(s.item || 'No item')}</small></span>
+				<span class="tmeta"><b>${esc(s.nickname || nameOf(s.species))}</b><small>${esc(s.item || 'No item')}</small></span>
 				${s.teraType && teraAllowed(s.species) ? `<span class="pill tc">${esc(s.teraType)}</span>` : ''}</button>` : `
 			<button type="button" class="tslot empty ${i === slot ? 'on' : ''}" data-slot="${i}" ${readOnly() ? 'disabled' : ''}>
-				<span class="plus" aria-hidden="true">+</span><span class="tmeta"><b>Add Pokémon</b><small>Slot ${i + 1}</small></span></button>`).join('');
+				<span class="plus" aria-hidden="true">+</span><span class="tmeta"><b>Add Pokémon</b></span></button>`).join('');
 	}
 
-	// ---------- set editor ----------
+	// ---------- set card ----------
 
-	function natureLabel(n) {
-		if (!n.plus || n.plus === n.minus) return n.name;
-		return `${n.name} (+${LABEL[n.plus]} −${LABEL[n.minus]})`;
-	}
 	const usedEntries = except => new Set(data.team.filter((s, i) => s && i !== except).map(s => rosterEntry(s.species)?.id));
+	function defaultPick(set) {
+		if (!set) return 'species';
+		if (readOnly()) return 'stats';
+		const empty = set.moves.findIndex(m => !m);
+		return empty >= 0 ? `move${empty}` : 'stats';
+	}
+	function fieldValue(set, f) {
+		if (!set) return '';
+		if (f === 'species') return nameOf(set.species);
+		if (f.startsWith('move')) { const m = set.moves[Number(f.slice(4))]; return m ? moveName(m) : ''; }
+		return set[f] || '';
+	}
+	function statColor(v) { return `hsl(${Math.min(Math.floor(v * 180 / 714), 360)},75%,45%)`; }
 
 	function renderEditor() {
 		const el = document.getElementById('tb-edit');
 		const set = team()[slot];
+		pick = defaultPick(set);
+		q = ''; hi = 0;
 		if (!set) {
-			const used = usedEntries(-1);
-			el.innerHTML = `<h2>Add a Pokémon</h2><div class="rpick">${B.roster.map(r => `
-				<button type="button" data-add="${esc(r.id)}" ${used.has(r.id) ? 'disabled' : ''}>${img(r.id)}
-					<span class="tmeta"><b>${esc(nameOf(r.id))}</b><span class="types">${(D.species[r.id]?.types || []).map(typeTag).join('')}</span></span>
-					${r.captain && B.teraMode === 'captains' ? '<span class="pill tc">TC</span>' : ''}</button>`).join('')}</div>`;
+			if (readOnly()) { el.innerHTML = '<p class="muted tb-empty">Empty slot.</p>'; return; }
+			el.innerHTML = `<div class="sd-search"><label class="sd-f"><span>Pokémon</span><input data-pick="species" placeholder="Search your roster" autocomplete="off"></label></div>
+				<div class="sd-browse" id="sd-browse"></div>`;
+			renderBrowse();
 			return;
 		}
 		const sp = D.species[set.species];
 		const ro = readOnly();
 		const dis = ro ? 'disabled' : '';
-		const used = usedEntries(slot);
+		const st = Sets.stats(D, set);
 		const tera = teraAllowed(set.species);
+		const pickIn = (f, label) => `<label class="sd-f"><span>${label}</span><input data-pick="${f}" value="${esc(fieldValue(set, f))}" autocomplete="off" ${dis}></label>`;
 		el.innerHTML = `
-			<div class="editor-head">
-				<div class="bigsprite">${img(set.species, 'lg')}</div>
-				<div style="flex:1;min-width:220px">
-					<div class="row" style="margin-bottom:10px"><h2 style="margin:0">${esc(sp.name)}</h2><span class="types">${sp.types.map(typeTag).join('')}</span>
-						${isCaptain(set.species) && B.teraMode === 'captains' ? '<span class="pill tc">Tera Captain</span>' : ''}
-						<span class="spacer"></span>${ro ? '' : '<button class="btn sm" type="button" data-act="remove">Remove</button>'}</div>
-					<div class="form tb-fields">
-						<label class="f">Pokémon<select data-f="species" ${dis}>${B.roster.map(r => r.formes.filter(f => D.species[f]).map(f =>
-							`<option value="${f}" ${f === set.species ? 'selected' : ''} ${used.has(r.id) ? 'disabled' : ''}>${esc(nameOf(f))}</option>`).join('')).join('')}</select></label>
-						<label class="f">Item<input data-f="item" list="dl-items" value="${esc(set.item)}" ${dis}></label>
-						<label class="f">Ability<select data-f="ability" ${dis}>${sp.abilities.map(a => `<option ${a === set.ability ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></label>
-						<label class="f">Tera type<select data-f="teraType" ${tera && !ro ? '' : 'disabled'}>${tera ? D.types.map(t => `<option ${t === set.teraType ? 'selected' : ''}>${t}</option>`).join('') : '<option>—</option>'}</select></label>
-						${sp.genders.length ? `<label class="f">Gender<select data-f="gender" ${dis}><option value="">Random</option>${sp.genders.map(g => `<option ${g === set.gender ? 'selected' : ''}>${g}</option>`).join('')}</select></label>` : ''}
+			<div class="sd-card">
+				<div class="sd-head">
+					<label class="sd-nick"><span>Nickname</span><input class="inp" data-f="nickname" value="${esc(set.nickname || '')}" placeholder="${esc(sp.name)}" maxlength="18" ${dis}></label>
+					<span class="spacer"></span>
+					${ro ? '' : '<button class="btn sm" type="button" data-act="remove">Delete</button>'}
+				</div>
+				<div class="sd-grid">
+					<div class="sd-col sd-monc">
+						<div class="sd-sprite">${img(set.species, 'lg')}</div>
+						<div class="types">${sp.types.map(typeTag).join('')}</div>
+						${pickIn('species', 'Pokémon')}
 					</div>
+					<div class="sd-col">
+						<button type="button" class="sd-details" data-pickbtn="details">
+							<span><small>Level</small>${set.level || 100}</span>
+							<span><small>Gender</small>${set.gender || (sp.genders.length ? '—' : 'N')}</span>
+							<span><small>Shiny</small>${set.shiny ? 'Yes' : 'No'}</span>
+							<span><small>Tera</small>${tera ? esc(set.teraType || '—') : '—'}</span>
+						</button>
+						${pickIn('item', 'Item')}
+						${pickIn('ability', 'Ability')}
+					</div>
+					<div class="sd-col sd-movec"><span class="sd-lbl">Moves</span>${[0, 1, 2, 3].map(i =>
+						`<input class="${set.moves[i] && !sp.moves.includes(set.moves[i]) ? 'bad' : ''}" data-pick="move${i}" value="${esc(fieldValue(set, 'move' + i))}" aria-label="Move ${i + 1}" autocomplete="off" ${dis}>`).join('')}</div>
+					<button type="button" class="sd-stats" data-pickbtn="stats">
+						<span class="sd-lbl">Stats <span class="muted">EV</span></span>
+						${STATS.map(k => {
+							const mult = Sets.natureMult(D, set.nature, k);
+							return `<span class="sd-st"><small>${LABEL[k]}</small><i style="width:${Math.min(100, st[k] / 5)}%;background:${statColor(st[k])}"></i>
+								<em>${set.evs[k] || ''}${mult > 1 ? '+' : mult < 1 ? '−' : ''}</em></span>`;
+						}).join('')}
+					</button>
 				</div>
 			</div>
-			<div class="divider"></div>
-			<h3>Moves</h3>
-			<div class="moves">${[0, 1, 2, 3].map(i => `<div class="mv">
-				<input class="inp ${set.moves[i] && !sp.moves.includes(set.moves[i]) ? 'bad' : ''}" data-move="${i}" list="dl-moves" value="${esc(set.moves[i] ? moveName(set.moves[i]) : '')}" placeholder="Move ${i + 1}" aria-label="Move ${i + 1}" ${dis}>
-				<small class="mv-info">${moveInfo(set.moves[i])}</small></div>`).join('')}</div>
-			<div class="divider"></div>
+			<div class="sd-browse" id="sd-browse"></div>`;
+		markPick();
+		renderBrowse();
+	}
+
+	function markPick() {
+		root.querySelectorAll('#tb-edit [data-pick],#tb-edit [data-pickbtn]').forEach(e =>
+			e.classList.toggle('on', (e.dataset.pick || e.dataset.pickbtn) === pick));
+	}
+
+	// ---------- browse list ----------
+
+	function speciesRows(set) {
+		const used = usedEntries(slot);
+		const ql = toID(q);
+		const out = [];
+		for (const r of B.roster) {
+			for (const id of r.formes) {
+				const sp = D.species[id];
+				if (!sp) continue;
+				if (ql && !toID(sp.name).includes(ql) && !sp.types.some(t => toID(t) === ql)) continue;
+				const bst = STATS.reduce((a, k) => a + sp.stats[k], 0);
+				out.push({
+					value: id, disabled: used.has(r.id), cur: set?.species === id,
+					html: `<span class="br-name">${img(id, 'xs')}${esc(sp.name)}${r.captain && B.teraMode === 'captains' ? ' <span class="pill tc">TC</span>' : ''}</span>
+						<span class="br-types">${sp.types.map(typeTag).join('')}</span>
+						<span class="br-abil">${sp.abilities.map(esc).join(' · ')}</span>
+						<span class="br-stats">${STATS.map(k => `<span><small>${LABEL[k]}</small>${sp.stats[k]}</span>`).join('')}<span><small>BST</small>${bst}</span></span>`,
+				});
+			}
+		}
+		return out;
+	}
+	function itemRows(set) {
+		const ql = toID(q);
+		const row = name => ({ value: name, cur: set.item === name, html: `<span class="br-name">${esc(name)}</span><span class="br-desc">${esc(D.itemDesc[name] || '')}</span>` });
+		if (ql) return D.items.filter(n => toID(n).includes(ql)).map(row);
+		return [{ head: 'Popular items' }, ...POPULAR.map(row), { head: 'All items' }, ...D.items.filter(n => !POPULAR.includes(n)).map(row)];
+	}
+	function abilityRows(set) {
+		const ql = toID(q);
+		return D.species[set.species].abilities.filter(a => !ql || toID(a).includes(ql)).map(a => ({
+			value: a, cur: set.ability === a, html: `<span class="br-name">${esc(a)}</span><span class="br-desc">${esc(D.abilityDesc[a] || '')}</span>`,
+		}));
+	}
+	function moveRows(set) {
+		const ql = toID(q);
+		const sp = D.species[set.species];
+		const mine = new Set(set.moves.filter(Boolean));
+		const list = sp.moves.filter(id => {
+			const m = D.moves[id];
+			return m && (!ql || toID(m.name).includes(ql) || toID(m.type) === ql || toID(m.cat) === ql);
+		}).sort((a, b) => D.moves[a].name.localeCompare(D.moves[b].name));
+		return list.map(id => {
+			const m = D.moves[id];
+			return {
+				value: id, cur: mine.has(id),
+				html: `<span class="br-name">${esc(m.name)}</span><span class="br-type">${typeTag(m.type)}</span><span class="br-cat">${catTag(m.cat)}</span>
+					<span class="br-num">${m.bp > 1 ? m.bp : '—'}</span><span class="br-num">${m.acc ? m.acc + '%' : '—'}</span><span class="br-num">${m.pp}</span>
+					<span class="br-desc">${m.pri ? `<b>${m.pri > 0 ? '+' : ''}${m.pri} priority.</b> ` : ''}${esc(m.desc)}</span>`,
+			};
+		});
+	}
+
+	function renderBrowse() {
+		const el = document.getElementById('sd-browse');
+		if (!el) return;
+		const set = team()[slot];
+		if (pick === 'stats') { renderStatsForm(el, set); return; }
+		if (pick === 'details') { renderDetailsForm(el, set); return; }
+		let head = '', cls = '';
+		if (pick === 'species') { rows = speciesRows(set); cls = 'br-species'; head = '<span>Pokémon</span><span>Types</span><span>Abilities</span><span>Base stats</span>'; }
+		else if (pick === 'item') { rows = itemRows(set); cls = 'br-items'; head = '<span>Item</span><span>Description</span>'; }
+		else if (pick === 'ability') { rows = abilityRows(set); cls = 'br-items'; head = '<span>Ability</span><span>Description</span>'; }
+		else { rows = moveRows(set); cls = 'br-moves'; head = '<span>Move</span><span>Type</span><span>Cat</span><span class="br-num">Pow</span><span class="br-num">Acc</span><span class="br-num">PP</span><span>Description</span>'; }
+		let n = -1;
+		const pickable = rows.filter(r => !r.head && !r.disabled);
+		if (hi >= pickable.length) hi = Math.max(0, pickable.length - 1);
+		el.innerHTML = `<div class="br ${cls}"><div class="br-row br-hd">${head}</div><div class="br-list">${rows.map(r => {
+			if (r.head) return `<div class="br-sec">${r.head}</div>`;
+			if (!r.disabled) n++;
+			return `<div class="br-row ${r.cur ? 'cur' : ''} ${r.disabled ? 'off' : ''} ${!r.disabled && n === hi && q ? 'hi' : ''}" ${r.disabled ? '' : `data-choose="${esc(r.value)}"`}>${r.html}</div>`;
+		}).join('') || '<p class="muted br-none">Nothing matches.</p>'}</div></div>`;
+		el.querySelector('.br-row.hi')?.scrollIntoView({ block: 'nearest' });
+	}
+
+	function natureLabel(n) {
+		if (!n.plus || n.plus === n.minus) return n.name;
+		return `${n.name} (+${LABEL[n.plus]} −${LABEL[n.minus]})`;
+	}
+	function renderStatsForm(el, set) {
+		const sp = D.species[set.species];
+		const dis = readOnly() ? 'disabled' : '';
+		el.innerHTML = `<div class="sd-form">
 			<div class="row" style="margin-bottom:8px"><h3 style="margin:0">Stats</h3><span class="spacer"></span>
 				<select class="inp" data-f="nature" aria-label="Nature" style="width:auto;padding:4px 8px" ${dis}>${D.natures.map(n => `<option value="${n.name}" ${n.name === set.nature ? 'selected' : ''}>${natureLabel(n)}</option>`).join('')}</select>
 				<span class="pill" id="ev-left"></span></div>
@@ -169,15 +296,24 @@
 						<input class="iv" type="number" min="0" max="31" value="${set.ivs[st] ?? 31}" data-iv="${st}" aria-label="${LABEL[st]} IV" ${dis}>
 						<span class="num tot" data-stat="${st}"></span>`;
 				}).join('')}
-			</div>
-			<datalist id="dl-items">${D.items.map(i => `<option value="${esc(i)}">`).join('')}</datalist>
-			<datalist id="dl-moves">${sp.moves.map(m => `<option value="${esc(D.moves[m].name)}">`).join('')}</datalist>`;
+			</div></div>`;
 		updateStats();
 	}
-
-	function moveInfo(id) {
-		const m = D.moves[id];
-		return m ? `${typeTag(m.type)} ${m.cat}${m.bp ? ` · ${m.bp}` : ''}${m.acc ? ` · ${m.acc}%` : ''}` : '';
+	function renderDetailsForm(el, set) {
+		const sp = D.species[set.species];
+		const tera = teraAllowed(set.species);
+		const dis = readOnly() ? 'disabled' : '';
+		el.innerHTML = `<div class="sd-form">
+			<div class="form sd-detform">
+				<label class="f">Level<input class="inp" type="number" min="1" max="100" data-f="level" value="${set.level || 100}" ${dis}></label>
+				<label class="f">Gender<select class="inp" data-f="gender" ${sp.genders.length && !dis ? '' : 'disabled'}>${sp.genders.length ? `<option value="">Random</option>${sp.genders.map(g =>
+					`<option ${g === set.gender ? 'selected' : ''}>${g}</option>`).join('')}` : '<option>Genderless or fixed</option>'}</select></label>
+				<label class="f">Shiny<select class="inp" data-f="shiny" ${dis}><option value="">No</option><option value="1" ${set.shiny ? 'selected' : ''}>Yes</option></select></label>
+			</div>
+			<h3 style="margin:16px 0 8px">Tera type</h3>
+			${tera ? `<div class="tera-pick">${D.types.map(t => `<button type="button" class="${t === set.teraType ? 'on' : ''}" data-tera="${t}" ${dis}>${t === 'Stellar' ? '<span class="type t-stellar">Stellar</span>' : typeTag(t)}</button>`).join('')}</div>` :
+				`<p class="muted" style="margin:0">${B.teraMode === 'none' ? 'Terastallization is off in this league.' : 'Only Tera Captains can Terastallize.'}</p>`}
+		</div>`;
 	}
 
 	function updateStats() {
@@ -187,10 +323,70 @@
 		for (const k of STATS) {
 			const cell = root.querySelector(`#tb-edit [data-stat="${k}"]`);
 			if (cell) cell.textContent = st[k];
+			const mult = Sets.natureMult(D, set.nature, k);
+			const bar = root.querySelectorAll('#tb-edit .sd-st')[STATS.indexOf(k)];
+			if (bar) {
+				bar.querySelector('i').style.cssText = `width:${Math.min(100, st[k] / 5)}%;background:${statColor(st[k])}`;
+				bar.querySelector('em').textContent = `${set.evs[k] || ''}${mult > 1 ? '+' : mult < 1 ? '−' : ''}`;
+			}
 		}
 		const left = EV_MAX - STATS.reduce((a, k) => a + (set.evs[k] || 0), 0);
 		const el = document.getElementById('ev-left');
 		if (el) { el.textContent = `${left} EVs left`; el.className = `pill ${left < 0 ? 'l' : ''}`; }
+	}
+
+	const NEXT = { species: 'item', item: 'ability', ability: 'move0', move0: 'move1', move1: 'move2', move2: 'move3', move3: 'stats' };
+	function choose(field, value) {
+		if (readOnly()) return;
+		let set = data.team[slot];
+		if (field === 'species') {
+			if (!set || rosterEntry(value) !== rosterEntry(set.species)) {
+				data.team[slot] = set = Sets.blank(D, value, teraAllowed(value));
+			} else {
+				const sp = D.species[value];
+				set.species = value;
+				if (!sp.abilities.includes(set.ability)) set.ability = sp.abilities[0];
+				if (sp.item) set.item = sp.item;
+				set.moves = set.moves.map(m => (sp.moves.includes(m) ? m : ''));
+			}
+		} else if (field === 'item') set.item = value;
+		else if (field === 'ability') set.ability = value;
+		else if (field.startsWith('move')) {
+			const i = Number(field.slice(4));
+			const dup = set.moves.indexOf(value);
+			if (dup >= 0 && dup !== i) set.moves[dup] = set.moves[i]; // picking a move already in another slot swaps them
+			set.moves[i] = value;
+		}
+		save(); renderTeam(); renderEditor(); renderCalc(); renderSpeed();
+		goPick(NEXT[field]);
+	}
+	function setPick(field) {
+		if (field === pick) return;
+		pick = field; q = ''; hi = 0; markPick(); renderBrowse();
+	}
+	function goPick(field) {
+		setPick(field);
+		const input = root.querySelector(`#tb-edit input[data-pick="${field}"]`);
+		if (input) { input.focus(); input.select(); }
+	}
+	/** Typed text that matches an option exactly is kept; anything else goes back to the saved value. */
+	function commitTyped(input) {
+		const set = data.team[slot];
+		const f = input.dataset.pick;
+		if (!set || readOnly()) return;
+		const id = toID(input.value);
+		let value = null;
+		if (f === 'item') value = id ? D.itemIds.get(id) : '';
+		else if (f === 'ability') value = D.species[set.species].abilities.find(a => toID(a) === id);
+		else if (f.startsWith('move')) value = !id ? '' : D.species[set.species].moves.includes(id) ? id : null;
+		else if (f === 'species') value = [...allowed].find(s => toID(nameOf(s)) === id && D.species[s]);
+		if (value == null || (f === 'species' && value === set.species)) { input.value = fieldValue(set, f); return; }
+		if (f === 'item') set.item = value;
+		else if (f === 'ability') set.ability = value;
+		else if (f.startsWith('move')) set.moves[Number(f.slice(4))] = value;
+		else { choose('species', value); return; }
+		save(); renderTeam(); renderResults(); renderSpeed();
+		input.value = fieldValue(set, f);
 	}
 
 	// ---------- speed tiers ----------
@@ -198,29 +394,29 @@
 	function renderSpeed() {
 		const el = document.getElementById('tb-speed');
 		if (!el || !week) return;
-		const rows = [];
+		const rws = [];
 		for (const s of data.team.filter(Boolean)) {
 			const scarf = toID(s.item) === 'choicescarf';
 			const spe = Sets.stats(D, s).spe;
-			rows.push({ spe: scarf ? Math.floor(spe * 1.5) : spe, id: s.species, mine: true, note: scarf ? 'Scarf' : '' });
+			rws.push({ spe: scarf ? Math.floor(spe * 1.5) : spe, id: s.species, mine: true, note: scarf ? 'Scarf' : '' });
 		}
 		for (const r of B.rosters[week.opp] || []) {
 			const sp = D.species[r.id];
 			if (!sp) continue;
 			const b = sp.stats.spe;
-			rows.push({ spe: Sets.calcStat('spe', b, 252, 31, 100, 1.1), id: r.id, note: '252+' });
-			rows.push({ spe: Sets.calcStat('spe', b, 0, 31, 100, 1), id: r.id, note: '0' });
+			rws.push({ spe: Sets.calcStat('spe', b, 252, 31, 100, 1.1), id: r.id, note: '252+' });
+			rws.push({ spe: Sets.calcStat('spe', b, 0, 31, 100, 1), id: r.id, note: '0' });
 		}
 		for (const past of B.scouting[week.opp] || []) {
 			for (const ps of past.sets) {
 				const s = fromShowdown(ps);
-				if (D.species[s.species]) rows.push({ spe: Sets.stats(D, s).spe, id: s.species, note: `Wk ${past.week}`, scouted: true });
+				if (D.species[s.species]) rws.push({ spe: Sets.stats(D, s).spe, id: s.species, note: `Wk ${past.week}`, scouted: true });
 			}
 		}
-		rows.sort((a, b) => b.spe - a.spe || (a.mine ? -1 : 1));
-		el.innerHTML = `<h3>Speed · vs ${esc(week.oppName)}</h3><div class="speedlist">${rows.map(r => `
+		rws.sort((a, b) => b.spe - a.spe || (a.mine ? -1 : 1));
+		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed · vs ${esc(week.oppName)}</h3></summary><div class="speedlist">${rws.map(r => `
 			<div class="row ${r.mine ? 'mine' : ''} ${r.scouted ? 'scouted' : ''}"><span class="num">${r.spe}</span>${img(r.id, 'xs')}<span class="nm">${esc(nameOf(r.id))}</span><span class="spacer"></span><small class="muted">${r.note}</small></div>`).join('') ||
-			'<p class="muted">Add Pokémon to compare.</p>'}</div>`;
+			'<p class="muted">Add Pokémon to compare.</p>'}</div></details>`;
 	}
 
 	// ---------- damage calc ----------
@@ -284,7 +480,7 @@
 		C.move = 0;
 	}
 	function initCalc() {
-		C = { dir: 'atk', move: 0, myBoost: 0, oppBoost: 0, myTera: false, oppTera: false, sr: false, spikes: 0, reflect: false, screen: false, veil: false, crit: false, weather: '', terrain: '' };
+		C = { dir: 'atk', move: 0, myBoost: 0, oppBoost: 0, myTera: false, oppTera: false, sr: false, spikes: 0, reflect: false, screen: false, veil: false, crit: false, weather: '', terrain: '', oedit: false, fieldOpen: false };
 		const { theirs, rest } = oppChoices();
 		const first = theirs[0] || rest[0];
 		if (first) setOpp(first);
@@ -342,17 +538,20 @@
 		};
 	}
 
+	function fieldCount() {
+		return ['sr', 'reflect', 'screen', 'veil', 'crit'].filter(k => C[k]).length + (C.spikes ? 1 : 0) + (C.weather ? 1 : 0) + (C.terrain ? 1 : 0);
+	}
 	function renderCalc() {
 		const el = document.getElementById('tb-calc');
 		if (!el) return;
 		const mine = team()[slot];
-		if (!G) { el.innerHTML = '<h3>Damage calcs</h3><p class="muted">The damage calculator didn\'t load.</p>'; return; }
-		if (!mine) { el.innerHTML = '<h3>Damage calcs</h3><p class="muted">Pick a Pokémon to run calcs.</p>'; return; }
+		if (!G) { el.innerHTML = '<h3>Damage calc</h3><p class="muted">The damage calculator didn\'t load.</p>'; return; }
+		if (!mine) { el.innerHTML = '<h3>Damage calc</h3><p class="muted">Pick a Pokémon to run calcs.</p>'; return; }
 		if (!C) initCalc();
-		if (!C.opp) { el.innerHTML = '<h3>Damage calcs</h3><p class="muted">No opposing Pokémon to calc against yet.</p>'; return; }
+		if (!C.opp) { el.innerHTML = '<h3>Damage calc</h3><p class="muted">No opposing Pokémon to calc against yet.</p>'; return; }
 		const o = C.oset;
 		const osp = D.species[C.opp];
-		const myName = nameOf(mine.species);
+		const myName = mine.nickname || nameOf(mine.species);
 		const boostSel = (key, v) => `<select class="inp mini" data-c="${key}" aria-label="Stat boost">${[-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map(n =>
 			`<option value="${n}" ${n === v ? 'selected' : ''}>${n > 0 ? '+' : ''}${n}</option>`).join('')}</select>`;
 		const flag = (k, l) => `<button class="chip ${C[k] ? 'on' : ''}" type="button" data-flag="${k}">${l}</button>`;
@@ -362,33 +561,18 @@
 		const ostats = Sets.stats(D, o);
 		const omult = st => Sets.natureMult(D, o.nature, st);
 		const oTeraOk = B.teraMode === 'all' || (B.teraMode === 'captains' && (week ? (B.rosters[week.opp] || []).some(r => r.captain && r.formes.includes(C.opp)) : true));
+		const nField = fieldCount();
 		el.innerHTML = `
-			<h3>Damage calcs</h3>
-			<div class="csplit">
-				<div class="cres">
-					<div class="row chead">
-						<div class="seg"><button type="button" class="${C.dir === 'atk' ? 'on' : ''}" data-dir="atk">${esc(myName)} attacks</button><button type="button" class="${C.dir === 'def' ? 'on' : ''}" data-dir="def">${esc(myName)} defends</button></div>
-						<span class="spacer"></span>
-						<span class="muted" style="font-size:12px">Boost</span>${boostSel('myBoost', C.myBoost)}
-						${teraAllowed(mine.species) && mine.teraType ? `<label class="tchk"><input type="checkbox" data-c="myTera" ${C.myTera ? 'checked' : ''}> Tera ${esc(mine.teraType)}</label>` : ''}
-					</div>
-					<div class="row chips cfield">
-						${flag('sr', 'Stealth Rock')}<button class="chip ${C.spikes ? 'on' : ''}" type="button" data-act="spikes">Spikes${C.spikes > 1 ? ` ×${C.spikes}` : ''}</button>
-						${flag('reflect', 'Reflect')}${flag('screen', 'Light Screen')}${flag('veil', 'Aurora Veil')}${flag('crit', 'Crit')}
-						<select class="inp mini" data-c="weather" aria-label="Weather"><option value="">No weather</option>${['Sun', 'Rain', 'Sand', 'Snow'].map(w => `<option ${C.weather === w ? 'selected' : ''}>${w}</option>`).join('')}</select>
-						<select class="inp mini" data-c="terrain" aria-label="Terrain"><option value="">No terrain</option>${['Electric', 'Grassy', 'Psychic', 'Misty'].map(t => `<option ${C.terrain === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
-					</div>
-					<p class="muted cnote">Hazards and screens are on the defender's side.</p>
-					<div id="calc-res"></div>
-				</div>
-				<div class="cside">
-					<div class="row" style="gap:8px;flex-wrap:nowrap">${img(C.opp)}
-						<select class="inp" data-c="opp" aria-label="Opposing Pokémon">
-							${theirs.length ? `<optgroup label="${esc(week.oppName)}">${theirs.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
-							${rest.length ? `<optgroup label="Rest of the league">${rest.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
-						</select></div>
-					<div class="row" style="gap:4px;margin-top:6px"><span class="types">${osp.types.map(typeTag).join('')}</span></div>
-					<div class="row chips" id="osets">${scouted.map((s, i) => presetChip('wk' + i, `Wk ${s.week}`)).join('')}${presetChip('off', 'Offensive')}${presetChip('bulk', 'Bulky')}${presetChip('blank', 'Blank')}${C.preset === 'custom' ? presetChip('custom', 'Custom') : ''}</div>
+			<h3>Damage calc</h3>
+			<div class="seg cdir"><button type="button" class="${C.dir === 'atk' ? 'on' : ''}" data-dir="atk">${esc(myName)} attacks</button><button type="button" class="${C.dir === 'def' ? 'on' : ''}" data-dir="def">${esc(myName)} defends</button></div>
+			<div class="cside">
+				<div class="row" style="gap:8px;flex-wrap:nowrap">${img(C.opp)}
+					<select class="inp" data-c="opp" aria-label="Opposing Pokémon">
+						${theirs.length ? `<optgroup label="${esc(week.oppName)}">${theirs.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
+						${rest.length ? `<optgroup label="Rest of the league">${rest.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
+					</select></div>
+				<div class="row chips" id="osets">${scouted.map((s, i) => presetChip('wk' + i, `Wk ${s.week}`)).join('')}${presetChip('off', 'Offensive')}${presetChip('bulk', 'Bulky')}${presetChip('blank', 'Blank')}${C.preset === 'custom' ? presetChip('custom', 'Custom') : ''}</div>
+				<details class="fold" ${C.oedit ? 'open' : ''} data-fold="oedit"><summary>Edit their set <span class="muted">· ${esc(o.nature)}${o.item ? ` · ${esc(o.item)}` : ''}</span></summary>
 					<div class="oform">
 						<label class="f">Nature<select class="inp" data-o="nature">${D.natures.map(n => `<option value="${n.name}" ${n.name === o.nature ? 'selected' : ''}>${n.name}</option>`).join('')}</select></label>
 						<label class="f">Item<input class="inp" data-o="item" value="${esc(o.item)}" list="dl-items-calc"></label>
@@ -400,8 +584,22 @@
 						<input class="inp" type="number" min="0" max="252" step="4" data-oev="${st}" value="${o.evs[st] || 0}" aria-label="${LABEL[st]} EVs">
 						<span class="num" data-ostat="${st}">${ostats[st]}</span>`).join('')}</div>
 					<div class="omoves">${[0, 1, 2, 3].map(i => `<input class="inp" data-omove="${i}" value="${esc(o.moves[i] ? moveName(o.moves[i]) : '')}" list="dl-omoves" placeholder="Move ${i + 1}" aria-label="Opposing move ${i + 1}">`).join('')}</div>
-				</div>
+				</details>
 			</div>
+			<div class="row cboost">
+				<span class="muted">Your boost</span>${boostSel('myBoost', C.myBoost)}
+				${teraAllowed(mine.species) && mine.teraType ? `<label class="tchk"><input type="checkbox" data-c="myTera" ${C.myTera ? 'checked' : ''}> Tera ${esc(mine.teraType)}</label>` : ''}
+			</div>
+			<details class="fold" ${C.fieldOpen ? 'open' : ''} data-fold="fieldOpen"><summary>Field <span class="muted" id="field-n">${nField ? `· ${nField} on` : ''}</span></summary>
+				<div class="row chips cfield">
+					${flag('sr', 'Stealth Rock')}<button class="chip ${C.spikes ? 'on' : ''}" type="button" data-act="spikes">Spikes${C.spikes > 1 ? ` ×${C.spikes}` : ''}</button>
+					${flag('reflect', 'Reflect')}${flag('screen', 'Light Screen')}${flag('veil', 'Aurora Veil')}${flag('crit', 'Crit')}
+					<select class="inp mini" data-c="weather" aria-label="Weather"><option value="">No weather</option>${['Sun', 'Rain', 'Sand', 'Snow'].map(w => `<option ${C.weather === w ? 'selected' : ''}>${w}</option>`).join('')}</select>
+					<select class="inp mini" data-c="terrain" aria-label="Terrain"><option value="">No terrain</option>${['Electric', 'Grassy', 'Psychic', 'Misty'].map(t => `<option ${C.terrain === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+				</div>
+				<p class="muted cnote">Hazards and screens are on the defender's side.</p>
+			</details>
+			<div id="calc-res"></div>
 			<datalist id="dl-omoves">${osp.moves.map(m => `<option value="${esc(D.moves[m].name)}">`).join('')}</datalist>
 			<datalist id="dl-items-calc">${D.items.map(i => `<option value="${esc(i)}">`).join('')}</datalist>`;
 		renderResults();
@@ -410,10 +608,12 @@
 	function renderResults() {
 		const el = document.getElementById('calc-res');
 		if (!el) return;
+		const n = document.getElementById('field-n');
+		if (n && C) { const c = fieldCount(); n.textContent = c ? `· ${c} on` : ''; }
 		let res;
 		try { res = results(); } catch (e) { el.innerHTML = `<p class="muted cdesc">Couldn't calc this matchup (${esc(e.message)}).</p>`; return; }
 		if (!res) { el.innerHTML = ''; return; }
-		if (!res.rows.length) { el.innerHTML = `<p class="muted" style="margin:16px 0 0">${C.dir === 'atk' ? 'Add moves to this set.' : 'Add moves to the opposing set.'}</p>`; return; }
+		if (!res.rows.length) { el.innerHTML = `<p class="muted" style="margin:12px 0 0">${C.dir === 'atk' ? 'Add moves to this set.' : 'Add moves to their set.'}</p>`; return; }
 		if (!res.rows.some(r => r.i === C.move && !r.status && !r.error)) C.move = (res.rows.find(r => !r.status && !r.error) || res.rows[0]).i;
 		const hazAt = res.haz ? `<span class="chaz" style="left:${(100 - res.haz * 100).toFixed(1)}%" title="Hazard damage"></span>` : '';
 		el.innerHTML = `<div class="cmoves">${res.rows.map(r => {
@@ -459,19 +659,50 @@
 
 	// ---------- events ----------
 
+	root.addEventListener('mousedown', e => {
+		const row = e.target.closest('[data-choose]');
+		if (!row) return;
+		e.preventDefault(); // keep focus in the field until the choice is applied
+		choose(pick, row.dataset.choose);
+	});
+
+	root.addEventListener('focusin', e => { if (e.target.dataset?.pick) setPick(e.target.dataset.pick); });
+
+	root.addEventListener('keydown', e => {
+		const t = e.target;
+		if (!t.dataset?.pick) return;
+		setPick(t.dataset.pick);
+		const n = rows.filter(r => !r.head && !r.disabled).length;
+		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+			e.preventDefault();
+			if (!q) { q = ' '; hi = -1; } // start highlighting even before typing
+			hi = Math.max(0, Math.min(n - 1, hi + (e.key === 'ArrowDown' ? 1 : -1)));
+			renderBrowse();
+		} else if (e.key === 'Enter') {
+			e.preventDefault();
+			const r = rows.filter(x => !x.head && !x.disabled)[q ? hi : 0];
+			if (q && r) choose(pick, r.value); else commitTyped(t);
+		} else if (e.key === 'Escape') {
+			t.value = fieldValue(data.team[slot], t.dataset.pick); q = ''; renderBrowse(); t.blur();
+		}
+	});
+
 	root.addEventListener('click', e => {
-		const t = e.target.closest('[data-week],[data-slot],[data-add],[data-act],[data-dir],[data-flag],[data-preset],[data-cmove]');
+		if (e.target.dataset?.pick) { setPick(e.target.dataset.pick); return; }
+		const t = e.target.closest('[data-slot],[data-act],[data-dir],[data-flag],[data-preset],[data-cmove],[data-pickbtn],[data-tera]');
 		if (!t || t.tagName === 'SELECT') return;
 		const d = t.dataset;
-		if (d.week) {
-			goWeek(B.weeks.find(w => w.week === Number(d.week)));
-		} else if (d.slot) {
+		if (d.slot) {
 			slot = Number(d.slot);
 			if (C) { C.myTera = false; C.move = 0; }
 			renderTeam(); renderEditor(); renderCalc();
-		} else if (d.add) {
-			data.team[slot] = Sets.blank(D, d.add, teraAllowed(d.add));
-			save(); renderTeam(); renderEditor(); renderCalc(); renderSpeed();
+			if (!team()[slot] && !readOnly()) root.querySelector('#tb-edit input[data-pick="species"]')?.focus();
+		} else if (d.pickbtn) {
+			setPick(d.pickbtn);
+		} else if (d.tera) {
+			if (readOnly()) return;
+			data.team[slot].teraType = d.tera;
+			save(); renderTeam(); renderEditor(); setPick('details'); renderCalc();
 		} else if (d.dir) {
 			C.dir = d.dir; C.move = 0; renderCalc();
 		} else if (d.flag) {
@@ -506,6 +737,13 @@
 		}
 	});
 
+	root.addEventListener('toggle', e => {
+		const k = e.target.dataset?.fold;
+		if (!k) return;
+		if (!C) initCalc();
+		C[k] = e.target.open;
+	}, true);
+
 	document.addEventListener('click', e => {
 		const dlg = document.getElementById('tb-dialog');
 		if (!dlg?.open) return;
@@ -530,6 +768,7 @@
 	root.addEventListener('change', e => {
 		const t = e.target;
 		const d = t.dataset;
+		if (d.act === 'week') { goWeek(B.weeks.find(w => w.week === Number(t.value))); return; }
 		if (d.act === 'copy' && t.value) {
 			const w = B.weeks.find(x => x.week === Number(t.value));
 			const src = copyFrom(w);
@@ -540,6 +779,7 @@
 			data.team = src; slot = 0; save(); render();
 			return;
 		}
+		if (d.pick) { commitTyped(t); return; }
 		// calc controls
 		if (d.c) {
 			if (d.c === 'opp') { setOpp(t.value); renderCalc(); return; }
@@ -562,45 +802,25 @@
 			toCustom(); renderResults();
 			return;
 		}
-		// set editor
+		// set card fields
 		const set = data.team[slot];
-		if (!set || readOnly()) return;
-		if (d.f) {
-			const f = d.f;
-			let v = t.value;
-			if (f === 'item') v = D.itemIds.get(toID(v)) || v.trim();
-			if (f === 'species') {
-				const sp = D.species[v];
-				if (rosterEntry(v) !== rosterEntry(set.species)) {
-					data.team[slot] = Sets.blank(D, v, teraAllowed(v));
-				} else {
-					set.species = v;
-					if (!sp.abilities.includes(set.ability)) set.ability = sp.abilities[0];
-					if (sp.item) set.item = sp.item;
-					set.moves = set.moves.map(m => (sp.moves.includes(m) ? m : ''));
-				}
-				save(); renderTeam(); renderEditor(); renderCalc(); renderSpeed();
-				return;
-			}
-			set[f] = v;
-			save();
-			if (f === 'nature') { renderEditor(); renderSpeed(); } else renderTeam();
-			if (f === 'teraType') renderCalc(); else renderResults();
-		} else if (d.move) {
-			const sp = D.species[set.species];
-			const id = toID(t.value);
-			set.moves[Number(d.move)] = id;
-			t.classList.toggle('bad', !!id && !sp.moves.includes(id));
-			t.parentElement.querySelector('.mv-info').innerHTML = moveInfo(id);
-			if (D.moves[id]) t.value = D.moves[id].name;
-			save(); renderResults();
-		}
+		if (!set || readOnly() || !d.f) return;
+		const f = d.f;
+		if (f === 'level') set.level = Math.max(1, Math.min(100, Number(t.value) || 100));
+		else if (f === 'shiny') set.shiny = !!t.value;
+		else if (f === 'nickname') set.nickname = t.value.trim().slice(0, 18);
+		else set[f] = t.value;
+		save(); renderTeam();
+		if (f === 'nature') { renderStatsForm(document.getElementById('sd-browse'), set); updateStats(); renderSpeed(); renderResults(); }
+		else if (f !== 'nickname') { renderEditor(); setPick('details'); renderSpeed(); renderResults(); }
+		else renderCalc();
 	});
 
 	root.addEventListener('input', e => {
 		const t = e.target;
 		const d = t.dataset;
 		if (t.id === 'tb-notes') { data.notes = t.value; save(); return; }
+		if (d.pick) { setPick(d.pick); q = t.value.trim(); hi = 0; renderBrowse(); return; }
 		if (d.oev) {
 			C.oset.evs[d.oev] = Math.max(0, Math.min(252, Number(t.value) || 0));
 			const cell = root.querySelector(`[data-ostat="${d.oev}"]`);

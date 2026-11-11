@@ -48,23 +48,26 @@
 	function toShowdown(D, set) {
 		const s = D.species[set.species];
 		const out = {
-			name: '', species: s.name, item: set.item || '', ability: set.ability || '',
+			name: (set.nickname || '').trim().slice(0, 18), species: s.name, item: set.item || '', ability: set.ability || '',
 			moves: set.moves.filter(Boolean).map(m => D.moves[m]?.name || m),
 			nature: set.nature || '', evs: { ...set.evs }, ivs: { ...set.ivs }, gender: set.gender || '',
 		};
 		if (set.teraType) out.teraType = set.teraType;
 		if (set.level && set.level !== 100) out.level = set.level;
+		if (set.shiny) out.shiny = true;
 		return out;
 	}
 
 	function exportSet(D, set) {
 		const s = D.species[set.species];
 		let t = s ? s.name : set.species;
+		if (set.nickname && set.nickname !== t) t = `${set.nickname} (${t})`;
 		if (set.gender) t += ` (${set.gender})`;
 		if (set.item) t += ` @ ${set.item}`;
 		t += '\n';
 		if (set.ability) t += `Ability: ${set.ability}\n`;
 		if (set.level && set.level !== 100) t += `Level: ${set.level}\n`;
+		if (set.shiny) t += 'Shiny: Yes\n';
 		if (set.teraType) t += `Tera Type: ${set.teraType}\n`;
 		const evs = STATS.filter(st => set.evs?.[st]).map(st => `${set.evs[st]} ${LABEL[st]}`);
 		if (evs.length) t += `EVs: ${evs.join(' / ')}\n`;
@@ -93,10 +96,12 @@
 			set.item = item ? (D.itemIds.get(toID(item)) || item.trim()) : '';
 			set.moves = [];
 			if (gender) set.gender = gender;
+			if (nick && nick[1].trim()) set.nickname = nick[1].trim();
 			for (const line of lines.slice(1)) {
 				let m;
 				if ((m = /^Ability:\s*(.+)$/i.exec(line))) set.ability = D.species[id].abilities.find(a => toID(a) === toID(m[1])) || m[1];
 				else if ((m = /^Tera Type:\s*(.+)$/i.exec(line))) set.teraType = m[1].trim();
+				else if (/^Shiny:\s*Yes/i.test(line)) set.shiny = true;
 				else if ((m = /^Level:\s*(\d+)/i.exec(line))) set.level = Number(m[1]);
 				else if ((m = /^(EVs|IVs):\s*(.+)$/i.exec(line))) {
 					const key = m[1].toLowerCase();

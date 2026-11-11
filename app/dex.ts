@@ -11,6 +11,15 @@ export function dex() {
 	if (!dexCache) dexCache = sim().Dex.forGen(9);
 	return dexCache;
 }
+/** Short descriptions for moves, items and abilities, keyed by id. */
+let textCache: { moves: any, items: any, abilities: any } | null = null;
+export function descs() {
+	if (!textCache) {
+		const t = (name: string) => require(path.join(SERVER_DIR, 'dist', 'data', 'text', `${name}.js`));
+		textCache = { moves: t('moves').MovesText, items: t('items').ItemsText, abilities: t('abilities').AbilitiesText };
+	}
+	return textCache;
+}
 export function Teams() {
 	return sim().Teams;
 }

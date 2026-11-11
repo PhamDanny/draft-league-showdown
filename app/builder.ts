@@ -2,7 +2,7 @@
 // the server only hands out public data (rosters, Pokédex entries, finished series' sets).
 import type { Express, Request, Response, Router } from 'express';
 import { all, one } from './db.ts';
-import { dex, mon, rosterIds, toID, TYPES } from './dex.ts';
+import { descs, dex, mon, rosterIds, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
 
@@ -18,6 +18,7 @@ function dexJson(seasonId: number, settings: L.Settings) {
 	const hit = dexCache.get(key);
 	if (hit) return hit;
 	const d = dex();
+	const text = descs();
 	let banned = (_: string) => false;
 	try {
 		const table = d.formats.getRuleTable(d.formats.get(`gen9customgame@@@${rules.join(',')}`, true));
@@ -34,7 +35,10 @@ function dexJson(seasonId: number, settings: L.Settings) {
 			for (const m of pool) {
 				if (moves[m]) continue;
 				const mv = d.moves.get(m);
-				moves[m] = { name: mv.name, type: mv.type, cat: mv.category, bp: mv.basePower, acc: mv.accuracy === true ? 0 : mv.accuracy, pri: mv.priority };
+				moves[m] = {
+					name: mv.name, type: mv.type, cat: mv.category, bp: mv.basePower, acc: mv.accuracy === true ? 0 : mv.accuracy, pri: mv.priority,
+					pp: mv.noPPBoosts ? mv.pp : Math.floor(mv.pp * 8 / 5), desc: text.moves[m]?.shortDesc || text.moves[m]?.desc || '',
+				};
 			}
 			species[id] = {
 				name: s.name, types: s.types, stats: s.baseStats,
@@ -45,9 +49,16 @@ function dexJson(seasonId: number, settings: L.Settings) {
 			};
 		}
 	}
-	const items = d.items.all().filter((i: any) => i.exists && !i.isNonstandard && i.gen <= 9 && !banned(`item:${i.id}`)).map((i: any) => i.name).sort();
+	const itemList = d.items.all().filter((i: any) => i.exists && !i.isNonstandard && i.gen <= 9 && !banned(`item:${i.id}`));
+	const items = itemList.map((i: any) => i.name).sort();
+	const itemDesc: { [name: string]: string } = {};
+	for (const i of itemList) itemDesc[i.name] = text.items[i.id]?.shortDesc || text.items[i.id]?.desc || '';
+	const abilityDesc: { [name: string]: string } = {};
+	for (const s of Object.values(species)) {
+		for (const a of s.abilities) abilityDesc[a] ||= text.abilities[toID(a)]?.shortDesc || text.abilities[toID(a)]?.desc || '';
+	}
 	const natures = d.natures.all().map((n: any) => ({ name: n.name, plus: n.plus, minus: n.minus }));
-	const json = JSON.stringify({ species, moves, items, natures, types: [...TYPES, 'Stellar'] });
+	const json = JSON.stringify({ species, moves, items, itemDesc, abilityDesc, natures, types: [...TYPES, 'Stellar'] });
 	dexCache.clear();
 	dexCache.set(key, json);
 	return json;
