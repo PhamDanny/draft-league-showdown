@@ -218,17 +218,37 @@ export function pageRoutes(app: Express) {
 		const me = req.user!.id;
 		let main = '';
 		if (season.status === 'setup') {
-			main = `<section class="panel"><h2>Members</h2><div class="list">${L.members(league.id).map(m => `<div>${esc(m.showdown_name)}</div>`).join('')}</div></section>`;
+			main = `<section class="panel"><h2>Members</h2><div class="list">${L.members(league.id).map(m => `<div>${esc(m.showdown_name)}</div>`).join('')}</div>
+				${league.role === 'commissioner' ? `<div class="row" style="margin-top:12px"><span class="muted">Start the draft from Admin once everyone has joined.</span><span class="spacer"></span><a class="btn primary" href="/l/${league.id}/admin">Admin</a></div>` :
+					'<p class="muted" style="margin:12px 0 0">Waiting for the commissioner to start the draft.</p>'}</section>`;
 		} else if (season.status === 'drafting') {
 			const state = L.draftState(season, (req as LReq).settings);
-			main = `<section class="panel"><h2>Draft</h2><p>${state.onClock ? `<b>${esc(state.onClock.showdown_name)}</b> is picking.` : 'Done.'}</p>
+			const mine = state.onClock?.user_id === me;
+			main = `<section class="panel"><h2>Draft</h2>
+				${mine ? `<div class="callout"><b>It's your pick.</b> Round ${state.round + 1}.</div>` : ''}
+				<p>${state.onClock ? (mine ? '' : `<b>${esc(state.onClock.showdown_name)}</b> is on the clock (round ${state.round + 1}).`) : 'Done.'}</p>
 				<a class="btn primary" href="/l/${league.id}/draft">Draft room</a></section>`;
 		} else {
-			main = `<div class="grid g2">
-				<section class="panel"><h2>Week ${week}</h2><div class="list">${ms.map(m => `<a href="/l/${league.id}/series/${m.id}" style="text-decoration:none">
+			const my = ms.find(m => m.p1 === me || m.p2 === me);
+			let card;
+			if (my) {
+				const opp = my.p1 === me ? my.p2 : my.p1;
+				const [a, b] = my.p1 === me ? [my.p1_wins, my.p2_wins] : [my.p2_wins, my.p1_wins];
+				const final = my.status === 'final';
+				card = `<section class="panel your-match"><p class="eyebrow">Week ${my.week} · Your match</p>
+					<div class="row"><h2 style="margin:0">vs ${esc(n.get(opp))}</h2>${statusPill(my.status)}<span class="num">${my.status === 'scheduled' ? '' : `${a}–${b}`}</span>
+						<span class="spacer"></span>
+						${final ? `<a class="btn primary" href="/l/${league.id}/series/${my.id}">View series</a>` :
+							`<a class="btn" href="/l/${league.id}/builder#week-${my.week}">Build team</a><a class="btn primary" href="/l/${league.id}/battle/${my.id}">Play week ${my.week}</a>`}</div></section>`;
+			} else {
+				card = `<section class="panel your-match"><p class="eyebrow">Week ${week} · Your match</p><p style="margin:4px 0 0">No match this week.</p></section>`;
+			}
+			const others = ms.filter(m => m !== my);
+			main = `${card}<div class="grid g2" style="margin-top:16px">
+				${others.length ? `<section class="panel"><h2>Week ${week}</h2><div class="list">${others.map(m => `<a class="rowlink" href="/l/${league.id}/series/${m.id}">
 					<div class="match"><span class="p">${esc(n.get(m.p1))}</span><span class="score num">${score(m)}</span><span class="p r">${esc(n.get(m.p2))}</span></div>
-					<div class="row" style="justify-content:center">${statusPill(m.status)}</div></a>`).join('') || '<div class="muted">Bye</div>'}</div></section>
-				<section class="panel"><h2>Standings</h2>${standingsTable(league.id, st.slice(0, 6), n, me, st)}</section>
+					${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>` : ''}
+				<section class="panel" id="standings"><h2>Standings</h2>${standingsTable(league.id, st, n, me, st)}</section>
 			</div>`;
 		}
 		render(req, res, {
@@ -240,10 +260,10 @@ export function pageRoutes(app: Express) {
 	});
 
 	function standingsTable(leagueId: number, rows: L.Standing[], n: Map<number, string>, me: number, full: L.Standing[]) {
-		return `<div class="table-wrap"><table><thead><tr><th>#</th><th>Player</th><th class="r">Series</th><th class="r">Games</th><th class="r">Diff</th></tr></thead><tbody>
+		return `<div class="table-wrap"><table class="standings"><thead><tr><th>#</th><th>Player</th><th class="r">Series</th><th class="r hide-sm">Games</th><th class="r">Diff</th></tr></thead><tbody>
 		${rows.map(r => `<tr class="${r.userId === me ? 'me' : ''}"><td class="num">${full.indexOf(r) + 1}</td>
 			<td><a href="/l/${leagueId}/team/${r.userId}">${esc(n.get(r.userId))}</a></td>
-			<td class="r num">${r.sw}–${r.sl}</td><td class="r num">${r.gw}–${r.gl}</td>
+			<td class="r num">${r.sw}–${r.sl}</td><td class="r num hide-sm">${r.gw}–${r.gl}</td>
 			<td class="r num">${r.gw - r.gl > 0 ? '+' : ''}${r.gw - r.gl}</td></tr>`).join('')}
 		</tbody></table></div>`;
 	}
