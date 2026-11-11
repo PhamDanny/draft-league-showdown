@@ -182,14 +182,14 @@ export function pageRoutes(app: Express) {
 		});
 	});
 
-	const newLeagueForm = () => `<section class="panel" style="max-width:480px"><h2>New league</h2>
+	const newLeagueForm = (heading = true) => `<section class="panel" style="max-width:480px">${heading ? '<h2>New league</h2>' : ''}
 		<form method="post" action="/leagues/new" class="stack" style="gap:10px">
 			<label class="f">Name<input name="name" required maxlength="40"></label>
 			<button class="btn primary" type="submit">Create</button>
 		</form></section>`;
 	app.get('/leagues/new', requireUser, (req, res) => {
 		if (!req.user!.is_admin) return res.status(403).send('Admins only.');
-		render(req, res, { title: 'New league', body: newLeagueForm() });
+		render(req, res, { title: 'New league', body: `<h1>New league</h1>${newLeagueForm(false)}` });
 	});
 	app.post('/leagues/new', requireUser, form, (req, res) => {
 		if (!req.user!.is_admin) return res.status(403).send('Admins only.');

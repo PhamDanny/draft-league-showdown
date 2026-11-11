@@ -73,7 +73,7 @@
 			<span class="spacer"></span>
 			${p === 'live' ? '<button class="btn danger-ghost" data-act="forfeit">Forfeit</button>' : ''}
 			${p === 'lobby' ? `<a class="btn" href="/l/${C.leagueId}/builder#week-${C.week}">Team</a>` : ''}
-			${p !== 'done' && !S.series.remake ? `<div class="menu"><details><summary class="btn" aria-label="More actions" title="More actions">⋯</summary>
+			${p !== 'done' && !seriesOver() && !S.series.remake ? `<div class="menu"><details><summary class="btn" aria-label="More actions" title="More actions">⋯</summary>
 				<div class="drop"><button type="button" data-act="remake" title="Ask to restart the series from game 1">Request a remake…</button></div></details></div>` : ''}
 		</div>`;
 	}
