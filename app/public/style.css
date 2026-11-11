@@ -530,3 +530,15 @@ table.compact td{padding:4px 10px}
 /* Replay header control groups */
 .rp-group{display:flex;align-items:center;gap:8px}
 .rp-group .seg{align-self:center}
+/* Admin */
+.admin-nav{margin:-4px 0 16px;flex-wrap:wrap}
+label.chk{gap:6px;font-size:14px}
+.settings-form h3{margin:8px 0 0}
+.settings-form h3:first-child{margin-top:0}
+.log-row{align-items:baseline;gap:4px 12px}
+.log-json summary{font-size:12.5px;color:var(--muted)}
+.log-json pre{max-width:100%;overflow-x:auto}
+.save-note{font-size:12px;font-weight:600;opacity:0;transition:opacity .4s;min-width:72px}
+.save-note.show{opacity:1}
+.save-note.ok{color:var(--good)}
+.save-note.bad{color:var(--bad)}

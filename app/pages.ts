@@ -592,66 +592,134 @@ export function pageRoutes(app: Express) {
 
 	// ----- admin -----
 
+	// Admin is four pages sharing a sub-nav: Season, Settings, Draft pool, Log
+	function adminPage(req: Request, res: Response, on: string, title: string, body: string, scripts = '') {
+		const { league } = req as LReq;
+		const items: [string, string][] = [['', 'Season'], ['settings', 'Settings'], ['pool', 'Draft pool'], ['log', 'Log']];
+		render(req, res, {
+			title, tab: 'admin', flash: req.query.msg as string,
+			body: `<h1>Admin</h1><nav class="seg admin-nav" aria-label="Admin">${items.map(([p, label]) =>
+				`<a href="/l/${league.id}/admin${p ? '/' + p : ''}" class="${p === on ? 'on' : ''}" ${p === on ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>${body}`,
+			scripts,
+		});
+	}
+	const confirmAttr = (text: string) => `data-confirm="${esc(text)}" onsubmit="return confirm(this.dataset.confirm)"`;
+
 	lg.get('/admin', commissioner, (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const ms = L.members(league.id);
 		const players = season.status === 'setup' ? [] : L.draftPlayers(season.id);
-		const sel = (name: string, value: string, opts: [string, string][]) =>
-			`<select name="${name}">${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
-		const num = (name: keyof L.Settings, label: string, min = 0, max = 999) =>
-			`<label class="f">${label}<input type="number" name="${name}" min="${min}" max="${max}" value="${settings[name]}"></label>`;
-		const log = all<{ action: string, detail: string, at: number, showdown_name: string }>(`SELECT audit.*, users.showdown_name FROM audit
-			LEFT JOIN users ON users.id = audit.user_id WHERE league_id = ? ORDER BY audit.id DESC LIMIT 50`, league.id);
-		render(req, res, {
-			title: 'Admin', tab: 'admin', flash: req.query.msg as string,
-			body: `<h1>Admin</h1><div class="stack">
+		const last = season.status === 'drafting' ? L.picks(season.id).at(-1) : undefined;
+		const lastBy = last ? players.find(p => p.user_id === last.user_id)?.showdown_name : '';
+		const invite = `${PUBLIC_URL}/join/${league.invite_code}`;
+		adminPage(req, res, '', 'Admin', `<div class="stack">
 			<section class="panel"><h2>Members</h2>
-				<div class="row" style="margin-bottom:10px"><input class="inp" readonly value="${esc(PUBLIC_URL)}/join/${esc(league.invite_code)}" onclick="this.select()" aria-label="Invite link" style="max-width:520px"></div>
+				<div class="row" style="margin-bottom:10px;flex-wrap:nowrap"><input class="inp" id="invite" readonly value="${esc(invite)}" onclick="this.select()" aria-label="Invite link" style="max-width:520px">
+					<button class="btn" type="button" id="copy-invite">Copy</button></div>
 				<div class="list">${ms.map(m => `<div class="row"><b>${esc(m.showdown_name)}</b>${m.role === 'commissioner' ? '<span class="pill">Commissioner</span>' : ''}<span class="spacer"></span>
-					${m.id !== req.user!.id && season.status === 'setup' ? `<form method="post" action="/l/${league.id}/admin/remove" class="inline"><input type="hidden" name="user" value="${m.id}"><button class="btn sm" type="submit">Remove</button></form>` : ''}
-					${m.role !== 'commissioner' ? `<form method="post" action="/l/${league.id}/admin/promote" class="inline"><input type="hidden" name="user" value="${m.id}"><button class="btn sm" type="submit">Make commissioner</button></form>` : ''}</div>`).join('')}</div>
+					${m.id !== req.user!.id && season.status === 'setup' && m.role !== 'commissioner' ? `<form method="post" action="/l/${league.id}/admin/remove" class="inline" ${confirmAttr(`Remove ${m.showdown_name} from the league?`)}><input type="hidden" name="user" value="${m.id}"><button class="btn sm" type="submit">Remove</button></form>` : ''}
+					${m.role !== 'commissioner' ? `<form method="post" action="/l/${league.id}/admin/promote" class="inline" ${confirmAttr(`Make ${m.showdown_name} a commissioner? This can't be undone here.`)}><input type="hidden" name="user" value="${m.id}"><button class="btn sm" type="submit">Make commissioner</button></form>` : ''}</div>`).join('')}</div>
 			</section>
 
 			<section class="panel"><h2>Season ${season.number}</h2>
 				${season.status === 'setup' ? `<form method="post" action="/l/${league.id}/admin/start-draft" class="stack" style="gap:10px">
-					<label class="f">Draft order<select name="order"><option value="random">Random</option><option value="listed">As listed</option></select></label>
-					<div class="row"><a class="btn" href="/l/${league.id}/admin/pool">Draft pool</a><button class="btn primary" type="submit" ${ms.length < 2 ? 'disabled' : ''}>Start draft</button></div>
+					<label class="f" style="max-width:260px">Draft order<select name="order"><option value="random">Random</option><option value="listed">As listed</option></select></label>
+					<div class="row"><button class="btn primary" type="submit" ${ms.length < 2 ? 'disabled' : ''}>Start draft</button>
+						${ms.length < 2 ? '<span class="muted">Needs at least two members.</span>' : ''}</div>
 				</form>` : ''}
 				${season.status === 'drafting' ? `<div class="row">
 					<span>Order: ${players.map(p => esc(p.showdown_name)).join(', ')}</span><span class="spacer"></span>
-					<a class="btn" href="/l/${league.id}/admin/pool">Draft pool</a>
-					<form method="post" action="/l/${league.id}/admin/undo" class="inline"><button class="btn" type="submit">Undo last pick</button></form>
-					<form method="post" action="/l/${league.id}/admin/schedule" class="inline"><button class="btn primary" type="submit">End draft and make schedule</button></form></div>` : ''}
-				${season.status === 'regular' ? `<p class="muted" style="margin:0">Regular season.</p>` : ''}
+					${last ? `<form method="post" action="/l/${league.id}/admin/undo" class="inline" ${confirmAttr(`Undo ${lastBy || 'the last player'}'s pick of ${last.name}${last.captain ? ' (Tera Captain)' : ''} in round ${last.round + 1}?`)}><button class="btn" type="submit">Undo last pick</button></form>` : ''}
+					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr("End the draft and generate the schedule? Picks can't be changed afterwards.")}><button class="btn primary" type="submit">End draft and make schedule</button></form></div>` : ''}
+				${season.status === 'regular' ? `<p class="muted" style="margin:0">Regular season. Best of ${settings.bestOf}.</p>` : ''}
 			</section>
+		</div>`, `<script>
+document.getElementById('copy-invite').addEventListener('click', async e => {
+	const b = e.currentTarget, inp = document.getElementById('invite');
+	try { await navigator.clipboard.writeText(inp.value); } catch { inp.select(); document.execCommand('copy'); }
+	b.textContent = 'Copied';
+	setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+});
+</script>`);
+	});
 
-			<section class="panel"><h2>Settings</h2>
-				<form method="post" action="/l/${league.id}/admin/settings" class="stack" style="gap:12px">
-					<div class="form">
-						<label class="f">Name<input name="name" value="${esc(league.name)}" maxlength="40"></label>
-						<label class="f">Tera${sel('teraMode', settings.teraMode, [['captains', 'Tera Captains'], ['all', 'Everyone'], ['none', 'No Tera']])}</label>
-						${num('maxCaptains', 'Max captains', 0, 6)}
-						${num('tcMaxCost', 'Captain max cost', 0, 40)}
-						${num('tcExtra', 'Captain extra cost', 0, 20)}
-						<label class="f">Draft${sel('draftType', settings.draftType, [['snake', 'Snake'], ['linear', 'Linear']])}</label>
-						${num('budget', 'Budget', 1, 500)}
-						${num('rosterMin', 'Min roster', 1, 20)}
-						${num('rosterMax', 'Max roster', 1, 20)}
-						<label class="f">Series${sel('bestOf', String(settings.bestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']])}</label>
-						${num('playoffTeams', 'Playoff teams', 0, 12)}
-						<label class="f">Tera preview${sel('teraPreview', settings.teraPreview ? '1' : '0', [['1', 'On'], ['0', 'Off']])}</label>
-						<label class="f">Trades${sel('trades', settings.trades ? '1' : '0', [['1', 'On'], ['0', 'Off']])}</label>
-						<label class="f">Free agency${sel('freeAgency', settings.freeAgency ? '1' : '0', [['1', 'On'], ['0', 'Off']])}</label>
-					</div>
-					<div class="row">${L.CLAUSES.map(c => `<label class="row" style="gap:6px"><input type="checkbox" name="clauses" value="${esc(c)}" ${settings.clauses.includes(c) ? 'checked' : ''}>${esc(c)}</label>`).join('')}</div>
-					<div><button class="btn primary" type="submit">Save</button></div>
-				</form>
-			</section>
+	lg.get('/admin/settings', commissioner, (req, res) => {
+		const { league, settings } = req as LReq;
+		const sel = (name: string, value: string, opts: [string, string][]) =>
+			`<select name="${name}">${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+		const num = (name: keyof L.Settings, label: string, min = 0, max = 999) =>
+			`<label class="f">${label}<input type="number" name="${name}" min="${min}" max="${max}" value="${settings[name]}"></label>`;
+		const check = (name: keyof L.Settings, label: string) =>
+			`<label class="row chk"><input type="checkbox" name="${name}" value="1" ${settings[name] ? 'checked' : ''}>${label}</label>`;
+		adminPage(req, res, 'settings', 'Settings', `<section class="panel">
+			<form method="post" action="/l/${league.id}/admin/settings" class="stack settings-form" style="gap:12px">
+				<h3>League</h3>
+				<div class="form"><label class="f">Name<input name="name" value="${esc(league.name)}" maxlength="40"></label></div>
+				<div class="row">${check('trades', 'Trades')}${check('freeAgency', 'Free agency')}</div>
+				<h3>Draft</h3>
+				<div class="form">
+					<label class="f">Draft${sel('draftType', settings.draftType, [['snake', 'Snake'], ['linear', 'Linear']])}</label>
+					${num('budget', 'Budget', 1, 500)}
+					${num('rosterMin', 'Min roster', 1, 20)}
+					${num('rosterMax', 'Max roster', 1, 20)}
+				</div>
+				<h3>Tera</h3>
+				<div class="form">
+					<label class="f">Tera${sel('teraMode', settings.teraMode, [['captains', 'Tera Captains'], ['all', 'Everyone'], ['none', 'No Tera']])}</label>
+				</div>
+				<div class="form" id="tc-fields" ${settings.teraMode === 'captains' ? '' : 'hidden'}>
+					${num('maxCaptains', 'Max captains', 0, 6)}
+					${num('tcMaxCost', 'Captain max cost', 0, 40)}
+					${num('tcExtra', 'Captain extra cost', 0, 20)}
+				</div>
+				<div class="row">${check('teraPreview', 'Tera preview')}</div>
+				<h3>Series</h3>
+				<div class="form">
+					<label class="f">Series${sel('bestOf', String(settings.bestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']])}</label>
+					${num('playoffTeams', 'Playoff teams', 0, 12)}
+				</div>
+				<h3>Clauses</h3>
+				<div class="row">${L.CLAUSES.map(c => `<label class="row chk"><input type="checkbox" name="clauses" value="${esc(c)}" ${settings.clauses.includes(c) ? 'checked' : ''}>${esc(c)}</label>`).join('')}</div>
+				<div><button class="btn primary" type="submit">Save</button></div>
+			</form>
+		</section>`, `<script>
+// Captain fields only matter with Tera Captains; they're still submitted either way
+document.querySelector('[name=teraMode]').addEventListener('change', e => {
+	document.getElementById('tc-fields').hidden = e.target.value !== 'captains';
+});
+</script>`);
+	});
 
-			<section class="panel"><h2>Audit log</h2><div class="list">${log.map(a => `<div class="row"><span class="num muted">${new Date(a.at * 1000).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}</span><b>${esc(a.showdown_name || 'system')}</b><span>${esc(a.action)}</span><span class="muted">${esc(a.detail)}</span></div>`).join('') || '<div class="muted">Empty</div>'}</div>
-				<p style="margin-bottom:0"><a class="btn sm" href="/l/${league.id}/admin/export">Export league (JSON)</a></p></section>
-			</div>`,
-		});
+	const ACTIONS: { [code: string]: string } = {
+		'league.create': 'created the league', 'league.export': 'exported the league', 'settings.update': 'changed settings',
+		'member.join': 'joined the league', 'member.remove': 'removed a member', 'member.promote': 'made a member commissioner',
+		'draft.start': 'started the draft', 'draft.pick': 'made a draft pick', 'draft.undo': 'undid the last pick', 'draft.finish': 'finished drafting',
+		'season.schedule': 'ended the draft and made the schedule', 'pool.edit': 'edited the pool', 'result.override': 'overrode a series result',
+		'remake.request': 'asked for a remake', 'remake.accept': 'accepted a remake', 'remake.decline': 'declined a remake', 'remake.cancel': 'withdrew a remake request',
+	};
+	lg.get('/admin/log', commissioner, (req, res) => {
+		const { league } = req as LReq;
+		const log = all<{ action: string, detail: string, at: number, showdown_name: string }>(`SELECT audit.*, users.showdown_name FROM audit
+			LEFT JOIN users ON users.id = audit.user_id WHERE league_id = ? ORDER BY audit.id DESC LIMIT 50`, league.id);
+		// Member names for ids in details (including members who have since been removed)
+		const userName = (id: string) => one<{ showdown_name: string }>('SELECT showdown_name FROM users WHERE id = ?', Number(id))?.showdown_name;
+		const monName = (id: string) => mon(id).name || id;
+		const detail = (a: { action: string, detail: string }) => {
+			const d = a.detail || '';
+			if (a.action === 'settings.update') return `<details class="fold log-json"><summary>Show settings</summary><pre class="set">${esc(d)}</pre></details>`;
+			if (a.action === 'member.remove' || a.action === 'member.promote') return `<span>${esc(userName(d) || `user ${d}`)}</span>`;
+			if (a.action === 'draft.start') return `<span class="muted">Order: ${esc(d.split(',').map(id => userName(id) || id).join(', '))}</span>`;
+			if (a.action === 'draft.undo') return `<span>${esc(monName(d))}</span>`;
+			const pick = /^(\S+)( \(captain\))? for user (\d+)$/.exec(d);
+			if (a.action === 'draft.pick' && pick) return `<span>${esc(monName(pick[1]))}${pick[2] ? ' (Tera Captain)' : ''} for ${esc(userName(pick[3]) || 'user ' + pick[3])}</span>`;
+			const pool = /^(\S+) (.+)$/.exec(d);
+			if (a.action === 'pool.edit' && pool) return `<span>${esc(monName(pool[1]))} <span class="muted">${esc(pool[2])}</span></span>`;
+			return d ? `<span class="muted">${esc(d)}</span>` : '';
+		};
+		adminPage(req, res, 'log', 'Log', `<section class="panel"><h2>Audit log</h2><div class="list">${log.map(a => `<div class="row log-row">
+			<span class="num muted">${new Date(a.at * 1000).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}</span>
+			<span><b>${esc(a.showdown_name || 'System')}</b> ${esc(ACTIONS[a.action] || a.action)}</span>${detail(a)}</div>`).join('') || '<div class="muted">Nothing yet.</div>'}</div>
+			<p style="margin-bottom:0"><a class="btn sm" href="/l/${league.id}/admin/export">Export league (JSON)</a></p></section>`);
 	});
 
 	lg.post('/admin/settings', commissioner, form, (req, res) => {
@@ -683,7 +751,7 @@ export function pageRoutes(app: Express) {
 		run('UPDATE leagues SET name = ?, format_name = ?, settings = ? WHERE id = ?', name, L.formatNameFor(name, league.id), JSON.stringify(next), league.id);
 		audit(league.id, req.user!.id, 'settings.update', JSON.stringify(next));
 		syncShowdown();
-		res.redirect(`/l/${league.id}/admin?msg=Saved.`);
+		res.redirect(`/l/${league.id}/admin/settings?msg=Saved.`);
 	});
 
 	lg.post('/admin/remove', commissioner, form, (req, res) => {
@@ -745,28 +813,36 @@ export function pageRoutes(app: Express) {
 		const { league, season } = req as LReq;
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null, banned: number }>(
 			'SELECT * FROM pool WHERE season_id = ? ORDER BY banned, cost DESC, name', season.id);
-		render(req, res, {
-			title: 'Draft pool', tab: 'admin',
-			body: `<div class="row" style="margin-bottom:12px"><h1 style="margin:0">Draft pool</h1><span class="spacer"></span>
+		adminPage(req, res, 'pool', 'Draft pool', `<div class="row" style="margin:16px 0 12px"><h2 style="margin:0">Draft pool</h2><span class="spacer"></span>
 				<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select>
 				<input class="inp" style="max-width:240px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off"></div>
-			<section class="panel"><div class="table-wrap"><table class="pool-table"><thead><tr><th>Pokémon</th><th class="r">Pts</th><th class="r">TC</th><th>Banned</th></tr></thead><tbody>
+			<p class="muted" style="margin:0 0 12px">Changes save as you make them.</p>
+			<section class="panel"><div class="table-wrap"><table class="pool-table"><thead><tr><th>Pokémon</th><th class="r">Pts</th><th class="r">TC</th><th>Banned</th><th></th></tr></thead><tbody>
 			${pool.map(p => `<tr data-mon="${esc(p.species_id)}" data-types="${esc(mon(p.species_id).types.join(','))}"><td>${monLabel(p.species_id, { small: true })}</td>
 				<td class="r"><input type="number" min="0" max="99" value="${p.cost}" data-field="cost" data-id="${esc(p.species_id)}" aria-label="Cost"></td>
 				<td class="r"><input type="number" min="0" max="99" value="${p.tc_cost ?? ''}" placeholder="—" data-field="tc_cost" data-id="${esc(p.species_id)}" aria-label="Captain cost"></td>
-				<td><input type="checkbox" ${p.banned ? 'checked' : ''} data-field="banned" data-id="${esc(p.species_id)}" aria-label="Banned"></td></tr>`).join('')}
+				<td><input type="checkbox" ${p.banned ? 'checked' : ''} data-field="banned" data-id="${esc(p.species_id)}" aria-label="Banned"></td>
+				<td class="save-note" aria-live="polite"></td></tr>`).join('')}
 			</tbody></table></div></section>`,
-			scripts: POOL_FILTER_SCRIPT + `<script>
+			POOL_FILTER_SCRIPT + `<script>
 document.addEventListener('change', async e => {
 	const el = e.target;
 	if (!el.dataset.field) return;
+	const note = el.closest('tr').querySelector('.save-note');
 	const value = el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
-	const r = await fetch('/l/${league.id}/admin/pool', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-		body: new URLSearchParams({ id: el.dataset.id, field: el.dataset.field, value }) });
-	el.style.outline = r.ok ? '' : '2px solid var(--bad)';
+	let ok = false;
+	try {
+		const r = await fetch('/l/${league.id}/admin/pool', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+			body: new URLSearchParams({ id: el.dataset.id, field: el.dataset.field, value }) });
+		ok = r.ok;
+	} catch {}
+	el.style.outline = ok ? '' : '2px solid var(--bad)';
+	clearTimeout(note._t);
+	note.textContent = ok ? 'Saved' : 'Not saved';
+	note.className = 'save-note show ' + (ok ? 'ok' : 'bad');
+	if (ok) note._t = setTimeout(() => note.classList.remove('show'), 1000);
 });
-</script>`,
-		});
+</script>`);
 	});
 	lg.post('/admin/pool', commissioner, form, (req, res) => {
 		const { league, season } = req as LReq;
