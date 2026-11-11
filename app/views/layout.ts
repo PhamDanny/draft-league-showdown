@@ -34,7 +34,7 @@ function badge(league: League) {
 
 const TABS: [string, string][] = [
 	['', 'Home'], ['standings', 'Standings'], ['schedule', 'Schedule'], ['teams', 'Teams'],
-	['draft', 'Draft'], ['rules', 'Rules'],
+	['draft', 'Draft'], ['builder', 'Teambuilder'], ['rules', 'Rules'],
 ];
 
 export function page(o: PageOpts) {
@@ -49,7 +49,7 @@ export function page(o: PageOpts) {
 		</select>` : ''}
 		${o.league ? `<span class="pill hide-sm">${esc(badge(o.league))}</span>` : ''}
 		<span class="spacer"></span>
-		<a class="btn primary" href="/play" target="showdown">Play</a>
+		${o.league ? `<a class="btn primary" href="/l/${o.league.id}/play">Play</a>` : ''}
 		<div class="menu"><details><summary class="avatar" title="${esc(u.showdown_name)}">${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(u.showdown_name.slice(0, 1).toUpperCase())}</summary>
 			<div class="drop">
 				<a href="/account">Account</a>

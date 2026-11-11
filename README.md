@@ -27,8 +27,9 @@ Setup copies `.env.example` to `.env`. Fill in:
 
 ```
 browser ──► league site (app/, port 8000)
-             ├─ league pages, draft room, Discord sign-in
-             ├─ /play.html: the Showdown client (vendor/pokemon-showdown-client, patched)
+             ├─ league pages, draft room, teambuilder, Discord sign-in
+             ├─ /l/:id/battle/:match: challenge page with Showdown's battle screen embedded
+             ├─ /play.html: the Showdown client (vendor/pokemon-showdown-client, patched), used only for that embed
              ├─ /~~draftleague/action.php: Showdown login, signed for the signed-in user
              └─ /showdown websocket ──► Showdown server (vendor/pokemon-showdown, 127.0.0.1:8001)
                                          ├─ one format per league (config/custom-formats.ts)
@@ -37,7 +38,7 @@ browser ──► league site (app/, port 8000)
 
 - **Thin fork.** Upstream Showdown isn't copied into this repo. `showdown/server/` holds files added on top of the server, and `showdown/client/patch.mjs` makes a handful of exact edits to the client. Updating Showdown means changing `showdown/pins.json` and re-running setup.
 - **Rosters.** The site writes `data/showdown.json` with each league's format and rosters. The format's validator rejects any Pokémon not on your roster, and in Tera Captains leagues only captains can Terastallize.
-- **Team privacy.** Teams live in your browser, as on normal Showdown. They reach the server only when a battle starts. The server never writes battle input logs to disk. When a league battle ends, its full log is encrypted (`app/seal.ts`) before it's stored, and every game of a series is decrypted only when the series is final, at which point both teams and the replays open to the whole league. Admin pages have no way to read a sealed team.
+- **Team privacy.** Teams are built in the site's own teambuilder and saved only in your browser (one team per week). They reach the server only when a battle starts. The server never writes battle input logs to disk. When a league battle ends, its full log is encrypted (`app/seal.ts`) before it's stored, and every game of a series is decrypted only when the series is final, at which point both teams and the replays open to the whole league. Admin pages have no way to read a sealed team.
 
 ## Layout
 

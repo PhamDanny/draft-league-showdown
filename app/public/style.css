@@ -232,3 +232,57 @@ form.inline{display:inline}
 .set{white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:var(--surface-2);border-radius:8px;padding:8px 10px;margin:6px 0 0}
 .pool-table td input{width:64px;padding:3px 6px;font:inherit;font-size:13px;background:var(--surface-2);color:var(--fg);border:1px solid var(--line);border-radius:6px;text-align:right}
 .log-view{max-height:520px;overflow:auto;font-family:var(--mono);font-size:12px;white-space:pre-wrap;background:var(--surface-2);border-radius:8px;padding:10px}
+
+/* Teambuilder */
+.tb-weeks{display:flex;gap:6px;overflow-x:auto;margin:0 0 14px;scrollbar-width:thin}
+.tb-weeks a{display:flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);text-decoration:none;color:var(--muted);white-space:nowrap}
+.tb-weeks a.on{color:var(--fg);border-color:var(--fg)}
+.tb{display:grid;grid-template-columns:280px minmax(0,1fr) 300px;gap:16px;align-items:start}
+.tb.two{grid-template-columns:minmax(0,1fr) 340px}
+@media (max-width:1100px){.tb{grid-template-columns:260px minmax(0,1fr)}.tb-side{grid-column:1/-1}}
+@media (max-width:720px){.tb,.tb.two{grid-template-columns:minmax(0,1fr)}}
+.tb-slots{display:flex;flex-direction:column;gap:6px}
+.tb-slot{display:flex;align-items:center;gap:8px;text-align:left;font:inherit;color:inherit;background:var(--surface-2);border:1px solid transparent;border-radius:10px;padding:6px 8px;min-height:52px;cursor:pointer;line-height:1.25}
+.tb-slot.on{border-color:var(--accent);background:var(--surface)}
+.tb-slot.empty{justify-content:center}
+.tb-tools{margin-top:12px;gap:6px}
+.tb-tools select{width:auto;flex:1;padding:4px 8px;font-size:12px}
+#tb-roster .chips{display:flex;flex-wrap:wrap;margin:0}
+#tb-roster .chip{display:inline-flex;align-items:center;gap:4px;padding:2px 10px 2px 2px;color:var(--fg)}
+#tb-roster .chip.used{opacity:.35}
+.tb-head{margin-bottom:14px}
+.tb-head select{width:auto;font-family:var(--display);font-size:20px;font-weight:700}
+.tb-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.tb-moves{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.tb-moves small{display:block;min-height:18px;font-size:11px;text-transform:none;letter-spacing:0;font-weight:400}
+.inp.bad,.bad{border-color:var(--bad)!important;color:var(--bad)}
+.tb-stats{width:100%;border-collapse:collapse}
+.tb-stats th,.tb-stats td{padding:3px 6px;text-align:left;font-weight:500}
+.tb-stats thead th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.tb-stats tbody th{width:44px}
+.tb-stats th.plus{color:var(--good)}.tb-stats th.minus{color:var(--bad)}
+.tb-stats input[type=range]{width:100%;accent-color:var(--accent)}
+.tb-stats .inp.sm{width:64px;padding:3px 6px}
+.tb-stats td[data-stat]{font-weight:600;width:48px}
+.tb-empty{padding:40px 0;text-align:center}
+.tb-speed{display:flex;flex-direction:column;max-height:520px;overflow:auto}
+.tb-speed > div{display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:6px}
+.tb-speed > div .num{width:34px;font-weight:600}
+.tb-speed .mine{background:var(--accent-soft)}
+.tb-speed .scouted{background:var(--tera-soft)}
+.spr.xs{width:28px;height:28px;margin:-4px 0}
+#tb-notes{resize:vertical}
+dialog.panel{width:min(560px,92vw);color:var(--fg)}
+dialog.panel textarea{font-family:var(--mono);font-size:12px;margin-bottom:10px}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+
+/* Battle page */
+.bt-bar{margin-bottom:12px}
+.bt-team{display:flex;gap:2px;align-items:center}
+.bt-err{color:var(--bad);font-size:13px;max-width:520px}
+iframe.bt{display:block;width:100%;height:max(640px,calc(100vh - 230px));border:1px solid var(--line);border-radius:12px;background:#fff}
+.t-normal{background:#9a9a7a}.t-fire{background:#e0702e}.t-water{background:#4f7fe0}.t-electric{background:#d1a815}.t-grass{background:#5ea73b}
+.t-ice{background:#5fb8b3}.t-fighting{background:#b0302a}.t-poison{background:#93409a}.t-ground{background:#c99b45}.t-flying{background:#8a76d8}
+.t-psychic{background:#e2507c}.t-bug{background:#94a21e}.t-rock{background:#a9922f}.t-ghost{background:#6a5590}.t-dragon{background:#6038e8}
+.t-dark{background:#6a5546}.t-steel{background:#8f8fa8}.t-fairy{background:#d6719a}
+.tb-played{position:relative;margin:0}.tb-played img.spr{position:absolute;top:6px;right:6px}

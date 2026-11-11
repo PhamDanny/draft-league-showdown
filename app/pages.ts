@@ -6,6 +6,7 @@ import { exportSet, mon, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
+import { builderRoutes } from './builder.ts';
 import { esc, monLabel, page, sprite } from './views/layout.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
@@ -294,7 +295,7 @@ export function pageRoutes(app: Express) {
 			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule',
 			body: `<p class="eyebrow">Week ${m.week} · Bo${settings.bestOf} · ${esc(league.format_name)}</p>
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">${esc(n.get(m.p1))} ${score(m)} ${esc(n.get(m.p2))}</h1>${statusPill(m.status)}<span class="spacer"></span>
-				${!final && (m.p1 === req.user!.id || m.p2 === req.user!.id) ? `<a class="btn primary" target="showdown" href="/play.html#challenge-${toID(n.get(m.p1 === req.user!.id ? m.p2 : m.p1))}">Challenge</a>` : ''}</div>
+				${!final && (m.p1 === req.user!.id || m.p2 === req.user!.id) ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Battle</a>` : ''}</div>
 
 			<div id="live">
 			${games.length ? `<div class="grid g3" style="margin-bottom:16px">${games.map(g => {
@@ -492,6 +493,8 @@ export function pageRoutes(app: Express) {
 		notify(league.id);
 		res.redirect(`/l/${league.id}/draft${err ? '?msg=' + encodeURIComponent(err) : ''}`);
 	});
+
+	builderRoutes(lg);
 
 	lg.get('/rules', (req, res) => {
 		const { settings } = req as LReq;

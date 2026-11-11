@@ -1,7 +1,7 @@
 // League, season, draft, schedule and series logic. No HTTP here.
 import crypto from 'node:crypto';
 import { all, audit, now, one, run, tx } from './db.ts';
-import { rosterIds, seedPool, teamsFromInputLog, toID } from './dex.ts';
+import { dex, rosterIds, seedPool, teamsFromInputLog, toID } from './dex.ts';
 import { seal, unseal } from './seal.ts';
 
 export interface Settings {
@@ -51,8 +51,20 @@ export function settingsOf(league: League): Settings {
 	return { ...PRESETS.gen9tc.settings, ...JSON.parse(league.settings) };
 }
 
+// Clauses Standard Draft already has; Showdown rejects a format that lists them twice.
+let baseRules: Set<string> | null = null;
+function inStandardDraft(clause: string) {
+	if (!baseRules) {
+		try {
+			baseRules = new Set(dex().formats.getRuleTable(dex().formats.get('gen9customgame@@@Standard Draft', true)).keys());
+		} catch {
+			baseRules = new Set(['sleepclausemod', 'ohkoclause', 'evasionclause', 'endlessbattleclause']);
+		}
+	}
+	return baseRules.has(toID(clause));
+}
 export function ruleset(settings: Settings): string[] {
-	const rules = ['Standard Draft', 'Min Source Gen = 9', ...settings.clauses];
+	const rules = ['Standard Draft', 'Min Source Gen = 9', ...settings.clauses.filter(c => !inStandardDraft(c))];
 	if (settings.teraPreview && settings.teraMode !== 'none') rules.push('Tera Type Preview');
 	return rules;
 }

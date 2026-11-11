@@ -42,11 +42,14 @@ await bob.req('GET', '/join/' + code);
 assert((await bob.req('GET', leagueUrl)).status === 200, 'bob joined');
 assert((await new Client('Eve').req('GET', leagueUrl)).status === 302, 'signed-out user is redirected');
 
-await alice.req('POST', leagueUrl + '/admin/settings', {
-	name: 'Test League', teraMode: 'captains', maxCaptains: '1', tcMaxCost: '13', tcExtra: '3', draftType: 'snake',
-	budget: '120', rosterMin: '6', rosterMax: '6', bestOf: '3', playoffTeams: '2', teraPreview: '1', trades: '1', freeAgency: '1',
-	clauses: 'Species Clause',
-});
+await alice.req('POST', leagueUrl + '/admin/settings', [
+	...Object.entries({
+		name: 'Test League', teraMode: 'captains', maxCaptains: '1', tcMaxCost: '13', tcExtra: '3', draftType: 'snake',
+		budget: '120', rosterMin: '6', rosterMax: '6', bestOf: '3', playoffTeams: '2', teraPreview: '1', trades: '1', freeAgency: '1',
+	}),
+	// the default clauses, some of which Standard Draft already includes
+	...['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause'].map(c => ['clauses', c]),
+]);
 await alice.req('POST', leagueUrl + '/admin/start-draft', { order: 'listed' });
 
 const plans = {
