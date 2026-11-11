@@ -504,3 +504,10 @@ a.game-card:hover{border-color:var(--fg);background:var(--surface-2)}
 .setd-meta{font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .setd .set{margin:0 0 10px}
 .override summary h3{display:inline}
+/* Teams and draft */
+a.team-card{text-decoration:none;color:inherit}
+a.team-card:hover{border-color:var(--fg)}
+table.compact td{padding:4px 10px}
+.board .h > span{display:block;overflow:hidden;text-overflow:ellipsis}
+.board .h small{display:block;font-weight:500;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted)}
+.board{align-items:end}

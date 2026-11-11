@@ -53,12 +53,47 @@ document.addEventListener('input', e => { if (e.target.id === 'pool-search' || e
 document.addEventListener('change', e => { if (e.target.id === 'pool-type') window.filterPool(); });
 </script>`;
 
+// Confirms a draft pick. The dialog lives outside #draft-root (which live updates replace) and posts
+// its own form, so an update arriving mid-decision neither closes it nor detaches the form it submits.
+const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel bt-dialog">
+	<form method="post" action="/l/${leagueId}/draft/pick">
+		<h2 id="pick-q" style="margin-top:0"></h2><p id="pick-left" class="muted"></p>
+		<input type="hidden" name="species"><input type="hidden" name="captain">
+		<div class="row" style="justify-content:flex-end"><button class="btn" type="button" value="cancel" autofocus>Cancel</button><button class="btn primary" type="submit">Draft</button></div>
+	</form>
+</dialog>
+<script>
+(() => {
+	const dlg = document.getElementById('pick-dialog');
+	const f = dlg.querySelector('form');
+	dlg.querySelector('[value=cancel]').addEventListener('click', () => dlg.close());
+	document.addEventListener('submit', e => {
+		const src = e.target.closest('form[data-pick]');
+		if (!src) return;
+		e.preventDefault();
+		const root = document.getElementById('draft-root');
+		const { name, cost, captain } = src.dataset;
+		const who = root?.dataset.for || '';
+		const left = Number(root?.dataset.left) - Number(cost);
+		dlg.querySelector('#pick-q').textContent = 'Draft ' + name + (captain ? ' as a Tera Captain' : '') + ' for ' + (who || cost + ' points') + '?';
+		dlg.querySelector('#pick-left').textContent = (who ? cost + ' points. ' + who + ' would have ' : 'You would have ') + left + ' points left.';
+		f.species.value = src.species.value;
+		f.captain.value = captain ? '1' : '';
+		dlg.showModal();
+	});
+})();
+</script>`;
+
 // ---------- helpers ----------
 
 function names(leagueId: number) {
 	const map = new Map<number, string>();
 	for (const m of L.members(leagueId)) map.set(m.id, m.showdown_name);
 	return map;
+}
+/** Rosters | Draft board switch shown on Teams and the draft page once the season is regular. */
+function teamsSeg(leagueId: number, on: 'rosters' | 'board') {
+	return `<nav class="seg" aria-label="Teams view"><a href="/l/${leagueId}/teams" class="${on === 'rosters' ? 'on' : ''}">Rosters</a><a href="/l/${leagueId}/draft" class="${on === 'board' ? 'on' : ''}">Draft board</a></nav>`;
 }
 function statusPill(status: string) {
 	return status === 'final' ? '<span class="pill final">Final</span>' :
@@ -374,12 +409,13 @@ export function pageRoutes(app: Express) {
 		const players = season.status === 'setup' ? [] : L.draftPlayers(season.id);
 		render(req, res, {
 			title: 'Teams', tab: 'teams',
-			body: `<h1>Teams</h1><div class="grid g3" id="live">${players.map(p => {
+			body: `<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Teams</h1><span class="spacer"></span>${season.status === 'regular' ? teamsSeg(league.id, 'rosters') : ''}</div>
+			<div class="grid g3" id="live">${players.map(p => {
 				const r = L.roster(season.id, p.user_id);
 				const pts = r.reduce((a, x) => a + x.cost, 0);
-				return `<a class="panel" href="/l/${league.id}/team/${p.user_id}" style="text-decoration:none">
+				return `<a class="panel team-card" href="/l/${league.id}/team/${p.user_id}">
 					<div class="row"><h2 style="margin:0">${esc(p.showdown_name)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
-					<div class="row" style="margin-top:10px;gap:2px">${r.map(x => `<span title="${esc(x.name)}${x.captain ? ' (TC)' : ''}" style="position:relative">${sprite(x.species_id, 'sm')}${x.captain ? '<span style="position:absolute;right:-2px;top:-2px;width:9px;height:9px;border-radius:50%;background:var(--tera);border:2px solid var(--surface)"></span>' : ''}</span>`).join('')}</div></a>`;
+					<div class="bench" style="margin-top:10px">${r.map(x => monChip(x.species_id, { name: x.name, captain: !!x.captain })).join('')}</div></a>`;
 			}).join('')}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
 		});
@@ -408,8 +444,8 @@ export function pageRoutes(app: Express) {
 		render(req, res, {
 			title: n.get(uid)!, tab: 'teams',
 			body: `${rec ? `<p class="eyebrow">${rec.sw}–${rec.sl} · ${st.indexOf(rec) + 1}${['st', 'nd', 'rd'][st.indexOf(rec)] || 'th'}</p>` : ''}<h1>${esc(n.get(uid))}</h1>
-			<section class="panel"><div class="table-wrap"><table><thead><tr><th>Pokémon</th><th class="r">Pts</th><th></th></tr></thead><tbody>
-				${r.map(x => `<tr><td>${monLabel(x.species_id)}</td><td class="r num">${x.cost}</td><td>${x.captain ? '<span class="pill tc">Tera Captain</span>' : ''}</td></tr>`).join('')}
+			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
+				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}</td></tr>`).join('')}
 			</tbody></table></div></section>
 			${ms.length ? `<section class="panel" style="margin-top:16px"><h2>Series</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
@@ -437,7 +473,7 @@ export function pageRoutes(app: Express) {
 		const pickBySlot = new Map<string, L.Pick>();
 		for (const p of state.picks) pickBySlot.set(`${p.round}:${p.user_id}`, p);
 		const board = `<section class="panel"><div class="table-wrap"><div class="board" style="--n:${n}"><div class="h"></div>
-			${state.players.map(p => `<div class="h ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}">${esc(p.showdown_name)}</div>`).join('')}
+			${state.players.map(p => `<div class="h ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}"><span>${esc(p.showdown_name)}</span><small class="num">${settings.budget - (state.spent.get(p.user_id) || 0)} left</small></div>`).join('')}
 			${Array.from({ length: shownRounds }, (_, r) => {
 		const arrow = settings.draftType === 'snake' && r % 2 ? '←' : '→';
 		return `<div class="h">${r + 1} ${arrow}</div>${state.players.map(p => {
@@ -469,22 +505,23 @@ export function pageRoutes(app: Express) {
 			const tcOk = settings.teraMode === 'captains' && p.tc_cost != null && caps < settings.maxCaptains && canAfford(p.tc_cost);
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
-				<form method="post" action="/l/${league.id}/draft/pick" class="inline"><input type="hidden" name="species" value="${esc(p.species_id)}">
-					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'}>${p.cost}</button></form>
-				${settings.teraMode === 'captains' ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
-					<button class="btn sm tera" type="submit" ${tcOk ? '' : 'disabled'}>TC ${p.tc_cost}</button></form>` : '<span class="btn sm tera" style="visibility:hidden">TC 00</span>') : ''}
+				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"><input type="hidden" name="species" value="${esc(p.species_id)}">
+					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points"><span class="hide-sm">Draft · </span>${p.cost}</button></form>
+				${settings.teraMode === 'captains' ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
+					<button class="btn sm tera" type="submit" ${tcOk ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.tc_cost} points"><span class="hide-sm">Captain · </span>${p.tc_cost}</button></form>` : '<span class="btn sm tera" style="visibility:hidden" aria-hidden="true"><span class="hide-sm">Captain · </span>00</span>') : ''}
 			</div>`;
 		}).join('');
 		const myCount = state.counts.get(me) || 0;
 		const amPlayer = state.players.some(p => p.user_id === me);
 		const myFinished = state.players.find(p => p.user_id === me)?.finished;
 		const status = season.status === 'drafting' ?
-			(state.onClock ? `<span class="pill live">Round ${state.round + 1} · ${esc(state.onClock.showdown_name)}${myTurn ? '' : ' picking'}</span>${myTurn ? '<span class="pill tc">Your pick</span>' : ''}` : '<span class="pill final">Done</span>') :
+			(state.onClock ? `<span class="pill live">Round ${state.round + 1} · ${myTurn ? 'Your pick' : `${esc(state.onClock.showdown_name)} is picking`}</span>` : '<span class="pill final">Done</span>') :
 			'<span class="pill final">Final</span>';
 
-		const body = `<div id="draft-root">
+		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
 			<div class="row" style="margin-bottom:12px"><h1 style="margin:0">Draft</h1>${status}
-				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}</div>
+				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}
+				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
 			${req.query.msg ? `<div class="flash">${esc(req.query.msg)}</div>` : ''}
 			${board}
 			${season.status === 'drafting' ? `<div class="split" style="margin-top:16px">
@@ -492,7 +529,7 @@ export function pageRoutes(app: Express) {
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:10px 0" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					<div class="pool-list">${poolRows}</div></section>
-				${amPlayer ? `<section class="panel"><h2>Me</h2><div class="bench">${mine.map(p => `<span class="chip">${sprite(p.species_id, 'sm')}${esc(p.name)}${p.captain ? ' <span class="pill tc">TC</span>' : ''}</span>`).join('')}</div>
+				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: !!p.captain })).join('')}</div>
 					<div class="grid g3" style="margin-top:16px;gap:8px">
 						<div><h3 style="margin:0">Budget</h3><div class="num" style="font-size:16px">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
 						${settings.teraMode === 'captains' ? `<div><h3 style="margin:0">Captains</h3><div class="num" style="font-size:16px">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>` : ''}
@@ -508,7 +545,7 @@ export function pageRoutes(app: Express) {
 		}
 		render(req, res, {
 			title: 'Draft', tab: season.status === 'regular' ? 'teams' : 'draft', wide: true, body,
-			scripts: POOL_FILTER_SCRIPT + LIVE_SCRIPT(league.id, 'draft-root'),
+			scripts: PICK_DIALOG(league.id) + POOL_FILTER_SCRIPT + LIVE_SCRIPT(league.id, 'draft-root'),
 		});
 	});
 
