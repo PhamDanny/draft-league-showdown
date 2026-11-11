@@ -127,7 +127,6 @@ export function authRoutes(app: Express) {
 			redirect_uri: `${PUBLIC_URL}/auth/discord/callback`,
 			scope: 'identify',
 			state,
-			prompt: 'none',
 		});
 		res.redirect(`https://discord.com/oauth2/authorize?${params}`);
 	});
