@@ -366,11 +366,11 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .bt-head h1{margin:0;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .bt-score{font-family:var(--display);font-size:28px;font-weight:700;color:var(--muted)}
 .pips{display:inline-flex;gap:5px;align-items:center}
-.pip{width:12px;height:12px;border-radius:50%;border:2px solid var(--line);background:transparent}
+.pip{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);background:transparent;display:inline-grid;place-items:center;font-size:11px;font-weight:700;line-height:1;color:var(--surface)}
 .pip.w{background:var(--good);border-color:var(--good)}
 .pip.l{background:var(--bad);border-color:var(--bad)}
 .pip.t{background:var(--muted);border-color:var(--muted)}
-.pip.live{border-color:var(--accent);animation:pulse 1.6s ease-in-out infinite}
+.pip.live{border-color:var(--fg);animation:pulse 1.6s ease-in-out infinite}
 .btn.lg{padding:11px 22px;font-size:16px;font-weight:600;border-radius:10px}
 .btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .btn.danger-ghost{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,var(--line))}
@@ -524,3 +524,6 @@ table.compact td{padding:4px 10px}
   .tb-team .tslot small{display:none}
   .tb-team .tslot.empty .plus{width:28px;height:28px}
 }
+/* Battle header overflow menu */
+.bt-head .menu summary.btn{padding:7px 12px;font-size:16px;line-height:1.2}
+.bt-head .menu .drop{min-width:200px}

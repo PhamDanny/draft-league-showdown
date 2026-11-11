@@ -55,7 +55,7 @@
 		for (let i = 0; i < S.series.bestOf; i++) {
 			const g = S.series.games[i];
 			const live = !g && i === S.series.games.length && phase() === 'live';
-			out.push(`<span class="pip ${g ? g.result.toLowerCase() : live ? 'live' : ''}" title="Game ${i + 1}${g ? `: ${g.result === 'W' ? 'won' : g.result === 'L' ? 'lost' : 'tie'}` : ''}"></span>`);
+			out.push(`<span class="pip ${g ? g.result.toLowerCase() : live ? 'live' : ''}" title="Game ${i + 1}${g ? `: ${g.result === 'W' ? 'won' : g.result === 'L' ? 'lost' : 'tie'}` : live ? ': in progress' : ''}">${g ? g.result : ''}</span>`);
 		}
 		return `<span class="pips" aria-label="Series ${S.series.mine}–${S.series.theirs}">${out.join('')}</span>`;
 	}
@@ -72,9 +72,9 @@
 			${pips()}
 			<span class="spacer"></span>
 			${p === 'live' ? '<button class="btn danger-ghost" data-act="forfeit">Forfeit</button>' : ''}
-			${p !== 'done' && !S.series.remake ? '<button class="btn" data-act="remake" title="Ask to restart the series from game 1">Remake</button>' : ''}
-			${p !== 'live' ? `<a class="btn" href="/l/${C.leagueId}/builder#week-${C.week}">Team</a>` : ''}
-			<a class="btn" href="/l/${C.leagueId}/series/${C.matchId}">Series</a>
+			${p === 'lobby' ? `<a class="btn" href="/l/${C.leagueId}/builder#week-${C.week}">Team</a>` : ''}
+			${p !== 'done' && !S.series.remake ? `<div class="menu"><details><summary class="btn" aria-label="More actions" title="More actions">⋯</summary>
+				<div class="drop"><button type="button" data-act="remake" title="Ask to restart the series from game 1">Request a remake…</button></div></details></div>` : ''}
 		</div>`;
 	}
 
@@ -137,6 +137,8 @@
 
 	function render() {
 		const p = phase();
+		// Status updates re-render the page; keep the ⋯ menu open if the player had it open
+		const menuOpen = ui.querySelector('.bt-head .menu details')?.open;
 		ui.innerHTML = `${header()}
 			${remakeBar()}
 			${S.notice ? `<p class="flash">${esc(S.notice)}</p>` : ''}
@@ -146,8 +148,8 @@
 				<p class="muted">Both teams and every replay are now open to the league.</p>
 				<div class="bt-cta"><a class="btn primary lg" href="/l/${C.leagueId}/series/${C.matchId}">Series &amp; replays</a></div></section>` : ''}
 			${p === 'post' ? resultBar() : ''}`;
+		if (menuOpen) { const d = ui.querySelector('.bt-head .menu details'); if (d) d.open = true; }
 		mountFrame();
-		updateFrameButton();
 	}
 
 	function remakeBar() {
@@ -190,7 +192,6 @@
 		frameRoom = want;
 		doc.getElementById('dls-embed').textContent = frameCss(want);
 		try { win.PS.join(want); } catch { win.location.hash = want; }
-		updateFrameButton();
 	}
 
 	const TYPE_COLORS = [['Normal', '#9a9a7a'], ['Fire', '#e0702e'], ['Water', '#4f7fe0'], ['Electric', '#d1a815'], ['Grass', '#5ea73b'],
@@ -248,7 +249,6 @@ ${room} .timerbutton,${room} button[name="openTimer"]{border-radius:8px!importan
 ${room} .replayDownloadButton,${room} .replayDownloadButton+br,${room} .replayDownloadButton+br+br,
 ${room} [data-cmd="/savereplay"],${room} [data-cmd="/close"],${room} [data-cmd^="/closeand"],${room} [data-cmd="/switchsides"]{display:none!important}
 ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
-${room} .dl-next{background:var(--accent)!important;border-color:var(--accent)!important;color:#fff!important;font-weight:600;padding:8px 16px}
 `;
 	}
 	function prepareFrame() {
@@ -270,30 +270,6 @@ ${room} .dl-next{background:var(--accent)!important;border-color:var(--accent)!i
 			doc.head.appendChild(style);
 		}
 		if (!doc.getElementById('dls-embed').textContent) doc.getElementById('dls-embed').textContent = frameCss('none');
-		// Showdown re-renders its controls; keep our "next game" button in place of Rematch
-		if (!doc.body.dataset.dlsObserved) {
-			doc.body.dataset.dlsObserved = '1';
-			new MutationObserver(updateFrameButton).observe(doc.body, { childList: true, subtree: true });
-		}
-		updateFrameButton();
-	}
-	function updateFrameButton() {
-		const doc = frame?.contentDocument;
-		if (!doc?.body) return;
-		// The after-game controls always hold the Replay button; Rematch only shows for a player
-		// who didn't forfeit, so our button gets its own row there instead.
-		const controls = doc.querySelector('.battle-controls [data-cmd="/play"]')?.closest('.inline-controls');
-		const existing = doc.querySelector('.dl-next-row');
-		if (!controls || phase() !== 'post') { existing?.remove(); return; }
-		const label = seriesOver() ? 'Series &amp; replays' : `Go to game ${nextGameNo()}`;
-		if (existing && existing.dataset.label === label && existing.parentElement === controls) return;
-		existing?.remove();
-		const row = doc.createElement('p');
-		row.className = 'dl-next-row';
-		row.dataset.label = label;
-		row.innerHTML = `<button class="button dl-next"><strong>${label}</strong></button>`;
-		row.firstChild.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); nextGame(); });
-		controls.appendChild(row);
 	}
 
 	function nextGame() {
@@ -396,6 +372,7 @@ ${room} .dl-next{background:var(--accent)!important;border-color:var(--accent)!i
 		S.error = '';
 		S.notice = '';
 		const a = t.dataset.act;
+		t.closest('details')?.removeAttribute('open');
 		if (a === 'ready') readyUp();
 		else if (a === 'unready') unready();
 		else if (a === 'next') nextGame();
