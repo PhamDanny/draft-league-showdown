@@ -45,6 +45,7 @@ function fetchPinned(url, sha, dir) {
 }
 
 function copyDir(src, dest) {
+	if (!fs.existsSync(src)) return;
 	for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
 		const s = path.join(src, entry.name);
 		const d = path.join(dest, entry.name);
