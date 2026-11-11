@@ -38,7 +38,8 @@ browser ──► league site (app/, port 8000)
 
 - **Thin fork.** Upstream Showdown isn't copied into this repo. `showdown/server/` holds files added on top of the server, and `showdown/client/patch.mjs` makes a handful of exact edits to the client. Updating Showdown means changing `showdown/pins.json` and re-running setup.
 - **Rosters.** The site writes `data/showdown.json` with each league's format and rosters. The format's validator rejects any Pokémon not on your roster, and in Tera Captains leagues only captains can Terastallize.
-- **Team privacy.** Teams are built in the site's own teambuilder and saved only in your browser (one team per week). They reach the server only when a battle starts. The server never writes battle input logs to disk. When a league battle ends, its full log is encrypted (`app/seal.ts`) before it's stored, and every game of a series is decrypted only when the series is final, at which point both teams and the replays open to the whole league. Admin pages have no way to read a sealed team.
+- **Team privacy.** Teams are built in the site's own teambuilder and saved only in your browser (one team per week). They reach the server only when a battle starts. The server never writes battle input logs to disk. When a league battle ends, its full log is encrypted (`app/seal.ts`) before it's stored, and every game of a series is decrypted only when the series is final, at which point both teams and the replays open to the whole league. Admin pages have no way to read a sealed team. League battle rooms are invite-only, so nobody but the two players can watch a game live.
+- **Remakes.** Either player can ask to remake an unfinished series from the battle page. If the opponent accepts, every game of that series so far is deleted (results, sealed logs, replays) and play restarts from game 1.
 
 ## Layout
 

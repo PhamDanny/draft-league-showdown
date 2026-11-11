@@ -111,6 +111,20 @@ CREATE TABLE IF NOT EXISTS battles (
 	started_at INTEGER,
 	played_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS remakes (
+	id INTEGER PRIMARY KEY,
+	match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+	requested_by INTEGER NOT NULL REFERENCES users(id),
+	reason TEXT,
+	status TEXT NOT NULL DEFAULT 'pending',
+	requested_at INTEGER NOT NULL,
+	resolved_at INTEGER
+);
+-- Battles wiped by a remake; a late end report for one of these is dropped
+CREATE TABLE IF NOT EXISTS discarded_rooms (
+	roomid TEXT PRIMARY KEY,
+	at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
 	id INTEGER PRIMARY KEY,
 	league_id INTEGER REFERENCES leagues(id) ON DELETE CASCADE,

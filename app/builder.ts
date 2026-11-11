@@ -5,6 +5,7 @@ import { all, one } from './db.ts';
 import { descs, dex, mon, rosterIds, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
+import { notify } from './events.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
 
@@ -152,31 +153,60 @@ export function builderRoutes(lg: Router) {
 		res.redirect(m ? `/l/${league.id}/battle/${m.id}` : `/l/${league.id}/builder`);
 	});
 
+	/** Score-only view of a series for the battle page. Never includes sets or logs. */
+	function seriesState(m: L.Match, me: number, bestOf: number) {
+		const games = L.battlesFor(m.id).filter(b => b.played_at);
+		const [mine, theirs] = m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins];
+		return {
+			status: m.status, bestOf, need: Math.ceil(bestOf / 2), mine, theirs, final: m.status === 'final',
+			games: games.map(g => ({ no: g.game_no, result: g.winner === me ? 'W' : g.winner ? 'L' : 'T', turns: g.turns, id: g.id })),
+			roomids: games.map(g => g.roomid),
+			remake: (() => {
+				const r = L.pendingRemake(m.id);
+				return r ? { by: r.requested_by === me ? 'me' : 'opp', reason: r.reason || '' } : null;
+			})(),
+			resets: L.remakeCount(m.id),
+		};
+	}
+	function myMatch(req: Request) {
+		const { season } = req as LReq;
+		const me = req.user!.id;
+		const m = one<L.Match>('SELECT * FROM matches WHERE id = ? AND season_id = ?', Number(req.params.matchId), season.id);
+		return m && (m.p1 === me || m.p2 === me) ? m : null;
+	}
+
+	lg.get('/battle/:matchId/state', (req, res) => {
+		const m = myMatch(req);
+		if (!m) return res.status(404).json({ error: 'Not found' });
+		res.set('cache-control', 'no-store').json(seriesState(m, req.user!.id, (req as LReq).settings.bestOf));
+	});
+
+	lg.post('/battle/:matchId/remake', (req, res) => {
+		const { league, settings } = req as LReq;
+		const m = myMatch(req);
+		if (!m) return res.status(404).json({ error: 'Not found' });
+		const error = L.remake(league.id, m.id, req.user!.id, String(req.body?.action || ''), String(req.body?.reason || '').trim());
+		if (error) return res.status(400).json({ error });
+		notify(league.id);
+		const fresh = one<L.Match>('SELECT * FROM matches WHERE id = ?', m.id)!;
+		res.json(seriesState(fresh, req.user!.id, settings.bestOf));
+	});
+
 	lg.get('/battle/:matchId', (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const me = req.user!.id;
-		const m = one<L.Match>('SELECT * FROM matches WHERE id = ? AND season_id = ?', Number(req.params.matchId), season.id);
-		if (!m || (m.p1 !== me && m.p2 !== me)) return res.redirect(`/l/${league.id}/schedule`);
-		if (m.status === 'final') return res.redirect(`/l/${league.id}/series/${m.id}`);
+		const m = myMatch(req);
+		if (!m) return res.redirect(`/l/${league.id}/schedule`);
+		// A final series stays viewable here until the player moves on, so the last game's result shows.
 		const opp = m.p1 === me ? m.p2 : m.p1;
-		const n = namesOf(league.id);
 		const oppUser = one<{ showdown_id: string, showdown_name: string }>('SELECT showdown_id, showdown_name FROM users WHERE id = ?', opp)!;
 		const ctx = {
 			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, format: toID(league.format_name),
-			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id,
+			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id, myName: req.user!.showdown_name,
 			roster: rosterOf(season.id, me), teraMode: settings.teraMode,
+			state: seriesState(m, me, settings.bestOf),
 		};
-		const [mine, theirs] = m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins];
-		render(req, res, `vs ${n.get(opp)}`, 'schedule', `
-			<div class="row" style="margin-bottom:12px">
-				<p class="eyebrow" style="margin:0">Week ${m.week} · Bo${settings.bestOf}</p>
-				<h1 style="margin:0">vs ${esc(n.get(opp))}</h1>
-				<span class="num" style="font-size:20px">${mine}–${theirs}</span>
-				<span class="spacer"></span>
-				<a class="btn" href="/l/${league.id}/builder#week-${m.week}">Team</a>
-				<a class="btn" href="/l/${league.id}/series/${m.id}">Series</a>
-			</div>
-			<div id="battle"></div>`,
-		`<script>window.BATTLE = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/battle.js"></script>`, true);
+		render(req, res, `vs ${oppUser.showdown_name}`, 'schedule', '<div id="battle"></div>',
+			`<script>window.BATTLE = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/battle.js"></script>`, true);
 	});
 }

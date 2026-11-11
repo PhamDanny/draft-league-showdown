@@ -314,19 +314,29 @@ export function pageRoutes(app: Express) {
 	});
 
 	lg.get('/replay/:battleId', (req, res) => {
-		const { league, season } = req as LReq;
+		const { league, season, settings } = req as LReq;
+		// Replays (and everything in them) open only once the whole series is final.
 		const b = one<any>(`SELECT battles.* FROM battles JOIN matches ON matches.id = battles.match_id
-			WHERE battles.id = ? AND matches.season_id = ? AND matches.status = 'final'`, Number(req.params.battleId), season.id);
+			WHERE battles.id = ? AND matches.season_id = ? AND matches.status = 'final' AND battles.voided = 0`, Number(req.params.battleId), season.id);
 		if (!b) return res.status(404).send('Not found');
-		const log = String(b.public_log || '').replace(/<\//g, '<\\/');
-		res.send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-			<title>Replay</title></head><body style="margin:0;background:#12141b">
-			<div class="wrapper replay-wrapper" style="max-width:1180px;margin:0 auto">
-				<p style="padding:8px 16px;margin:0"><a href="/l/${league.id}/series/${b.match_id}" style="color:#eceef4">Back</a></p>
-				<div class="battle"></div><div class="battle-log"></div><div class="replay-controls"></div><div class="replay-controls-2"></div>
-				<script type="text/plain" class="battle-log-data">${log}</script>
-			</div>
-			<script src="/js/replay-embed.js"></script></body></html>`);
+		const m = one<L.Match>('SELECT * FROM matches WHERE id = ?', b.match_id)!;
+		const n = names(league.id);
+		const games = L.battlesFor(m.id).filter(g => g.played_at).map(g => ({ id: g.id, no: g.game_no, winner: n.get(g.winner) || null }));
+		const teams = b.teams ? JSON.parse(b.teams) : null;
+		const data = {
+			leagueId: league.id, matchId: m.id, week: m.week, game: b.game_no, bestOf: settings.bestOf,
+			series: { p1: n.get(m.p1), p2: n.get(m.p2), score: [m.p1_wins, m.p2_wins] },
+			players: { p1: n.get(b.p1), p2: n.get(b.p2) }, winner: n.get(b.winner) || null, turns: b.turns,
+			games, fullLog: b.full_log || '', publicLog: b.public_log || '', teams,
+			sprites: Object.fromEntries(['p1', 'p2'].flatMap(side => (teams?.[side]?.team || []).map((set: any) => [toID(set.species), mon(toID(set.species)).sprite]))),
+			exports: Object.fromEntries(['p1', 'p2'].map(side => [side, (teams?.[side]?.team || []).map((set: any) => exportSet(set))])),
+		};
+		render(req, res, {
+			title: `Game ${b.game_no}: ${n.get(b.p1)} vs ${n.get(b.p2)}`, tab: 'schedule', wide: true,
+			body: '<div id="replay"></div>',
+			scripts: `<script>window.REPLAY = ${JSON.stringify(data).replace(/</g, '\\u003c')};</script>
+				<script src="/static/calc/data.js"></script><script src="/static/calc/calc.js"></script><script src="/static/replay.js"></script>`,
+		});
 	});
 
 	lg.get('/teams', (req, res) => {
@@ -719,8 +729,10 @@ document.addEventListener('change', async e => {
 				picks: L.picks(s.id),
 				matches: L.matches(s.id).map(m => ({
 					...m,
-					// Sealed games stay sealed in exports
-					battles: all<any>('SELECT id, game_no, roomid, p1, p2, winner, turns, end_type, public_log, teams, voided, played_at FROM battles WHERE match_id = ?', m.id),
+					// Sealed games stay sealed in exports, and nothing from a game (not even what
+					// spectators would have seen) leaves before its series is final.
+					battles: all<any>(`SELECT id, game_no, roomid, p1, p2, winner, turns, end_type, voided, played_at
+						${m.status === 'final' ? ', public_log, teams' : ''} FROM battles WHERE match_id = ?`, m.id),
 				})),
 			})),
 			audit: all('SELECT * FROM audit WHERE league_id = ? ORDER BY id', league.id),

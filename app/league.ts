@@ -406,6 +406,8 @@ export function recordBattleEnd(leagueId: number, users: [number, number], winne
 	const league = one<League>('SELECT * FROM leagues WHERE id = ?', leagueId)!;
 	const settings = settingsOf(league);
 	return tx(() => {
+		// A game wiped by a remake while it was still being played doesn't count
+		if (one('SELECT 1 FROM discarded_rooms WHERE roomid = ?', report.roomid)) return null;
 		const match = openSeries(leagueId, users[0], users[1]);
 		if (!match) return null;
 		const done = battlesFor(match.id).filter(b => b.winner !== null || b.end_type).length;
@@ -428,6 +430,57 @@ export function recordBattleEnd(leagueId: number, users: [number, number], winne
 			p1w, p2w, winner ? 'final' : 'live', winner, match.id);
 		if (winner) revealSeries(match.id);
 		return match.id;
+	});
+}
+
+// ---------- remakes ----------
+
+export interface Remake { id: number, match_id: number, requested_by: number, reason: string | null, status: string, requested_at: number }
+
+export function pendingRemake(matchId: number) {
+	return one<Remake>("SELECT * FROM remakes WHERE match_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1", matchId) || null;
+}
+export function remakeCount(matchId: number) {
+	return one<{ n: number }>("SELECT COUNT(*) AS n FROM remakes WHERE match_id = ? AND status = 'accepted'", matchId)!.n;
+}
+
+/**
+ * Either player can ask to remake an unfinished series; if the other accepts, every game so far
+ * is deleted (results, sealed logs, replays) as if it was never played. Returns an error message or ''.
+ */
+export function remake(leagueId: number, matchId: number, userId: number, action: string, reason = '') {
+	return tx(() => {
+		const match = one<Match>('SELECT * FROM matches WHERE id = ?', matchId);
+		if (!match || (match.p1 !== userId && match.p2 !== userId)) return 'Not your series.';
+		if (match.status === 'final') return 'This series is already final. Ask a commissioner instead.';
+		const pending = pendingRemake(matchId);
+		const t = now();
+		if (action === 'request') {
+			if (pending) return 'A remake has already been requested.';
+			run('INSERT INTO remakes (match_id, requested_by, reason, requested_at) VALUES (?, ?, ?, ?)', matchId, userId, reason.slice(0, 300) || null, t);
+			audit(leagueId, userId, 'remake.request', `match ${matchId}${reason ? ': ' + reason.slice(0, 300) : ''}`);
+			return '';
+		}
+		if (!pending) return 'There is no remake request to answer.';
+		if (action === 'cancel') {
+			if (pending.requested_by !== userId) return 'Only the player who asked can withdraw it.';
+			run("UPDATE remakes SET status = 'cancelled', resolved_at = ? WHERE id = ?", t, pending.id);
+			return '';
+		}
+		if (pending.requested_by === userId) return 'Your opponent has to answer this request.';
+		if (action === 'decline') {
+			run("UPDATE remakes SET status = 'declined', resolved_at = ? WHERE id = ?", t, pending.id);
+			audit(leagueId, userId, 'remake.decline', `match ${matchId}`);
+			return '';
+		}
+		if (action !== 'accept') return 'Unknown action.';
+		const games = all<{ roomid: string }>('SELECT roomid FROM battles WHERE match_id = ?', matchId);
+		for (const g of games) run('INSERT OR IGNORE INTO discarded_rooms (roomid, at) VALUES (?, ?)', g.roomid, t);
+		run('DELETE FROM battles WHERE match_id = ?', matchId);
+		run("UPDATE matches SET p1_wins = 0, p2_wins = 0, winner = NULL, status = 'scheduled', revealed_at = NULL WHERE id = ?", matchId);
+		run("UPDATE remakes SET status = 'accepted', resolved_at = ? WHERE id = ?", t, pending.id);
+		audit(leagueId, userId, 'remake.accept', `match ${matchId}: ${games.length} game(s) deleted`);
+		return '';
 	});
 }
 

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Replay scene</title>
+<!-- Showdown's battle renderer on its own page, so its styles stay apart from the site's.
+     The replay viewer (replay.js) drives it through window.scene. -->
+<link rel="stylesheet" href="/style/font-awesome.css">
+<link rel="stylesheet" href="/style/battle.css">
+<style>
+html,body{margin:0;background:transparent;overflow:hidden}
+.battle{position:relative;width:640px;height:360px;margin:0;border:0}
+.battle-log{display:none}
+</style>
+</head><body>
+<div class="battle"></div><div class="battle-log"></div>
+<script src="/js/lib/ps-polyfill.js"></script>
+<script src="/config/config.js"></script>
+<script src="/js/lib/jquery-1.11.0.min.js"></script>
+<script src="/js/lib/html-sanitizer-minified.js"></script>
+<script src="/js/battle-sound.js"></script>
+<script src="/js/battledata.js"></script>
+<script src="/data/pokedex-mini.js"></script>
+<script src="/data/pokedex-mini-bw.js"></script>
+<script src="/data/graphics.js"></script>
+<script src="/data/pokedex.js"></script>
+<script src="/data/moves.js"></script>
+<script src="/data/abilities.js"></script>
+<script src="/data/items.js"></script>
+<script src="/data/teambuilder-tables.js"></script>
+<script src="/js/battle-tooltips.js"></script>
+<script src="/js/battle.js"></script>
+<script>
+window.exports = window;
+window.scene = {
+	battle: null,
+	load(log) {
+		if (this.battle) { this.battle.destroy?.(); $('.battle').empty(); $('.battle-log').empty(); }
+		this.battle = new Battle({ $frame: $('.battle'), $logFrame: $('.battle-log'), log: log.split('\n'), isReplay: true, paused: true, autoresize: false });
+		this.battle.seekTurn(0);
+		return this.battle;
+	},
+	mute(on) { try { BattleSound.setMute(on); } catch {} },
+};
+scene.mute(true);
+parent.postMessage({ sceneReady: true }, location.origin);
+</script>
+</body></html>

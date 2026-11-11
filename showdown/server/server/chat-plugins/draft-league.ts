@@ -43,6 +43,11 @@ async function post(route: string, body: AnyObject) {
 export const handlers: Chat.Handlers = {
 	onBattleCreate(battle, players) {
 		if (!isLeagueFormat(battle.format)) return;
+		// League games are closed to spectators until the series is final (the league site
+		// publishes replays then). Players hold room auth, so they can always (re)join.
+		// Set directly rather than with setPrivate(), which would rename the room.
+		battle.room.settings.modjoin = '%';
+		battle.room.settings.isPrivate = 'hidden';
 		void post('battle-start', {
 			roomid: battle.roomid,
 			format: battle.format,
