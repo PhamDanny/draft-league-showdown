@@ -69,35 +69,36 @@
 	function render() {
 		const ro = readOnly();
 		const target = editableWeek();
+		const result = ro ? (week.score[0] > week.score[1] ? 'Won' : week.score[0] < week.score[1] ? 'Lost' : 'Tied') : '';
+		const notes = ro ? (data.notes ? `<section class="panel"><h3>Notes</h3><p class="tb-notes-ro">${esc(data.notes)}</p></section>` : '') :
+			`<section class="panel"><h3>Notes</h3><textarea id="tb-notes" class="inp" rows="4" aria-label="Notes">${esc(data.notes || '')}</textarea></section>`;
+		const right = ro ? notes : `<section class="panel" id="tb-calc"></section>${week ? '<section class="panel" id="tb-speed"></section>' : ''}${notes}`;
+		// One fixed layout for the buttons under the team (see the UI cleanup spec, 6.2)
+		const acts = ro ? `
+			<button class="btn" type="button" data-act="export">Export</button>
+			${target ? `<button class="btn" type="button" data-act="copy-to" data-target="${target.week}">Copy to wk ${target.week}</button>` : '<span></span>'}
+			<a class="btn primary" href="/l/${B.leagueId}/series/${week.matchId}">View series</a>` : `
+			<button class="btn" type="button" data-act="import">Import</button>
+			<button class="btn" type="button" data-act="export">Export</button>
+			${B.weeks.length > 1 ? `<select class="inp" data-act="copy" aria-label="Copy a team from another week"><option value="">Copy from…</option>${B.weeks.filter(w => w !== week).map(w =>
+				`<option value="${w.week}">Week ${w.week} · ${esc(w.oppName)}</option>`).join('')}</select>` : ''}
+			${week ? `<a class="btn primary" href="/l/${B.leagueId}/battle/${week.matchId}">Play week ${week.week}</a>` : ''}`;
 		root.innerHTML = `
 			<h1 class="sr-only">Teambuilder</h1>
-			<div class="tb3">
+			${ro ? `<div class="panel tb-banner"><b>Week ${week.week} vs ${esc(week.oppName)} · ${result} ${week.score[0]}–${week.score[1]}.</b>
+				<span>This is the team you played; it can't be edited.</span>
+				${week.played?.length ? '' : '<span class="muted">No revealed team, showing what you saved.</span>'}</div>` : ''}
+			<div class="tb3 ${right ? '' : 'two'}">
 				<aside class="tb-l">
 					<section class="panel tb-teampanel">
 						${B.weeks.length ? `<label class="f">Week<select class="inp" data-act="week">${B.weeks.map(w =>
 							`<option value="${w.week}" ${w === week ? 'selected' : ''}>${esc(weekLabel(w))}</option>`).join('')}</select></label>` : '<p class="eyebrow">No schedule yet</p>'}
 						<div class="tb-team" id="tb-team"></div>
-						<div class="tb-acts">
-							${ro ? `<a class="btn" href="/l/${B.leagueId}/series/${week.matchId}">Series</a>
-								${target ? `<button class="btn" type="button" data-act="copy-to" data-target="${target.week}">Copy to wk ${target.week}</button>` : ''}
-								<button class="btn" type="button" data-act="export">Export</button>` : `
-								<button class="btn" type="button" data-act="import">Import</button>
-								<button class="btn" type="button" data-act="export">Export</button>
-								${B.weeks.length > 1 ? `<select class="inp" data-act="copy" aria-label="Copy a team from another week"><option value="">Copy from…</option>${B.weeks.filter(w => w !== week).map(w =>
-									`<option value="${w.week}">Week ${w.week} · ${esc(w.oppName)}</option>`).join('')}</select>` : ''}
-								${week ? `<a class="btn primary" href="/l/${B.leagueId}/battle/${week.matchId}">Play week ${week.week}</a>` : ''}`}
-						</div>
+						<div class="tb-acts">${acts}</div>
 					</section>
 				</aside>
 				<section class="panel sd" id="tb-edit"></section>
-				<aside class="stack tb-r">
-					${ro ? `<section class="panel"><p class="eyebrow">Week ${week.week}</p><h2 style="margin:4px 0">vs ${esc(week.oppName)}</h2>
-						<span class="pill ${week.score[0] > week.score[1] ? 'w' : 'l'}">${week.score[0] > week.score[1] ? 'Won' : 'Lost'} ${week.score[0]}–${week.score[1]}</span>
-						${week.played?.length ? '' : '<p class="muted" style="margin:8px 0 0;font-size:13px">No revealed team, showing what you saved.</p>'}</section>` :
-						'<section class="panel" id="tb-calc"></section>'}
-					${week && !ro ? '<section class="panel" id="tb-speed"></section>' : ''}
-					<section class="panel"><h3>Notes</h3><textarea id="tb-notes" class="inp" rows="4" aria-label="Notes" ${ro ? 'readonly' : ''}>${esc(data.notes || '')}</textarea></section>
-				</aside>
+				${right ? `<aside class="stack tb-r">${right}</aside>` : ''}
 			</div>
 			<dialog id="tb-dialog" class="panel"></dialog>`;
 		renderTeam();
@@ -147,17 +148,18 @@
 		}
 		const sp = D.species[set.species];
 		const ro = readOnly();
-		const dis = ro ? 'disabled' : '';
 		const st = Sets.stats(D, set);
 		const tera = teraAllowed(set.species);
-		const pickIn = (f, label) => `<label class="sd-f"><span>${label}</span><input data-pick="${f}" value="${esc(fieldValue(set, f))}" autocomplete="off" ${dis}></label>`;
+		const roText = v => `<span class="sd-ro">${v ? esc(v) : '—'}</span>`;
+		const pickIn = (f, label) => ro ? `<div class="sd-f"><span>${label}</span>${roText(fieldValue(set, f))}</div>` :
+			`<label class="sd-f"><span>${label}</span><input data-pick="${f}" value="${esc(fieldValue(set, f))}" autocomplete="off"></label>`;
 		el.innerHTML = `
 			<div class="sd-card">
-				<div class="sd-head">
-					<label class="sd-nick"><span>Nickname</span><input class="inp" data-f="nickname" value="${esc(set.nickname || '')}" placeholder="${esc(sp.name)}" maxlength="18" ${dis}></label>
+				${ro ? (set.nickname ? `<div class="sd-head"><span class="sd-nick">Nickname ${roText(set.nickname)}</span></div>` : '') : `<div class="sd-head">
+					<label class="sd-nick"><span>Nickname</span><input class="inp" data-f="nickname" value="${esc(set.nickname || '')}" placeholder="${esc(sp.name)}" maxlength="18"></label>
 					<span class="spacer"></span>
-					${ro ? '' : '<button class="btn sm" type="button" data-act="remove">Delete</button>'}
-				</div>
+					<button class="btn sm" type="button" data-act="remove">Delete</button>
+				</div>`}
 				<div class="sd-grid">
 					<div class="sd-col sd-monc">
 						<div class="sd-sprite">${img(set.species, 'lg')}</div>
@@ -174,8 +176,8 @@
 						${pickIn('item', 'Item')}
 						${pickIn('ability', 'Ability')}
 					</div>
-					<div class="sd-col sd-movec"><span class="sd-lbl">Moves</span>${[0, 1, 2, 3].map(i =>
-						`<input class="${set.moves[i] && !sp.moves.includes(set.moves[i]) ? 'bad' : ''}" data-pick="move${i}" value="${esc(fieldValue(set, 'move' + i))}" aria-label="Move ${i + 1}" autocomplete="off" ${dis}>`).join('')}</div>
+					<div class="sd-col sd-movec"><span class="sd-lbl">Moves</span>${[0, 1, 2, 3].map(i => ro ? roText(fieldValue(set, 'move' + i)) :
+						`<input class="${set.moves[i] && !sp.moves.includes(set.moves[i]) ? 'bad' : ''}" data-pick="move${i}" value="${esc(fieldValue(set, 'move' + i))}" aria-label="Move ${i + 1}" autocomplete="off">`).join('')}</div>
 					<button type="button" class="sd-stats" data-pickbtn="stats">
 						<span class="sd-lbl">Stats <span class="muted">EV</span></span>
 						${STATS.map(k => {
@@ -278,10 +280,28 @@
 	}
 	function renderStatsForm(el, set) {
 		const sp = D.species[set.species];
-		const dis = readOnly() ? 'disabled' : '';
+		if (readOnly()) {
+			const nat = D.natures.find(n => n.name === set.nature) || { name: set.nature || 'Serious' };
+			el.innerHTML = `<div class="sd-form">
+				<div class="row" style="margin-bottom:8px"><h3 style="margin:0">Stats</h3><span class="spacer"></span><span class="muted">${esc(natureLabel(nat))}</span></div>
+				<div class="stats">
+					<span class="hd"></span><span class="hd">Base</span><span class="hd bb"></span><span class="hd">EVs</span><span class="hd">IV</span><span class="hd" style="text-align:right">Total</span>
+					${STATS.map(st => {
+						const mult = Sets.natureMult(D, set.nature, st);
+						const b = sp.stats[st];
+						return `<span class="sl ${mult > 1 ? 'plus' : mult < 1 ? 'minus' : ''}">${LABEL[st]}${mult > 1 ? '+' : mult < 1 ? '−' : ''}</span>
+							<span class="num">${b}</span>
+							<span class="basebar bb"><i style="width:${Math.min(100, b / 1.6)}%;background:${b >= 110 ? 'var(--good)' : b >= 80 ? 'var(--warn)' : 'var(--bad)'}"></i></span>
+							<span class="num">${set.evs[st] || 0}</span><span class="num">${set.ivs[st] ?? 31}</span>
+							<span class="num tot" data-stat="${st}"></span>`;
+					}).join('')}
+				</div></div>`;
+			updateStats();
+			return;
+		}
 		el.innerHTML = `<div class="sd-form">
 			<div class="row" style="margin-bottom:8px"><h3 style="margin:0">Stats</h3><span class="spacer"></span>
-				<select class="inp" data-f="nature" aria-label="Nature" style="width:auto;padding:4px 8px" ${dis}>${D.natures.map(n => `<option value="${n.name}" ${n.name === set.nature ? 'selected' : ''}>${natureLabel(n)}</option>`).join('')}</select>
+				<select class="inp" data-f="nature" aria-label="Nature" style="width:auto;padding:4px 8px">${D.natures.map(n => `<option value="${n.name}" ${n.name === set.nature ? 'selected' : ''}>${natureLabel(n)}</option>`).join('')}</select>
 				<span class="pill" id="ev-left"></span></div>
 			<div class="stats">
 				<span class="hd"></span><span class="hd">Base</span><span class="hd bb"></span><span class="hd">EVs</span><span class="hd">IV</span><span class="hd" style="text-align:right">Total</span>
@@ -291,9 +311,9 @@
 					return `<span class="sl ${mult > 1 ? 'plus' : mult < 1 ? 'minus' : ''}">${LABEL[st]}${mult > 1 ? '+' : mult < 1 ? '−' : ''}</span>
 						<span class="num">${b}</span>
 						<span class="basebar bb"><i style="width:${Math.min(100, b / 1.6)}%;background:${b >= 110 ? 'var(--good)' : b >= 80 ? 'var(--warn)' : 'var(--bad)'}"></i></span>
-						<span class="evcell"><input type="range" min="0" max="252" step="4" value="${set.evs[st] || 0}" data-ev="${st}" aria-label="${LABEL[st]} EVs" ${dis}>
-							<input class="iv" type="number" min="0" max="252" step="4" value="${set.evs[st] || 0}" data-evn="${st}" aria-label="${LABEL[st]} EVs" ${dis}></span>
-						<input class="iv" type="number" min="0" max="31" value="${set.ivs[st] ?? 31}" data-iv="${st}" aria-label="${LABEL[st]} IV" ${dis}>
+						<span class="evcell"><input type="range" min="0" max="252" step="4" value="${set.evs[st] || 0}" data-ev="${st}" aria-label="${LABEL[st]} EVs">
+							<input class="iv" type="number" min="0" max="252" step="4" value="${set.evs[st] || 0}" data-evn="${st}" aria-label="${LABEL[st]} EVs"></span>
+						<input class="iv" type="number" min="0" max="31" value="${set.ivs[st] ?? 31}" data-iv="${st}" aria-label="${LABEL[st]} IV">
 						<span class="num tot" data-stat="${st}"></span>`;
 				}).join('')}
 			</div></div>`;
@@ -302,16 +322,22 @@
 	function renderDetailsForm(el, set) {
 		const sp = D.species[set.species];
 		const tera = teraAllowed(set.species);
-		const dis = readOnly() ? 'disabled' : '';
+		if (readOnly()) {
+			const f = (label, v) => `<div class="f">${label}<span class="sd-ro">${v ? esc(v) : '—'}</span></div>`;
+			el.innerHTML = `<div class="sd-form"><div class="form sd-detform">
+				${f('Level', String(set.level || 100))}${f('Gender', set.gender || (sp.genders.length ? '' : 'N'))}${f('Shiny', set.shiny ? 'Yes' : 'No')}${f('Tera type', tera ? set.teraType : '')}
+			</div></div>`;
+			return;
+		}
 		el.innerHTML = `<div class="sd-form">
 			<div class="form sd-detform">
-				<label class="f">Level<input class="inp" type="number" min="1" max="100" data-f="level" value="${set.level || 100}" ${dis}></label>
-				<label class="f">Gender<select class="inp" data-f="gender" ${sp.genders.length && !dis ? '' : 'disabled'}>${sp.genders.length ? `<option value="">Random</option>${sp.genders.map(g =>
+				<label class="f">Level<input class="inp" type="number" min="1" max="100" data-f="level" value="${set.level || 100}"></label>
+				<label class="f">Gender<select class="inp" data-f="gender" ${sp.genders.length ? '' : 'disabled'}>${sp.genders.length ? `<option value="">Random</option>${sp.genders.map(g =>
 					`<option ${g === set.gender ? 'selected' : ''}>${g}</option>`).join('')}` : '<option>Genderless or fixed</option>'}</select></label>
-				<label class="f">Shiny<select class="inp" data-f="shiny" ${dis}><option value="">No</option><option value="1" ${set.shiny ? 'selected' : ''}>Yes</option></select></label>
+				<label class="f">Shiny<select class="inp" data-f="shiny"><option value="">No</option><option value="1" ${set.shiny ? 'selected' : ''}>Yes</option></select></label>
 			</div>
 			<h3 style="margin:16px 0 8px">Tera type</h3>
-			${tera ? `<div class="tera-pick">${D.types.map(t => `<button type="button" class="${t === set.teraType ? 'on' : ''}" data-tera="${t}" ${dis}>${t === 'Stellar' ? '<span class="type t-stellar">Stellar</span>' : typeTag(t)}</button>`).join('')}</div>` :
+			${tera ? `<div class="tera-pick">${D.types.map(t => `<button type="button" class="${t === set.teraType ? 'on' : ''}" data-tera="${t}">${t === 'Stellar' ? '<span class="type t-stellar">Stellar</span>' : typeTag(t)}</button>`).join('')}</div>` :
 				`<p class="muted" style="margin:0">${B.teraMode === 'none' ? 'Terastallization is off in this league.' : 'Only Tera Captains can Terastallize.'}</p>`}
 		</div>`;
 	}
