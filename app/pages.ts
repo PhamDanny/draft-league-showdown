@@ -285,12 +285,12 @@ export function pageRoutes(app: Express) {
 		const me = req.user!.id;
 		render(req, res, {
 			title: 'Schedule', tab: 'schedule',
-			body: `<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Schedule</h1><span class="spacer"></span>${cur ? `<a class="btn primary" href="#wk${cur}">Week ${cur}</a>` : ''}</div>
-			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row"><h2 style="margin:0">Week ${w}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
-				<div class="table-wrap"><table><tbody>${ms.map(m => `<tr class="${m.p1 === me || m.p2 === me ? 'me' : ''}">
-					<td>${esc(n.get(m.p1))} vs ${esc(n.get(m.p2))}</td><td class="num">${score(m)}</td><td>${statusPill(m.status)}</td>
-					<td class="r"><a class="btn sm" href="/l/${league.id}/series/${m.id}">Open</a></td></tr>`).join('')}</tbody></table></div></section>`).join('')}</div>`,
-			scripts: LIVE_SCRIPT(league.id, 'live'),
+			body: `<h1>Schedule</h1>
+			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row" style="margin-bottom:6px"><h2 style="margin:0">Week ${w}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
+				<div class="list">${ms.map(m => `<a class="rowlink sched ${m.p1 === me || m.p2 === me ? 'me' : ''}" href="/l/${league.id}/series/${m.id}">
+					<span class="p">${esc(n.get(m.p1))} vs ${esc(n.get(m.p2))}</span><span class="num">${score(m)}</span>${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>`).join('') ||
+				'<p class="muted">The schedule is made when the draft ends.</p>'}</div>`,
+			scripts: LIVE_SCRIPT(league.id, 'live') + (cur ? `<script>if (!location.hash) document.getElementById('wk${cur}')?.scrollIntoView({ block: 'start' });</script>` : ''),
 		});
 	});
 

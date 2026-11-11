@@ -481,3 +481,8 @@ tr.me td{background:var(--surface-2)}
 tr.me td:first-child{box-shadow:inset 3px 0 0 var(--fg)}
 .board .h.me{color:var(--fg);background:var(--surface-2);box-shadow:inset 3px 0 0 var(--fg);border-radius:4px;padding-left:6px}
 @media (max-width:760px){table.standings{min-width:0}}
+/* Schedule rows */
+.rowlink.sched .p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rowlink.sched .num{min-width:28px;text-align:right}
+.rowlink.me{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--fg);border-radius:0 8px 8px 0}
+.panel[id]{scroll-margin-top:112px}
