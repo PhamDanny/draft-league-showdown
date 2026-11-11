@@ -49,27 +49,33 @@ edit('client-main.ts', [
 		"protocol: 'http' | 'https' = location.protocol === 'https:' ? 'https' : 'http';"],
 ]);
 
-// League client: no ladder, tournaments, chat rooms, friends or user search.
-edit('panel-mainmenu.tsx', [
-	[`						<p><a class={"mainmenu3 mainmenu" + onlineButton} href="ladder">{TL\`Ladder\`}</a></p>
+// League client: hide ladder, tournaments, chat rooms, friends and user search.
+// Blocks are wrapped in {false && ...} rather than deleted, so the client's
+// translation template (built from TL`...` strings in the source) stays unchanged.
+const hide = block => `{false && <>\n${block}</>}\n`;
+const LADDER = `						<p><a class={"mainmenu3 mainmenu" + onlineButton} href="ladder">{TL\`Ladder\`}</a></p>
 						<p><a class={"mainmenu4 mainmenu" + onlineButton} href="view-tournaments-all">{TL\`Tournaments\`}</a></p>
-`, ''],
-	[`						<p><a class={"mainmenu5 mainmenu" + onlineButton} href="users">{TL\`Find a user\`}</a></p>
+`;
+const SOCIAL = `						<p><a class={"mainmenu5 mainmenu" + onlineButton} href="users">{TL\`Find a user\`}</a></p>
 						<p><a class={"mainmenu6 mainmenu" + onlineButton} href="view-friends-all">{TL\`Friends\`}</a></p>
 						<p><a class={"mainmenu7 mainmenu" + onlineButton} href="resources">{TL\`Info & Resources\`}</a></p>
-`, ''],
-	[`						<p><a class={"mainmenu1 mainmenu" + onlineButton} href="rooms">{TL\`Chat rooms\`}</a></p>
+`;
+const ROOMS = `						<p><a class={"mainmenu1 mainmenu" + onlineButton} href="rooms">{TL\`Chat rooms\`}</a></p>
 						{PS.server.id !== 'showdown' && (
 							<p><a class={"mainmenu2 mainmenu" + onlineButton} href="lobby">{TL\`Lobby chat\`}</a></p>
 						)}
-`, '\t\t\t\t\t\t<p><a class="mainmenu1 mainmenu button" href="/" target="_blank">League site</a></p>\n'],
-	[`						<a href="//smogon.com/forums/" target="_blank">{TL\`Forum\`}</a> | {}
+`;
+const FOOTER = `						<a href={\`//\${Config.routes.replays}/\`} target="_blank">{TL\`Replays\`}</a> | {}
+						<a href="//smogon.com/forums/" target="_blank">{TL\`Forum\`}</a> | {}
 						<a href={\`//\${Config.routes.root}/rules\`} target="_blank">{TL\`Rules\`}</a> | {}
 						<a href={\`//\${Config.routes.root}/credits\`} target="_blank">{TL\`Credits\`}</a> | {}
 						<a href={\`//\${Config.routes.root}/privacy\`} target="_blank">{TL\`Privacy\`}</a>
-`, '\t\t\t\t\t\t<a href="//pokemonshowdown.com/credits" target="_blank">{TL`Credits`}</a>\n'],
-	[`						<a href={\`//\${Config.routes.replays}/\`} target="_blank">{TL\`Replays\`}</a> | {}
-`, ''],
+`;
+edit('panel-mainmenu.tsx', [
+	[LADDER, hide(LADDER)],
+	[SOCIAL, hide(SOCIAL)],
+	[ROOMS, hide(ROOMS) + '\t\t\t\t\t\t<p><a class="mainmenu1 mainmenu button" href="/" target="_blank">League site</a></p>\n'],
+	[FOOTER, hide(FOOTER)],
 ]);
 
 console.log('Patched Showdown client.');
