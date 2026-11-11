@@ -1,0 +1,120 @@
+#!/usr/bin/env node
+// Fetches upstream Showdown at pinned commits into vendor/, applies this repo's
+// changes on top, builds both, and creates local keys. Safe to re-run.
+import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const VENDOR = path.join(ROOT, 'vendor');
+const DATA = path.join(ROOT, 'data');
+const SERVER = path.join(VENDOR, 'pokemon-showdown');
+const CLIENT = path.join(VENDOR, 'pokemon-showdown-client');
+const pins = JSON.parse(fs.readFileSync(path.join(ROOT, 'showdown', 'pins.json'), 'utf8'));
+
+const [major, minor] = process.versions.node.split('.').map(Number);
+if (major < 22 || (major === 22 && minor < 18)) {
+	console.error(`Node 22.18 or newer is required (you have ${process.version}).`);
+	process.exit(1);
+}
+
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function run(cmd, args, cwd, opts = {}) {
+	console.log(`> ${cmd} ${args.join(' ')}  (${path.relative(ROOT, cwd) || '.'})`);
+	execFileSync(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' && cmd === npm, ...opts });
+}
+function git(args, cwd) {
+	return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+}
+
+function fetchPinned(url, sha, dir) {
+	fs.mkdirSync(dir, { recursive: true });
+	if (!fs.existsSync(path.join(dir, '.git'))) {
+		git(['init', '-q'], dir);
+		git(['remote', 'add', 'origin', url], dir);
+	}
+	let head = '';
+	try { head = git(['rev-parse', 'HEAD'], dir); } catch {}
+	if (head !== sha) {
+		console.log(`Fetching ${url} @ ${sha.slice(0, 8)}...`);
+		run('git', ['fetch', '--depth', '1', 'origin', sha], dir);
+	}
+	// Reset tracked files so patches always apply to a clean upstream tree.
+	run('git', ['checkout', '-q', '-f', sha], dir);
+}
+
+function copyDir(src, dest) {
+	for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+		const s = path.join(src, entry.name);
+		const d = path.join(dest, entry.name);
+		if (entry.isDirectory()) {
+			fs.mkdirSync(d, { recursive: true });
+			copyDir(s, d);
+		} else {
+			fs.copyFileSync(s, d);
+		}
+	}
+}
+
+function ensureKeys() {
+	const keys = path.join(DATA, 'keys');
+	fs.mkdirSync(keys, { recursive: true });
+	const priv = path.join(keys, 'login-private.pem');
+	if (!fs.existsSync(priv)) {
+		const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+		fs.writeFileSync(priv, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+		fs.writeFileSync(path.join(keys, 'login-public.pem'), publicKey.export({ type: 'spki', format: 'pem' }));
+		console.log('Created Showdown login keys.');
+	}
+	for (const name of ['seal.key', 'internal.key', 'session.key']) {
+		const file = path.join(keys, name);
+		if (!fs.existsSync(file)) {
+			fs.writeFileSync(file, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
+			console.log(`Created ${name}.`);
+		}
+	}
+}
+
+function linkDir(target, linkPath) {
+	try {
+		const stat = fs.lstatSync(linkPath);
+		if (stat.isSymbolicLink() || stat.isDirectory()) fs.rmSync(linkPath, { recursive: true, force: true });
+	} catch {}
+	// 'junction' works on Windows without admin rights; ignored elsewhere.
+	fs.symlinkSync(target, linkPath, 'junction');
+}
+
+const only = process.argv[2]; // optional: "server" or "client"
+
+fs.mkdirSync(VENDOR, { recursive: true });
+fs.mkdirSync(DATA, { recursive: true });
+ensureKeys();
+
+if (!fs.existsSync(path.join(ROOT, '.env'))) {
+	fs.copyFileSync(path.join(ROOT, '.env.example'), path.join(ROOT, '.env'));
+	console.log('Created .env from .env.example. Fill in DISCORD_CLIENT_SECRET.');
+}
+
+if (!fs.existsSync(path.join(ROOT, 'node_modules', 'express'))) {
+	run(npm, ['install', '--no-audit', '--no-fund'], ROOT);
+}
+
+if (!only || only === 'server') {
+	fetchPinned(pins.server.repo, pins.server.commit, SERVER);
+	copyDir(path.join(ROOT, 'showdown', 'server'), SERVER);
+	run(npm, ['install', '--omit=optional', '--no-audit', '--no-fund'], SERVER);
+	run(process.execPath, ['build'], SERVER);
+}
+
+if (!only || only === 'client') {
+	fetchPinned(pins.client.repo, pins.client.commit, CLIENT);
+	run(process.execPath, [path.join(ROOT, 'showdown', 'client', 'patch.mjs'), CLIENT], ROOT);
+	copyDir(path.join(ROOT, 'showdown', 'client', 'overlay'), CLIENT);
+	fs.mkdirSync(path.join(CLIENT, 'caches'), { recursive: true });
+	linkDir(SERVER, path.join(CLIENT, 'caches', 'pokemon-showdown'));
+	run(npm, ['install', '--no-audit', '--no-fund'], CLIENT);
+	run(process.execPath, ['build', 'full', '--no-update'], CLIENT);
+}
+
+console.log('\nSetup done. Start the site with: npm start');

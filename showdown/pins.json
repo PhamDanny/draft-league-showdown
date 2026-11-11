@@ -1,0 +1,10 @@
+{
+  "server": {
+    "repo": "https://github.com/smogon/pokemon-showdown.git",
+    "commit": "965a535ef892d13cd68cf75c076db26f9f32842a"
+  },
+  "client": {
+    "repo": "https://github.com/smogon/pokemon-showdown-client.git",
+    "commit": "49b54209ebee54ceb8fff62a5eb5bedf7efcf6dc"
+  }
+}

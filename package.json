@@ -1,0 +1,22 @@
+{
+  "name": "draft-league-showdown",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node app/main.ts",
+    "dev": "node --watch-path=app app/main.ts",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "http-proxy": "^1.18.1"
+  },
+  "devDependencies": {
+    "ws": "^8.22.2"
+  }
+}
