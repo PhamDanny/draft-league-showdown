@@ -391,6 +391,34 @@ export interface DraftState {
 	captains: Map<number, number>;
 	/** Tera points each player has spent on captains. */
 	tcSpent: Map<number, number>;
+	/** Costs of the undrafted, unbanned Pokémon, cheapest first. */
+	poolCosts: number[];
+	/** Players below the roster minimum who can't afford any Pokémon left; their turns are skipped. */
+	stuck: DraftPlayer[];
+}
+
+/** Sum of the `k` cheapest costs (or all of them if fewer are left). */
+function cheapestSum(costs: number[], k: number) {
+	let sum = 0;
+	for (let i = 0; i < Math.min(k, costs.length); i++) sum += costs[i];
+	return sum;
+}
+
+/**
+ * Points a pick costing `cost` must leave behind so `need` more Pokémon can still be bought from the
+ * rest of the pool. The picked Pokémon leaves the pool, so if it was one of the `need` cheapest, the next one moves up.
+ */
+export function reserveAfter(poolCosts: number[], cost: number, need: number) {
+	if (need <= 0) return 0;
+	const pickedIsCheap = need >= poolCosts.length || cost <= poolCosts[need - 1];
+	return pickedIsCheap ? cheapestSum(poolCosts, need + 1) - cost : cheapestSum(poolCosts, need);
+}
+
+/** Whether a player with `left` points and `count` Pokémon can make any legal pick from the pool. */
+function canPickAny(poolCosts: number[], settings: Settings, left: number, count: number) {
+	if (!poolCosts.length || count >= settings.rosterMax) return false;
+	// Taking the cheapest Pokémon leaves the most for the rest, so it's legal iff anything is
+	return left >= cheapestSum(poolCosts, Math.max(0, settings.rosterMin - count - 1) + 1);
 }
 
 export function draftState(season: Season, settings: Settings): DraftState {
@@ -408,6 +436,9 @@ export function draftState(season: Season, settings: Settings): DraftState {
 			tcSpent.set(p.user_id, (tcSpent.get(p.user_id) || 0) + (p.tc_cost || 0));
 		}
 	}
+	const poolCosts = season.status === 'drafting' ? availableCosts(season.id) : [];
+	const canPick = (p: DraftPlayer) => canPickAny(poolCosts, settings, settings.budget - (spent.get(p.user_id) || 0), counts.get(p.user_id) || 0);
+	const stuck = season.status === 'drafting' ? players.filter(p => (counts.get(p.user_id) || 0) < settings.rosterMin && !canPick(p)) : [];
 	const n = players.length;
 	let onClock: DraftPlayer | null = null;
 	let round = 0;
@@ -416,7 +447,8 @@ export function draftState(season: Season, settings: Settings): DraftState {
 		for (let k = season.current_pick; k < n * settings.rosterMax; k++) {
 			const slot = slotFor(k, n, settings.draftType);
 			const p = players[slot.index];
-			if (!p.finished && (counts.get(p.user_id) || 0) < settings.rosterMax) {
+			// Players who can't afford anything left are skipped rather than left on the clock
+			if (!p.finished && (counts.get(p.user_id) || 0) < settings.rosterMax && canPick(p)) {
 				onClock = p;
 				round = slot.round;
 				slotK = k;
@@ -424,12 +456,12 @@ export function draftState(season: Season, settings: Settings): DraftState {
 			}
 		}
 	}
-	return { players, picks: ps, onClock, slot: slotK, round, done: season.status === 'drafting' && !onClock, spent, counts, captains, tcSpent };
+	return { players, picks: ps, onClock, slot: slotK, round, done: season.status === 'drafting' && !onClock, spent, counts, captains, tcSpent, poolCosts, stuck };
 }
 
-export function cheapestAvailable(seasonId: number) {
-	return one<{ c: number }>(`SELECT MIN(cost) AS c FROM pool WHERE season_id = ? AND banned = 0
-		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?)`, seasonId, seasonId)?.c ?? 1;
+function availableCosts(seasonId: number) {
+	return all<{ cost: number }>(`SELECT cost FROM pool WHERE season_id = ? AND banned = 0
+		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?) ORDER BY cost`, seasonId, seasonId).map(r => r.cost);
 }
 
 /** Why this player can't take this Pokémon now, or null if they can. */
@@ -452,7 +484,7 @@ export function pickProblem(season: Season, settings: Settings, state: DraftStat
 	const left = settings.budget - (state.spent.get(userId) || 0) - cost;
 	const stillNeeded = Math.max(0, settings.rosterMin - count - 1);
 	if (left < 0) return 'Over budget.';
-	if (left < stillNeeded * cheapestAvailable(season.id)) return `That leaves too little for ${stillNeeded} more.`;
+	if (left < reserveAfter(state.poolCosts, cost, stillNeeded)) return `That leaves too little for ${stillNeeded} more.`;
 	return null;
 }
 

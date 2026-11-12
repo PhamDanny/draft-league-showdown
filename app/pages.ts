@@ -44,13 +44,24 @@ const POOL_FILTER_SCRIPT = `<script>
 window.filterPool = () => {
 	const q = (document.getElementById('pool-search')?.value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 	const t = document.getElementById('pool-type')?.value || '';
+	const af = document.getElementById('pool-afford');
+	if (af) af.checked = window.hideUnaffordable;
 	for (const row of document.querySelectorAll('[data-mon]')) {
-		const ok = (!q || row.dataset.mon.includes(q)) && (!t || row.dataset.types.split(',').includes(t));
+		const ok = (!q || row.dataset.mon.includes(q)) && (!t || row.dataset.types.split(',').includes(t))
+			&& !(af && af.checked && row.dataset.afford === '0');
 		row.style.display = ok ? '' : 'none';
 	}
 };
+try { window.hideUnaffordable = localStorage.getItem('pool-afford') === '1'; } catch { window.hideUnaffordable = false; }
 document.addEventListener('input', e => { if (e.target.id === 'pool-search' || e.target.id === 'pool-type') window.filterPool(); });
-document.addEventListener('change', e => { if (e.target.id === 'pool-type') window.filterPool(); });
+document.addEventListener('change', e => {
+	if (e.target.id === 'pool-afford') {
+		window.hideUnaffordable = e.target.checked;
+		try { localStorage.setItem('pool-afford', e.target.checked ? '1' : '0'); } catch {}
+	}
+	if (e.target.id === 'pool-type' || e.target.id === 'pool-afford') window.filterPool();
+});
+if (document.getElementById('pool-afford')) window.filterPool();
 </script>`;
 
 // Confirms a draft pick. The dialog lives outside #draft-root (which live updates replace) and posts
@@ -508,22 +519,22 @@ export function pageRoutes(app: Express) {
 		const myTurn = state.onClock?.user_id === me;
 		const actingFor = myTurn ? me : (isComm && state.onClock ? state.onClock.user_id : null);
 		const spent = actingFor ? state.spent.get(actingFor) || 0 : 0;
-		const count = actingFor ? state.counts.get(actingFor) || 0 : 0;
 		const caps = actingFor ? state.captains.get(actingFor) || 0 : 0;
 		const tcLeft = actingFor ? settings.tcBudget - (state.tcSpent.get(actingFor) || 0) : 0;
-		const cheapest = L.cheapestAvailable(season.id);
 		const taken = new Map(state.picks.map(p => [p.species_id, p.user_id]));
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
 			'SELECT * FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id);
-		const canAfford = (cost: number) => {
-			if (!actingFor) return false;
-			const left = settings.budget - spent - cost;
-			return left >= 0 && left >= Math.max(0, settings.rosterMin - count - 1) * cheapest;
+		const affordableFor = (userId: number, cost: number) => {
+			const left = settings.budget - (state.spent.get(userId) || 0) - cost;
+			return left >= 0 && left >= L.reserveAfter(state.poolCosts, cost, Math.max(0, settings.rosterMin - (state.counts.get(userId) || 0) - 1));
 		};
+		const canAfford = (cost: number) => !!actingFor && affordableFor(actingFor, cost);
+		// Whose budget the "hide unaffordable" filter uses: whoever you're picking for, else your own team
+		const budgetFor = actingFor ?? (state.players.some(p => p.user_id === me) ? me : null);
 		const poolRows = pool.filter(p => !taken.has(p.species_id)).map(p => {
 			const m = mon(p.species_id, settings.mod);
 			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
-			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}">
+			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}" data-afford="${budgetFor && !affordableFor(budgetFor, p.cost) ? '0' : '1'}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
 				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"><input type="hidden" name="species" value="${esc(p.species_id)}">
 					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points"><span class="hide-sm">Draft · </span>${p.cost}</button></form>
@@ -543,11 +554,13 @@ export function pageRoutes(app: Express) {
 				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}
 				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
 			${req.query.msg ? `<div class="flash bad">${esc(req.query.msg)}</div>` : ''}
+			${season.status === 'drafting' && state.stuck.length ? `<div class="flash bad">${esc(state.stuck.map(p => p.showdown_name).join(', '))} can't afford enough of the Pokémon left to reach ${settings.rosterMin}, so their turns are skipped.${isComm ? ' You can undo picks from Admin, or end the draft with a short roster.' : ''}</div>` : ''}
 			${board}
 			${season.status === 'drafting' ? `<div class="split" style="margin-top:16px">
 				<section class="panel"><div class="row panel-head"><h2>Pool</h2><span class="spacer"></span>
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
+					${budgetFor ? `<label class="row" style="gap:6px;margin:0 0 10px;font-size:13px"><input type="checkbox" id="pool-afford"> Hide Pokémon ${actingFor && !myTurn ? esc(state.onClock!.showdown_name) + ' can\'t' : 'I can\'t'} afford</label>` : ''}
 					<div class="pool-list">${poolRows}</div></section>
 				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: tc && !!p.captain })).join('') || '<span class="muted">No picks yet.</span>'}</div>
 					<div class="tiles">
