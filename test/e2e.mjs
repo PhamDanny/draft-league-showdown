@@ -336,6 +336,63 @@ assert(/Final/.test(await (await alice.req('GET', `${league3}/series/${series3}`
 A4.ws.close();
 B4.ws.close();
 
+// ---- VGC: doubles, bring 6 pick 4, level 50, Item Clause, Bo3 ----
+r = await alice.req('POST', '/leagues/new', { name: 'Vgc League', format: 'svvgc' });
+const league4 = r.headers.get('location').replace('/admin', '');
+await bob.req('GET', '/join/' + /\/join\/([\w-]+)/.exec(await (await alice.req('GET', league4 + '/admin')).text())[1]);
+await alice.req('POST', league4 + '/admin/settings', [
+	...Object.entries({
+		name: 'Vgc League', format: 'svvgc', teraMode: 'all', draftType: 'snake', budget: '115', rosterMin: '6', rosterMax: '6', bestOf: '3', playoffTeams: '2', teraPreview: '1',
+	}),
+	...['Species Clause', 'Evasion Clause', 'Endless Battle Clause'].map(c => ['clauses', c]),
+]);
+const vgcRules = await (await alice.req('GET', league4 + '/rules')).text();
+assert(vgcRules.includes('SV VGC: Gen 9 Doubles, bring 6, pick 4, level 50') && vgcRules.includes('Best of 3') && vgcRules.includes('Item Clause'), 'VGC rules page');
+await alice.req('POST', league4 + '/admin/start-draft', { order: 'listed' });
+const idx4 = { Alice: 0, Bob: 0 };
+for (const p of order) {
+	const species = plans[p][idx4[p]++][0];
+	r = await who[p].req('POST', league4 + '/draft/pick', { species });
+	if (r.headers.get('location').includes('msg=')) assert(false, `VGC: ${p} picks ${species}: ${msgOf(r)}`);
+}
+await alice.req('POST', league4 + '/admin/schedule', {});
+const series4 = /\/series\/(\d+)/.exec(await (await alice.req('GET', league4 + '/schedule')).text())[1];
+assert((await (await alice.req('GET', league4 + '/builder')).text()).includes('"gameType":"doubles","level":50'), 'VGC teambuilder plays doubles at level 50');
+await waitForShowdown();
+const A5 = await connect(alice);
+const B5 = await connect(bob);
+autoplay(A5, 'Alice');
+autoplay(B5, 'Bob');
+const format4 = 'gen9vgcleague';
+const aliceIds = plans.Alice.map(x => x[0]);
+const bobIds = plans.Bob.map(x => x[0]);
+A5.send(`|/utm ${makeTeam(aliceIds, { items: { garchomp: 'Leftovers', weavile: 'Leftovers' } })}`);
+A5.send(`|/challenge Bob, ${format4}`);
+await new Promise(r => setTimeout(r, 1500));
+assert(/Item Clause|more than one|Leftovers/i.test(popups(A5)), 'VGC: two of the same item rejected (Item Clause)');
+for (let g = 1; g <= 3; g++) {
+	const before = A5.lines.filter(l => l.startsWith('|win|')).length;
+	A5.send(`|/utm ${makeTeam(aliceIds)}`);
+	B5.send(`|/utm ${makeTeam(bobIds)}`);
+	A5.send(`|/challenge Bob, ${format4}`);
+	await new Promise(r => setTimeout(r, 800));
+	B5.send('|/accept Alice');
+	await new Promise(r => setTimeout(r, 2500));
+	const roomid = [...new Set(A5.lines.map(l => (new RegExp(`(battle-${format4}-\\d+)`).exec(l) || [])[1]).filter(Boolean))].pop();
+	if (g === 1) {
+		assert(A5.lines.includes('|gametype|doubles'), 'VGC battle is doubles');
+		assert(A5.lines.some(l => /^\|poke\|p1\|Garchomp, L50/.test(l)), 'VGC battle is level 50');
+		assert(A5.lines.includes('|teamsize|p1|4'), 'VGC: 4 of the 6 are brought in');
+	}
+	B5.send(`${roomid}|/forfeit`);
+	for (let i = 0; i < 200 && A5.lines.filter(l => l.startsWith('|win|')).length === before; i++) await new Promise(r => setTimeout(r, 300));
+	await new Promise(r => setTimeout(r, 1000));
+	if (/Final/.test(await (await alice.req('GET', `${league4}/series/${series4}`)).text())) break;
+}
+assert(/Final/.test(await (await alice.req('GET', `${league4}/series/${series4}`)).text()), 'VGC Bo3 series final');
+A5.ws.close();
+B5.ws.close();
+
 // ---- one league per format: seeded pool and a Showdown format that loads ----
 const POOLS = { sv: [766, 34], svlowtier: [653, 145], svnatdex: [1107, 58], svnatdexubers: [1160, 16], svaaa: [741, 58], svvgc: [748, 36],
 	ss: [678, 32], ssnatdex: [956, 62], usum: [851, 48], oras: [748, 38], bw: [634, 25], dpp: [475, 20], adv: [367, 19] };

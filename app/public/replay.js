@@ -265,7 +265,7 @@
 		const set = s.set || {};
 		const ivs = { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31, ...(set.ivs || {}) };
 		const evs = { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0, ...(set.evs || {}) };
-		const opts = { level: set.level || 100, nature: set.nature || 'Serious', evs, ivs, boosts: s.boosts, item: s.item || undefined, ability: s.ability || undefined, status: s.status || '' };
+		const opts = { level: R.level === 50 ? 50 : set.level || 100, nature: set.nature || 'Serious', evs, ivs, boosts: s.boosts, item: s.item || undefined, ability: s.ability || undefined, status: s.status || '' };
 		if (s.tera) opts.teraType = s.tera;
 		if (s.booster) opts.boostedStat = s.booster;
 		if (s.hp != null) opts.curHP = s.hp;

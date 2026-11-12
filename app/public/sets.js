@@ -25,11 +25,13 @@
 		if (stat === 'hp') return base === 1 ? 1 : Math.floor((2 * base + iv + Math.floor(ev / 4)) * level / 100) + level + 10;
 		return Math.floor((Math.floor((2 * base + iv + Math.floor(ev / 4)) * level / 100) + 5) * mult);
 	}
+	/** The level a set battles at: fixed in VGC leagues, otherwise the set's own. */
+	const levelOf = (D, set) => D.fixedLevel || set.level || 100;
 	function stats(D, set) {
 		const s = D.species[set.species];
 		const out = {};
 		for (const st of STATS) {
-			out[st] = calcStat(st, s.stats[st], set.evs?.[st] || 0, set.ivs?.[st] ?? 31, set.level || 100, natureMult(D, set.nature, st));
+			out[st] = calcStat(st, s.stats[st], set.evs?.[st] || 0, set.ivs?.[st] ?? 31, levelOf(D, set), natureMult(D, set.nature, st));
 		}
 		return out;
 	}
@@ -134,5 +136,5 @@
 		try { localStorage.setItem(key(leagueId, seasonId, week), JSON.stringify(value)); } catch {}
 	}
 
-	window.Sets = { STATS, LABEL, toID, esc, loadDex, natureMult, calcStat, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
+	window.Sets = { STATS, LABEL, toID, esc, loadDex, natureMult, calcStat, levelOf, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
 })();

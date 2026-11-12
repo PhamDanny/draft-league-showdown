@@ -184,7 +184,7 @@
 			noChoice ? `You have ${all.length === 6 ? 'exactly 6 sets' : `only ${all.length} set${all.length === 1 ? '' : 's'}`} prepared, so ${all.length === 1 ? 'it comes' : 'they all come'}. Prepare more in the teambuilder to have a choice.` :
 			busy ? 'To change your picks, click Not ready first.' :
 			C.teamPreview === 'match' ? 'These stay locked in for the whole series once game 1 starts.' :
-			'You pick again before every game. Leads are chosen at team preview once the battle starts.';
+			`You pick again before every game. ${C.gameType === 'doubles' ? 'The 4 you play and your leads' : 'Leads'} are chosen at team preview once the battle starts.`;
 		return `<div class="bt-pick">
 			<p class="eyebrow">${title}</p>
 			<div class="bt-pickgrid">${all.map(s => {

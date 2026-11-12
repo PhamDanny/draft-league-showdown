@@ -74,7 +74,9 @@ function dexJson(seasonId: number, settings: L.Settings) {
 		for (const a of s.abilities) abilityDesc[a] ||= text.abilities[toID(a)]?.shortDesc || text.abilities[toID(a)]?.desc || '';
 	}
 	const natures = d.natures.all().map((n: any) => ({ name: n.name, plus: n.plus, minus: n.minus }));
-	const json = JSON.stringify({ species, moves, items, itemDesc, abilityDesc, natures, types: [...TYPES, 'Stellar'] });
+	// VGC plays at level 50 (Adjust Level), whatever level a set says
+	const fixedLevel = settings.gameType === 'doubles' ? 50 : null;
+	const json = JSON.stringify({ species, moves, items, itemDesc, abilityDesc, natures, types: [...TYPES, 'Stellar'], fixedLevel });
 	dexCache.clear();
 	dexCache.set(key, json);
 	return json;

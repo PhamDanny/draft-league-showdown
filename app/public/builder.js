@@ -171,7 +171,7 @@
 					</div>
 					<div class="sd-col">
 						<button type="button" class="sd-details" data-pickbtn="details">
-							<span><small>Level</small>${set.level || 100}</span>
+							<span><small>Level</small>${Sets.levelOf(D, set)}</span>
 							<span><small>Gender</small>${set.gender || (sp.genders.length ? '—' : 'N')}</span>
 							<span><small>Shiny</small>${set.shiny ? 'Yes' : 'No'}</span>
 							<span><small>Tera</small>${tera ? esc(set.teraType || '—') : '—'}</span>
@@ -328,13 +328,13 @@
 		if (readOnly()) {
 			const f = (label, v) => `<div class="f">${label}<span class="sd-ro">${v ? esc(v) : '—'}</span></div>`;
 			el.innerHTML = `<div class="sd-form"><div class="form sd-detform">
-				${f('Level', String(set.level || 100))}${f('Gender', set.gender || (sp.genders.length ? '' : 'N'))}${f('Shiny', set.shiny ? 'Yes' : 'No')}${f('Tera type', tera ? set.teraType : '')}
+				${f('Level', String(Sets.levelOf(D, set)))}${f('Gender', set.gender || (sp.genders.length ? '' : 'N'))}${f('Shiny', set.shiny ? 'Yes' : 'No')}${f('Tera type', tera ? set.teraType : '')}
 			</div></div>`;
 			return;
 		}
 		el.innerHTML = `<div class="sd-form">
 			<div class="form sd-detform">
-				<label class="f">Level<input class="inp" type="number" min="1" max="100" data-f="level" value="${set.level || 100}"></label>
+				<label class="f">Level<input class="inp" type="number" min="1" max="100" data-f="level" value="${Sets.levelOf(D, set)}" ${D.fixedLevel ? 'disabled title="Every Pokémon battles at this level in this league"' : ''}></label>
 				<label class="f">Gender<select class="inp" data-f="gender" ${sp.genders.length ? '' : 'disabled'}>${sp.genders.length ? `<option value="">Random</option>${sp.genders.map(g =>
 					`<option ${g === set.gender ? 'selected' : ''}>${g}</option>`).join('')}` : '<option>Genderless or fixed</option>'}</select></label>
 				<label class="f">Shiny<select class="inp" data-f="shiny"><option value="">No</option><option value="1" ${set.shiny ? 'selected' : ''}>Yes</option></select></label>
@@ -537,7 +537,7 @@
 		return name;
 	}
 	function calcMon(s, boosts, tera) {
-		const opts = { level: s.level || 100, nature: s.nature || 'Serious', evs: { ...s.evs }, ivs: { ...s.ivs }, boosts };
+		const opts = { level: Sets.levelOf(D, s), nature: s.nature || 'Serious', evs: { ...s.evs }, ivs: { ...s.ivs }, boosts };
 		if (s.item) opts.item = s.item;
 		if (s.ability) opts.ability = s.ability;
 		if (/^(Protosynthesis|Quark Drive)$/.test(s.ability)) opts.boostedStat = 'auto';

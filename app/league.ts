@@ -102,7 +102,7 @@ export const PRESETS: { [k: string]: Preset } = {
 			...AAA_BANNED_ABILITIES.map(a => `-${a}`)],
 	}),
 	svvgc: preset('svvgc', 'SV VGC', 'gen9', {
-		budget: 115, roster: [9, 12], tera: 'all', gameType: 'doubles', bestOf: 3, hidden: true,
+		budget: 115, roster: [9, 12], tera: 'all', gameType: 'doubles', bestOf: 3,
 		clauses: ['Species Clause', 'Evasion Clause', 'Endless Battle Clause'],
 		rules: ['Standard Draft', 'Min Source Gen = 9', 'Item Clause = 1', 'Adjust Level = 50', 'Picked Team Size = 4'],
 	}),
