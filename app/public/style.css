@@ -20,6 +20,8 @@
   --good:#4cc47f; --warn:#e0a84a; --bad:#f05a61; --tera:#a597f5; --tera-soft:#2a2547;
   --sky:#27364a; --ground:#2f4a2c; --pad:#3d5f37; color-scheme:dark}
 *{box-sizing:border-box}
+/* Reserve the scrollbar's space on every page so the content column doesn't shift between short and long pages */
+html{scrollbar-gutter:stable}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:14px;line-height:1.5}
 a{color:inherit}
 .mock{background:var(--tera-soft);color:var(--tera);text-align:center;font-size:12px;padding:4px 16px;font-weight:500}
@@ -42,6 +44,13 @@ nav.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
 nav.tabs a{padding:10px 12px;text-decoration:none;color:var(--muted);font-weight:500;border-bottom:2px solid transparent;white-space:nowrap}
 nav.tabs a.on{color:var(--fg);border-bottom-color:var(--accent)}
 main{padding-block:20px 64px}
+/* Page rhythm: 16px between top-level blocks; an eyebrow (or back link) sits 4px above the title it labels */
+main > :where(* + *){margin-top:16px}
+main > :is(p,a).eyebrow{display:block;width:fit-content;margin:0 0 4px}
+main > .eyebrow + *{margin-top:0}
+/* Panel heading row: h2 with actions to its right, same gap below as a bare h2 */
+.panel-head{flex-wrap:nowrap;margin-bottom:10px}
+.panel-head h2{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 h1{font-family:var(--display);font-weight:700;font-size:32px;line-height:1.1;margin:0 0 16px;text-wrap:balance}
 h2{font-family:var(--display);font-weight:600;font-size:21px;margin:0 0 10px;letter-spacing:.01em}
 h3{font-size:12px;margin:0 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
@@ -281,7 +290,9 @@ form.inline{display:inline}
 .sd-search input{max-width:360px}
 .inp.bad,.bad{border-color:var(--bad)!important;color:var(--bad)}
 /* browse list */
-.br-list{max-height:max(360px,calc(100vh - 460px));overflow-y:auto}
+/* The header sits outside the scrolling list; both reserve the same scrollbar gutter so header and row columns line up */
+.br-list{max-height:max(360px,calc(100vh - 460px));overflow-y:auto;scrollbar-gutter:stable}
+.br-hd{overflow-y:hidden;scrollbar-gutter:stable}
 .br-row{display:grid;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid var(--line);font-size:13px;cursor:pointer;min-width:0}
 .br-row:hover,.br-row.hi{background:var(--accent-soft)}
 .br-row.cur{box-shadow:inset 3px 0 0 var(--accent);font-weight:500}
@@ -291,15 +302,16 @@ form.inline{display:inline}
 .br-sec{padding:6px 14px;font-family:var(--display);font-weight:600;font-size:16px;background:var(--surface-2);border-bottom:1px solid var(--line)}
 .br-moves .br-row{grid-template-columns:minmax(120px,1.1fr) 72px 48px 36px 44px 28px minmax(0,2.4fr)}
 .br-items .br-row{grid-template-columns:minmax(130px,.7fr) minmax(0,2.5fr)}
-.br-species .br-row{grid-template-columns:minmax(150px,1fr) 120px minmax(0,1.2fr) auto}
+.br-species .br-row{grid-template-columns:minmax(150px,1fr) 152px minmax(0,1.2fr) 220px}
 .br-name{display:flex;align-items:center;gap:6px;font-weight:500;min-width:0}
 .br-desc{color:var(--muted);font-size:12.5px;min-width:0}
 .br-desc b{color:var(--fg);font-weight:600}
 .br-num{text-align:right;font-family:var(--mono);font-size:12px}
-.br-types{display:flex;gap:4px}
+.br-types{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
 .br-abil{color:var(--muted);font-size:12px}
-.br-stats{display:flex;gap:4px;font-family:var(--mono);font-size:12px}
-.br-stats span{display:flex;flex-direction:column;align-items:center;min-width:28px;line-height:1.15}
+.br-stats{display:flex;gap:4px;justify-content:flex-end;font-family:var(--mono);font-size:12px}
+.br-species .br-hd > :last-child{text-align:right}
+.br-stats span{display:flex;flex-direction:column;align-items:center;width:28px;flex:none;line-height:1.15}
 .br-stats small{font-family:var(--body);font-size:9.5px;color:var(--muted);text-transform:uppercase}
 .br-none{padding:14px;margin:0}
 .cat{font-size:10px;font-weight:700;border-radius:4px;padding:1px 5px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
@@ -342,6 +354,7 @@ form.inline{display:inline}
 .speedlist .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .speedlist .mine{background:var(--accent-soft);font-weight:600}
 .speedlist .scouted{background:var(--tera-soft)}
+.speed-opp{margin-top:8px;gap:8px;font-size:12px;flex-wrap:nowrap}
 .spr.xs{width:28px;height:28px;margin:-4px 0}
 #tb-notes{resize:vertical}
 dialog.panel{width:min(560px,92vw);color:var(--fg)}
@@ -487,6 +500,9 @@ tr.me td:first-child{box-shadow:inset 3px 0 0 var(--fg)}
 .rowlink.me{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--fg);border-radius:0 8px 8px 0}
 .panel[id]{scroll-margin-top:112px}
 /* Series page: game cards, roster chips, collapsed sets */
+/* Game cards size to their content so they don't line up with (and read as part of) the team columns below */
+.games{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.games > .game-card{flex:1 1 150px;max-width:240px;padding:12px 14px}
 a.game-card{text-decoration:none;color:inherit;transition:border-color .15s,background .15s}
 a.game-card:hover{border-color:var(--fg);background:var(--surface-2)}
 .game-link{margin:6px 0 0;font-weight:500;color:var(--fg)}
@@ -494,7 +510,6 @@ a.game-card:hover{border-color:var(--fg);background:var(--surface-2)}
 .monchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:1px 10px 1px 1px;font-size:13px;background:var(--surface);color:var(--fg);white-space:nowrap}
 .monchip img.spr.sm{margin:-2px 0}
 .monchip .pill{margin-left:2px;padding:1px 6px}
-.setlist-bar{justify-content:flex-end;margin:0 0 6px}
 .setd{border-bottom:1px solid var(--line)}
 .setd:last-child{border-bottom:0}
 .setd summary{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;list-style:none;min-width:0}

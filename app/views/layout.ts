@@ -93,6 +93,7 @@ export function page(o: PageOpts) {
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>${esc(o.title)}</title>
 <link rel="icon" href="/favicon.ico">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Rubik:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -118,11 +119,13 @@ export function monChip(speciesId: string, opts: { name?: string, captain?: bool
  * Sets as a collapsed list (series page, team page; replay.js renders the same markup).
  * Each set is a <details>: the summary shows sprite, species, item, ability and Tera type;
  * the body is the full export text, which stays in the HTML while collapsed.
+ * With a title, the panel's h2 and the Expand all button share one heading row.
  */
-export function setList(sets: { set: any, text: string }[], empty = '') {
-	if (!sets.length) return empty ? `<p class="muted" style="margin:0">${esc(empty)}</p>` : '';
-	return `<div class="setlist">
-		<div class="row setlist-bar"><button class="btn sm" type="button" data-sets-toggle>Expand all</button></div>
+export function setList(sets: { set: any, text: string }[], empty = '', title = '') {
+	const head = (toggle: boolean) => title || toggle ? `<div class="row panel-head">${title ? `<h2>${esc(title)}</h2>` : ''}<span class="spacer"></span>
+		${toggle ? '<button class="btn sm" type="button" data-sets-toggle>Expand all</button>' : ''}</div>` : '';
+	if (!sets.length) return head(false) + (empty ? `<p class="muted" style="margin:0">${esc(empty)}</p>` : '');
+	return `<div class="setlist">${head(true)}
 		${sets.map(({ set, text }) => `<details class="setd"><summary>${sprite(set.species, 'sm')}<b>${esc(set.species)}</b>
 			<span class="muted setd-meta">${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span>
 			${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</summary>
