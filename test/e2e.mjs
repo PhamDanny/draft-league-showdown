@@ -183,7 +183,7 @@ assert(/Final/.test(series), 'series final');
 assert(series.includes('EVs:'), 'sets revealed after final');
 console.log('Tera options seen:', { Alice: [...teraSeen.Alice], Bob: [...teraSeen.Bob] });
 assert([...teraSeen.Alice].every(n => n === 'Weavile') && [...teraSeen.Bob].every(n => n === 'Hippowdon'), 'only Tera Captains could Terastallize');
-const st = await (await alice.req('GET', `${leagueUrl}/standings`)).text();
+const st = await (await alice.req('GET', leagueUrl)).text(); // standings are on Home
 assert(/1–0/.test(st), 'standings updated');
 console.log('\nAll good.');
 process.exit(0);

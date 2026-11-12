@@ -10,6 +10,9 @@
 html,body{margin:0;background:transparent;overflow:hidden}
 .battle{position:relative;width:640px;height:360px;margin:0;border:0}
 .battle-log{display:none}
+/* The site's transport bar is the one play control; Showdown's own Play / Play (sound off) overlay is hidden */
+.playbutton{display:none!important}
+.battle{cursor:pointer}
 </style>
 </head><body>
 <div class="battle"></div><div class="battle-log"></div>
@@ -42,6 +45,8 @@ window.scene = {
 	mute(on) { try { BattleSound.setMute(on); } catch {} },
 };
 scene.mute(true);
+// A click on the scene plays or pauses (the viewer handles it with its own controls)
+document.addEventListener('click', () => parent.postMessage({ sceneClick: true }, location.origin), true);
 parent.postMessage({ sceneReady: true }, location.origin);
 </script>
 </body></html>

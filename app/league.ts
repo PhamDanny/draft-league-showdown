@@ -346,6 +346,11 @@ export function roster(seasonId: number, userId: number) {
 export function matches(seasonId: number) {
 	return all<Match>('SELECT * FROM matches WHERE season_id = ? ORDER BY week, id', seasonId);
 }
+/** The user's next unfinished series this season (what the header's Play button opens), if any. */
+export function nextMatchFor(seasonId: number, userId: number) {
+	return one<Match>(`SELECT * FROM matches WHERE season_id = ? AND status != 'final' AND (p1 = ? OR p2 = ?)
+		ORDER BY week, id LIMIT 1`, seasonId, userId, userId);
+}
 export function currentWeek(seasonId: number) {
 	const open = one<{ w: number }>("SELECT MIN(week) AS w FROM matches WHERE season_id = ? AND status != 'final'", seasonId);
 	if (open?.w) return open.w;

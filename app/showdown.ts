@@ -236,9 +236,9 @@ export function showdownRoutes(app: Express, requireUser: express.RequestHandler
 	// Upstream symlinks these to files that only exist on the official server.
 	app.get(['/config/colors.json', '/config/coil.json'], (_req, res) => res.json({}));
 	app.use('/src', (req, res, next) => (req.path.endsWith('.js') ? next() : res.status(404).end()),
-		express.static(path.join(CLIENT_DIR, 'src'), { maxAge: '1h' }));
+		express.static(path.join(CLIENT_DIR, 'src'), { maxAge: 0 }));
 	for (const dir of ['js', 'style', 'data', 'fx', 'images']) {
-		app.use(`/${dir}`, express.static(path.join(CLIENT_DIR, dir), { maxAge: '1h', fallthrough: true }));
+		app.use(`/${dir}`, express.static(path.join(CLIENT_DIR, dir), { maxAge: 0, fallthrough: true }));
 	}
 	app.get(/^\/favicon[a-z0-9-]*\.(ico|png)$/, (req, res) => res.sendFile(path.join(CLIENT_DIR, req.path)));
 	app.get(/^\/(sprites|audio|fx|images|data)\/.+/, cachedAsset);

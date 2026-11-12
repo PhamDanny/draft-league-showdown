@@ -352,13 +352,14 @@
 	function header() {
 		const [a, b] = R.series.score;
 		return `<div class="rp-head">
-			<div><p class="eyebrow">Week ${R.week} · Game ${R.game} · ${esc(R.series.p1)} ${a}–${b} ${esc(R.series.p2)}</p>
+			<div><a class="eyebrow back" href="/l/${R.leagueId}/series/${R.matchId}">← Series · Week ${R.week} · Game ${R.game} · ${esc(R.series.p1)} ${a}–${b} ${esc(R.series.p2)}</a>
 			<h1>${esc(R.players.p1)} <span class="muted">vs</span> ${esc(R.players.p2)}</h1>
 			<p class="muted" style="margin:2px 0 0">${R.winner ? `<b class="rp-win">${esc(R.winner)}</b> won` : 'Tie'}${R.turns ? ` · ${R.turns} turns` : ''}</p></div>
 			<span class="spacer"></span>
-			${R.games.length > 1 ? `<nav class="seg" aria-label="Games">${R.games.map(g => `<a class="${g.no === R.game ? 'on' : ''}" href="/l/${R.leagueId}/replay/${g.id}">Game ${g.no}</a>`).join('')}</nav>` : ''}
-			<div class="seg" role="group" aria-label="Detail"><button data-mode="spectator" class="${mode === 'spectator' ? 'on' : ''}">Spectator</button><button data-mode="full" class="${mode === 'full' ? 'on' : ''}" ${R.fullLog ? '' : 'disabled'}>Full info</button></div>
-			<a class="btn" href="/l/${R.leagueId}/series/${R.matchId}">Series</a>
+			${R.games.length > 1 ? `<div class="rp-group"><span class="sd-lbl">Game</span><nav class="seg" aria-label="Game">${R.games.map(g => `<a class="${g.no === R.game ? 'on' : ''}" href="/l/${R.leagueId}/replay/${g.id}">Game ${g.no}</a>`).join('')}</nav></div>` : ''}
+			<div class="rp-group"><span class="sd-lbl">View</span><div class="seg" role="group" aria-label="View">
+				<button data-mode="spectator" class="${mode === 'spectator' ? 'on' : ''}" title="What both players could see during the game">Spectator view</button>
+				<button data-mode="full" class="${mode === 'full' ? 'on' : ''}" ${R.fullLog ? '' : 'disabled'} title="Exact HP, sets and a damage calc for every hit">Full info</button></div></div>
 		</div>`;
 	}
 	function controls() {
@@ -415,9 +416,13 @@
 	}
 	function teams() {
 		if (mode !== 'full' || !R.teams) return '';
-		return `<div class="grid g2" style="margin-top:16px">${['p1', 'p2'].map(side => `<section class="panel"><h2>${esc(R.players[side])}</h2><div class="list">
-			${(R.teams[side]?.team || []).map((set, i) => `<div><div class="row">${sprite(set.species)}<b>${esc(set.species)}</b>${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</div>
-				<pre class="set">${esc(R.exports[side][i])}</pre></div>`).join('')}</div></section>`).join('')}</div>`;
+		// Same markup as setList() in views/layout.ts; the page's Expand all script handles the toggle
+		return `<div class="grid g2" style="margin-top:16px">${['p1', 'p2'].map(side => `<section class="panel"><h2>${esc(R.players[side])}</h2>
+			<div class="setlist"><div class="row setlist-bar"><button class="btn sm" type="button" data-sets-toggle>Expand all</button></div>
+			${(R.teams[side]?.team || []).map((set, i) => `<details class="setd"><summary>${sprite(set.species)}<b>${esc(set.species)}</b>
+				<span class="muted setd-meta">${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span>
+				${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</summary>
+				<div class="set">${esc(R.exports[side][i])}</div></details>`).join('')}</div></section>`).join('')}</div>`;
 	}
 
 	function render() {
@@ -438,6 +443,7 @@
 
 	let scene = null, battle = null, muted = true;
 	window.addEventListener('message', e => {
+		if (e.origin === location.origin && e.data?.sceneClick) { togglePlay(); return; }
 		if (e.origin !== location.origin || !e.data?.sceneReady) return;
 		const win = document.getElementById('rp-frame')?.contentWindow;
 		if (!win?.scene) return;
@@ -499,6 +505,11 @@
 		if (t !== cur) show(t);
 		if (battle.atQueueEnd && playing) setPlaying(false);
 	}, 200);
+	function togglePlay() {
+		if (!battle) return;
+		if (playing) { battle.pause(); setPlaying(false); }
+		else { if (battle.atQueueEnd) battle.seekTurn(0); battle.play(); setPlaying(true); }
+	}
 	function setPlaying(on) {
 		playing = on;
 		const b = root.querySelector('.rp-play');
@@ -533,11 +544,8 @@
 		if (c === 'first') { setPlaying(false); battle?.pause(); seek(0); }
 		else if (c === 'prev') seek(cur - 1);
 		else if (c === 'next') seek(cur + 1);
-		else if (c === 'play') {
-			if (!battle) return;
-			if (playing) { battle.pause(); setPlaying(false); }
-			else { if (battle.atQueueEnd) battle.seekTurn(0); battle.play(); setPlaying(true); }
-		} else if (c === 'sound') {
+		else if (c === 'play') togglePlay();
+		else if (c === 'sound') {
 			muted = !muted;
 			scene?.mute(muted);
 			t.textContent = muted ? '🔇' : '🔊';

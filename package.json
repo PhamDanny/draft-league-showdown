@@ -10,7 +10,7 @@
     "setup": "node scripts/setup.mjs",
     "start": "node app/main.ts",
     "dev": "node --watch-path=app app/main.ts",
-    "test": "node --test test/"
+    "test": "node --test \"test/*.mjs\""
   },
   "dependencies": {
     "@smogon/calc": "^0.12.0",
