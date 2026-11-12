@@ -321,7 +321,7 @@ export function pageRoutes(app: Express) {
 		render(req, res, {
 			title: 'Schedule', tab: 'schedule',
 			body: `<h1>Schedule</h1>
-			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row" style="margin-bottom:6px"><h2 style="margin:0">Week ${w}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
+			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row panel-head"><h2>Week ${w}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
 				<div class="list">${ms.map(m => `<a class="rowlink sched ${m.p1 === me || m.p2 === me ? 'me' : ''}" href="/l/${league.id}/series/${m.id}">
 					<span class="p">${esc(n.get(m.p1))} vs ${esc(n.get(m.p2))}</span><span class="num">${score(m)}</span>${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>`).join('') ||
 				'<p class="muted">The schedule is made when the draft ends.</p>'}</div>`,
@@ -351,7 +351,7 @@ export function pageRoutes(app: Express) {
 					if (!sets.has(key)) sets.set(key, set);
 				}
 			}
-			return `<section class="panel"><h2>${esc(n.get(uid))}</h2>${setList([...sets].map(([text, set]) => ({ set, text })), 'No games were recorded for this player (result entered by a commissioner).')}</section>`;
+			return `<section class="panel">${setList([...sets].map(([text, set]) => ({ set, text })), 'No games were recorded for this player (result entered by a commissioner).', n.get(uid))}</section>`;
 		};
 		const mine = m.p1 === req.user!.id || m.p2 === req.user!.id;
 		render(req, res, {
@@ -361,13 +361,13 @@ export function pageRoutes(app: Express) {
 				${!final && mine ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Play game ${games.length + 1}</a>` : ''}</div>
 
 			<div id="live">
-			${games.length ? `<div class="grid g3" style="margin-bottom:16px">${games.map(g => {
+			${games.length ? `<div class="games">${games.map(g => {
 		const inner = `<p class="eyebrow">Game ${g.game_no}</p><p style="margin:4px 0 0"><b>${g.winner && n.get(g.winner) ? `${esc(n.get(g.winner))} won` : 'Tie'}</b>${g.turns ? ` · ${g.turns} turns` : ''}</p>
 			${final ? '<p class="game-link">Watch replay →</p>' : '<p class="muted game-note">Replay opens when the series is final.</p>'}`;
 		return final ? `<a class="panel game-card" href="/l/${league.id}/replay/${g.id}">${inner}</a>` : `<div class="panel game-card">${inner}</div>`;
 	}).join('')}</div>` : ''}
 			<div class="grid g2">${teamCol(m.p1)}${teamCol(m.p2)}</div></div>
-			${league.role === 'commissioner' ? `<details class="panel fold override" style="margin-top:16px"><summary><h3>Override result (commissioner)</h3></summary>
+			${league.role === 'commissioner' ? `<details class="panel fold override"><summary><h3>Override result (commissioner)</h3></summary>
 				<form method="post" action="/l/${league.id}/admin/result/${m.id}" class="row" style="margin-top:10px" data-p1="${esc(n.get(m.p1))}" data-p2="${esc(n.get(m.p2))}"
 					onsubmit="return confirm('Save the result ' + this.dataset.p1 + ' ' + this.p1.value + '–' + this.p2.value + ' ' + this.dataset.p2 + '? This replaces the recorded score.')">
 					<label class="f">${esc(n.get(m.p1))}<input class="inp" name="p1" type="number" min="0" max="${settings.bestOf}" value="${m.p1_wins}" style="width:80px"></label>
@@ -415,8 +415,8 @@ export function pageRoutes(app: Express) {
 				const r = L.roster(season.id, p.user_id);
 				const pts = r.reduce((a, x) => a + x.cost, 0);
 				return `<a class="panel team-card" href="/l/${league.id}/team/${p.user_id}">
-					<div class="row"><h2 style="margin:0">${esc(p.showdown_name)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
-					<div class="bench" style="margin-top:10px">${r.map(x => monChip(x.species_id, { name: x.name, captain: !!x.captain })).join('')}</div></a>`;
+					<div class="row panel-head"><h2>${esc(p.showdown_name)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
+					<div class="bench">${r.map(x => monChip(x.species_id, { name: x.name, captain: !!x.captain })).join('')}</div></a>`;
 			}).join('')}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
 		});
@@ -448,12 +448,12 @@ export function pageRoutes(app: Express) {
 			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
 				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}</td></tr>`).join('')}
 			</tbody></table></div></section>
-			${ms.length ? `<section class="panel" style="margin-top:16px"><h2>Series</h2><div class="list">${ms.map(m => {
+			${ms.length ? `<section class="panel"><h2>Series</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
 				const res2 = m.status === 'final' ? (m.winner === uid ? '<span class="pill w">W</span>' : '<span class="pill l">L</span>') : statusPill(m.status);
 				return `<div class="row"><span class="num muted">Wk ${m.week}</span><a href="/l/${league.id}/series/${m.id}">vs ${esc(n.get(opp))}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
 			}).join('')}</div></section>` : ''}
-			${history.size ? `<section class="panel" style="margin-top:16px"><h2>Sets</h2>${setList([...history.values()].flatMap(sets => [...sets].map(([text, set]) => ({ set, text }))))}</section>` : ''}`,
+			${history.size ? `<section class="panel">${setList([...history.values()].flatMap(sets => [...sets].map(([text, set]) => ({ set, text }))), '', 'Sets')}</section>` : ''}`,
 		});
 	});
 
@@ -520,15 +520,15 @@ export function pageRoutes(app: Express) {
 			'<span class="pill final">Final</span>';
 
 		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
-			<div class="row" style="margin-bottom:12px"><h1 style="margin:0">Draft</h1>${status}
+			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Draft</h1>${status}
 				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}
 				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
 			${req.query.msg ? `<div class="flash">${esc(req.query.msg)}</div>` : ''}
 			${board}
 			${season.status === 'drafting' ? `<div class="split" style="margin-top:16px">
-				<section class="panel"><div class="row"><h2 style="margin:0">Pool</h2><span class="spacer"></span>
+				<section class="panel"><div class="row panel-head"><h2>Pool</h2><span class="spacer"></span>
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
-					<input class="inp" style="margin:10px 0" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
+					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					<div class="pool-list">${poolRows}</div></section>
 				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: !!p.captain })).join('')}</div>
 					<div class="grid g3" style="margin-top:16px;gap:8px">
@@ -814,7 +814,7 @@ document.querySelector('[name=teraMode]').addEventListener('change', e => {
 		const { league, season } = req as LReq;
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null, banned: number }>(
 			'SELECT * FROM pool WHERE season_id = ? ORDER BY banned, cost DESC, name', season.id);
-		adminPage(req, res, 'pool', 'Draft pool', `<div class="row" style="margin:16px 0 12px"><h2 style="margin:0">Draft pool</h2><span class="spacer"></span>
+		adminPage(req, res, 'pool', 'Draft pool', `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Draft pool</h2><span class="spacer"></span>
 				<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select>
 				<input class="inp" style="max-width:240px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off"></div>
 			<p class="muted" style="margin:0 0 12px">Changes save as you make them.</p>
