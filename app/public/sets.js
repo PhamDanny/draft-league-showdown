@@ -50,7 +50,8 @@
 	function toShowdown(D, set) {
 		const s = D.species[set.species];
 		const out = {
-			name: (set.nickname || '').trim().slice(0, 18), species: s.name, item: set.item || '', ability: set.ability || '',
+			// A Mega or Primal pick goes to Showdown as its base species holding the stone
+			name: (set.nickname || '').trim().slice(0, 18), species: s.showdown || s.name, item: set.item || '', ability: set.ability || '',
 			moves: set.moves.filter(Boolean).map(m => D.moves[m]?.name || m),
 			nature: set.nature || '', evs: { ...set.evs }, ivs: { ...set.ivs }, gender: set.gender || '',
 		};
@@ -62,7 +63,7 @@
 
 	function exportSet(D, set) {
 		const s = D.species[set.species];
-		let t = s ? s.name : set.species;
+		let t = s ? s.showdown || s.name : set.species;
 		if (set.nickname && set.nickname !== t) t = `${set.nickname} (${t})`;
 		if (set.gender) t += ` (${set.gender})`;
 		if (set.item) t += ` @ ${set.item}`;
@@ -92,7 +93,10 @@
 			head = head.replace(/\s*\((M|F)\)\s*$/, (_, g) => { gender = g; return ''; });
 			const nick = /^(.*)\(([^()]+)\)\s*$/.exec(head);
 			const name = nick ? nick[2] : head;
-			const id = D.speciesByName.get(toID(name));
+			let id = D.speciesByName.get(toID(name));
+			// "Venusaur @ Venusaurite" is a Mega Venusaur pick
+			const formeId = item && Object.keys(D.species).find(k => toID(D.species[k].showdown) === toID(name) && toID(D.species[k].item) === toID(item));
+			if (formeId && (!allowed || allowed.has(formeId))) id = formeId;
 			if (!id || (allowed && !allowed.has(id))) { skipped.push(name.trim()); continue; }
 			const set = blank(D, id, false);
 			set.item = item ? (D.itemIds.get(toID(item)) || item.trim()) : '';

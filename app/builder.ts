@@ -2,7 +2,7 @@
 // the server only hands out public data (rosters, Pokédex entries, finished series' sets).
 import type { Express, Request, Response, Router } from 'express';
 import { all, one } from './db.ts';
-import { descs, dex, mon, pickSpecies, toID, TYPES } from './dex.ts';
+import { builtAs, descs, dex, mon, pickSpecies, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
 import { playButton } from './pages.ts';
@@ -53,9 +53,12 @@ function dexJson(seasonId: number, settings: L.Settings) {
 					pp: mv.noPPBoosts ? mv.pp : Math.floor(mv.pp * 8 / 5), desc: text.moves[m]?.shortDesc || text.moves[m]?.desc || '',
 				};
 			}
+			const built = builtAs(id, settings.mod);
 			species[id] = {
 				name: s.name, types: s.types, stats: s.baseStats,
-				abilities: anyAbility || [...new Set(Object.values(s.abilities) as string[])].filter(a => !banned(`ability:${toID(a)}`)),
+				// A Mega/Primal pick is sent as its base holding the stone (see builtAs)
+				...(built.species !== s.name ? { showdown: built.species, battleAbility: built.battleAbility } : {}),
+				abilities: anyAbility || built.abilities.filter(a => !banned(`ability:${toID(a)}`)),
 				moves: pool.sort(), sprite: mon(id, settings.mod).sprite,
 				item: s.requiredItem || (s.requiredItems ? s.requiredItems[0] : undefined),
 				genders: s.gender ? [] : ['M', 'F'],

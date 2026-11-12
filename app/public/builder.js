@@ -539,7 +539,8 @@
 	function calcMon(s, boosts, tera) {
 		const opts = { level: Sets.levelOf(D, s), nature: s.nature || 'Serious', evs: { ...s.evs }, ivs: { ...s.ivs }, boosts };
 		if (s.item) opts.item = s.item;
-		if (s.ability) opts.ability = s.ability;
+		// A Mega pick battles with its Mega ability, whatever its base ability was before evolving
+		if (s.ability) opts.ability = D.species[s.species]?.battleAbility || s.ability;
 		if (/^(Protosynthesis|Quark Drive)$/.test(s.ability)) opts.boostedStat = 'auto';
 		if (tera && s.teraType) opts.teraType = s.teraType;
 		return new calc.Pokemon(G, calcName(s.species), opts);

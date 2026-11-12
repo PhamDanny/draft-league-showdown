@@ -546,8 +546,8 @@ export function roundRobin(ids: number[]): [number, number][][] {
 // ---------- rosters ----------
 
 export function roster(seasonId: number, userId: number) {
-	return all<{ species_id: string, name: string, cost: number, captain: number }>(
-		`SELECT picks.species_id, pool.name, picks.cost, picks.captain FROM picks JOIN pool
+	return all<{ species_id: string, name: string, cost: number, captain: number, tc_cost: number | null }>(
+		`SELECT picks.species_id, pool.name, picks.cost, picks.captain, picks.tc_cost FROM picks JOIN pool
 		ON pool.season_id = picks.season_id AND pool.species_id = picks.species_id
 		WHERE picks.season_id = ? AND picks.user_id = ? ORDER BY picks.cost DESC, pool.name`, seasonId, userId);
 }

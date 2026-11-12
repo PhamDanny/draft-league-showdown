@@ -131,6 +131,22 @@ export function pickSpecies(set: { species: string, item?: string, moves?: strin
 	return species;
 }
 
+/**
+ * How the teambuilder builds a pick. A Mega or Primal pick is sent to Showdown as its base species
+ * holding the stone or orb, so it has the base's abilities to choose from (Showdown would otherwise
+ * swap a Mega ability for the base's first one); `battleAbility` is the ability it has once evolved.
+ */
+export function builtAs(speciesId: string, mod = 'gen9') {
+	const d = dex(mod);
+	const s = d.species.get(speciesId);
+	const abilitiesOf = (x: any) => [...new Set(Object.values(x.abilities) as string[])];
+	if ((s.isMega || s.isPrimal) && typeof s.battleOnly === 'string') {
+		const base = d.species.get(s.battleOnly);
+		return { species: base.name as string, abilities: abilitiesOf(base), battleAbility: s.abilities['0'] as string };
+	}
+	return { species: s.name as string, abilities: abilitiesOf(s), battleAbility: undefined };
+}
+
 /** Parse the teams out of a battle input log (">player p1 {...}"). */
 export function teamsFromInputLog(inputLog: string[]): { [slot: string]: { name: string, team: any[] } } {
 	const out: { [slot: string]: { name: string, team: any[] } } = {};

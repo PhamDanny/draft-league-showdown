@@ -1,6 +1,9 @@
 // End-to-end smoke test against a running site with DEV_LOGIN=1:
 // two test players make a league, draft, and play a Bo3 over the real Showdown server.
 // Usage: node test/e2e.mjs [http://localhost:8000]
+// The test player Alice creates leagues, so she must be a site admin: run it against a fresh site
+// (empty data folder) started with ADMIN_DISCORD_IDS empty, where the first player to sign in is admin.
+// For example: DATA_DIR=/tmp/dls-test PORT=8100 DEV_LOGIN=1 ADMIN_DISCORD_IDS= npm start
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import WebSocket from 'ws';
@@ -34,6 +37,11 @@ function assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.e
 const alice = await new Client('Alice').login();
 const bob = await new Client('Bob').login();
 let r = await alice.req('POST', '/leagues/new', { name: 'Test League' });
+if (r.status === 403) {
+	console.error('FAIL: the test player Alice is not a site admin, so she can\'t create leagues.\n' +
+		'Run this against a fresh site (empty DATA_DIR) started with ADMIN_DISCORD_IDS empty; see the top of test/e2e.mjs.');
+	process.exit(1);
+}
 const leagueUrl = r.headers.get('location').replace('/admin', '');
 assert(leagueUrl.startsWith('/l/'), 'league created ' + leagueUrl);
 const admin = await (await alice.req('GET', leagueUrl + '/admin')).text();
@@ -77,10 +85,11 @@ for (const p of order) {
 }
 const draftPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
 assert(draftPage.includes('Done'), 'draft shows done');
-// Alice: 71 points (Weavile 15 of it) and 12 Tera points; Bob: 69 points and 5 Tera points
+// Alice: 71 points (Weavile 12 of it) and 12 Tera points; Bob: 69 points and 5 Tera points
 assert(draftPage.includes('<small class="num">49 left</small>') && draftPage.includes('<small class="num">51 left</small>'), 'points budget charged the normal price for captains');
 assert(/Tera budget<\/h3><div class="num"[^>]*>16 \/ 28</.test(draftPage), 'captain Tera price charged to the Tera budget');
 assert(/Tera budget<\/h3><div class="num"[^>]*>23 \/ 28</.test(await (await bob.req('GET', leagueUrl + '/draft')).text()), "Bob's Tera budget");
+assert(draftPage.includes('TC 12 · 12 T') && draftPage.includes('TC 5 · 5 T'), 'draft board shows captains\' points and Tera price');
 await alice.req('POST', leagueUrl + '/admin/schedule', {});
 const sched = await (await alice.req('GET', leagueUrl + '/schedule')).text();
 const seriesId = /\/series\/(\d+)/.exec(sched)[1];

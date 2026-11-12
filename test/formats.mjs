@@ -141,3 +141,44 @@ test('a base pick never covers its Mega or Primal forme', () => {
 	assert.ok(!rosterIds('venusaur', pool, 'gen9').includes('venusaurmega'));
 	assert.ok(!rosterIds('kyogre', pool, 'gen9').includes('kyogreprimal'));
 });
+
+test('a Mega or Primal pick is built as its base holding the stone, keeping its chosen ability', async () => {
+	const { builtAs, pickSpecies } = await import('../app/dex.ts');
+	const { createRequire } = await import('node:module');
+	const vm = await import('node:vm');
+	const { TeamValidator } = createRequire(import.meta.url)(path.resolve(import.meta.dirname, '../vendor/pokemon-showdown/dist/sim'));
+	// The browser's set helpers, run as the teambuilder and battle page run them
+	const ctx = { window: {} };
+	vm.runInNewContext(fs.readFileSync(path.resolve(import.meta.dirname, '../app/public/sets.js'), 'utf8'), ctx);
+	const Sets = ctx.window.Sets;
+	const cases = [
+		['oras', 'gen6', 'venusaurmega', 'Venusaur', 'Venusaurite', 'Chlorophyll', 'Thick Fat'],
+		['usum', 'gen7', 'gyaradosmega', 'Gyarados', 'Gyaradosite', 'Moxie', 'Mold Breaker'],
+		['svnatdex', 'gen9', 'garchompmega', 'Garchomp', 'Garchompite', 'Rough Skin', 'Sand Force'],
+	];
+	for (const [format, mod, id, base, stone, ability, megaAbility] of cases) {
+		const built = builtAs(id, mod);
+		assert.equal(built.species, base);
+		assert.ok(built.abilities.includes(ability), `${id} offers ${ability}`);
+		assert.equal(built.battleAbility, megaAbility);
+		const s = dex(mod).species.get(id);
+		// What dexJson() sends the builder for this pick
+		const D = { species: { [id]: { name: s.name, showdown: built.species, item: s.requiredItem, abilities: built.abilities } }, moves: {} };
+		const set = Sets.toShowdown(D, { species: id, item: stone, ability, moves: ['', '', '', ''], nature: 'Adamant', evs: {}, ivs: {} });
+		assert.equal(set.species, base);
+		const learnset = dex(mod).species.getLearnsetData(dex(mod).species.get(base).id).learnset;
+		set.moves = Object.keys(learnset).filter(m => learnset[m].some(src => src.startsWith(mod.slice(3)))).slice(0, 1);
+		const settings = settingsFor(format);
+		const problems = TeamValidator.get(`${L.customGameFor(settings)}@@@${L.ruleset(settings).join(',')}`).validateTeam([set]);
+		assert.equal(problems, null, `${id} validates: ${problems}`);
+		assert.equal(set.ability, ability, `${id} keeps ${ability} through validation`);
+		assert.equal(pickSpecies(set, mod).id, id, `${base} @ ${stone} counts as the ${id} pick`);
+		// Export and re-import as text lands on the same pick
+		const text = Sets.exportSet(D, { species: id, item: stone, ability, moves: [], evs: {}, ivs: {} });
+		assert.ok(text.startsWith(`${base} @ ${stone}`));
+		D.itemIds = new Map([[stone.toLowerCase(), stone]]);
+		D.speciesByName = new Map([[s.id, id]]);
+		D.natureMap = new Map();
+		assert.equal(Sets.importTeam(D, text).sets[0]?.species, id, `"${base} @ ${stone}" imports as ${id}`);
+	}
+});
