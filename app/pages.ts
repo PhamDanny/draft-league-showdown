@@ -2,11 +2,11 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import { all, audit, one, run } from './db.ts';
 import { DEV_LOGIN, DISCORD_CLIENT_ID, PUBLIC_URL } from './config.ts';
 import { devUsers, requireUser, setShowdownName } from './auth.ts';
-import { exportSet, mon, toID, TYPES } from './dex.ts';
+import { exportSet, mon, pickSpecies, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
-import { builderRoutes } from './builder.ts';
+import { builderRoutes, gameOf } from './builder.ts';
 import { esc, monChip, monLabel, page, setList, sprite } from './views/layout.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
@@ -360,7 +360,7 @@ export function pageRoutes(app: Express) {
 				const teams = JSON.parse(g.teams);
 				const slot = g.p1 === uid ? 'p1' : 'p2';
 				const team: any[] = teams[slot]?.team || [];
-				brought.push(team.map(s => entry.get(toID(s.species)) || toID(s.species)).sort().join(','));
+				brought.push(team.map(s => { const id = pickSpecies(s, settings.mod).id || toID(s.species); return entry.get(id) || id; }).sort().join(','));
 				for (const set of team) {
 					const key = exportSet(set);
 					if (!sets.has(key)) sets.set(key, set);
@@ -406,7 +406,7 @@ export function pageRoutes(app: Express) {
 		const games = L.battlesFor(m.id).filter(g => g.played_at).map(g => ({ id: g.id, no: g.game_no, winner: n.get(g.winner) || null }));
 		const teams = b.teams ? JSON.parse(b.teams) : null;
 		const data = {
-			leagueId: league.id, matchId: m.id, week: m.week, game: b.game_no, bestOf: settings.bestOf,
+			leagueId: league.id, matchId: m.id, week: m.week, game: b.game_no, bestOf: settings.bestOf, ...gameOf(settings),
 			series: { p1: n.get(m.p1), p2: n.get(m.p2), score: [m.p1_wins, m.p2_wins] },
 			players: { p1: n.get(b.p1), p2: n.get(b.p2) }, winner: n.get(b.winner) || null, turns: b.turns,
 			games, fullLog: b.full_log || '', publicLog: b.public_log || '', teams,
@@ -454,7 +454,7 @@ export function pageRoutes(app: Express) {
 			WHERE matches.season_id = ? AND matches.status = 'final' AND battles.teams IS NOT NULL AND (battles.p1 = ? OR battles.p2 = ?)`, season.id, uid, uid)) {
 			const slot = b.p1 === uid ? 'p1' : 'p2';
 			for (const set of JSON.parse(b.teams)[slot]?.team || []) {
-				const id = toID(set.species);
+				const id = pickSpecies(set, settings.mod).id || toID(set.species);
 				if (!history.has(id)) history.set(id, new Map());
 				history.get(id)!.set(exportSet(set), set);
 			}
@@ -521,7 +521,7 @@ export function pageRoutes(app: Express) {
 			return left >= 0 && left >= Math.max(0, settings.rosterMin - count - 1) * cheapest;
 		};
 		const poolRows = pool.filter(p => !taken.has(p.species_id)).map(p => {
-			const m = mon(p.species_id);
+			const m = mon(p.species_id, settings.mod);
 			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
@@ -865,7 +865,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 	});
 
 	lg.get('/admin/pool', commissioner, (req, res) => {
-		const { league, season } = req as LReq;
+		const { league, season, settings } = req as LReq;
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null, banned: number }>(
 			'SELECT * FROM pool WHERE season_id = ? ORDER BY banned, cost DESC, name', season.id);
 		adminPage(req, res, 'pool', 'Draft pool', `<div class="row" style="margin-bottom:12px"><h2 style="margin:0">Draft pool</h2><span class="spacer"></span>
@@ -873,7 +873,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 				<input class="inp" style="max-width:240px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off"></div>
 			<p class="muted" style="margin:0 0 12px">Changes save as you make them.</p>
 			<section class="panel"><div class="table-wrap"><table class="pool-table"><thead><tr><th>Pokémon</th><th class="r">Pts</th><th class="r" title="Tera points to draft as a Tera Captain">Tera</th><th>Banned</th><th></th></tr></thead><tbody>
-			${pool.map(p => `<tr data-mon="${esc(p.species_id)}" data-types="${esc(mon(p.species_id).types.join(','))}"><td>${monLabel(p.species_id, { small: true })}</td>
+			${pool.map(p => `<tr data-mon="${esc(p.species_id)}" data-types="${esc(mon(p.species_id, settings.mod).types.join(','))}"><td>${monLabel(p.species_id, { small: true })}</td>
 				<td class="r"><input type="number" min="0" max="99" value="${p.cost}" data-field="cost" data-id="${esc(p.species_id)}" aria-label="Cost"></td>
 				<td class="r"><input type="number" min="0" max="99" value="${p.tc_cost ?? ''}" placeholder="—" data-field="tc_cost" data-id="${esc(p.species_id)}" aria-label="Tera Captain cost in Tera points"></td>
 				<td><input type="checkbox" ${p.banned ? 'checked' : ''} data-field="banned" data-id="${esc(p.species_id)}" aria-label="Banned"></td>

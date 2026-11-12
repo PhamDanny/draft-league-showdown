@@ -94,12 +94,19 @@ for (let i = 0; i < 60; i++) {
 	await new Promise(r => setTimeout(r, 1000));
 }
 await new Promise(r => setTimeout(r, 1500));
-function makeTeam(ids) {
+// A Mega pick goes in as its base species holding the stone; `items` gives other sets an item by id.
+function makeTeam(ids, { gen = 9, items = {} } = {}) {
+	const d = gen === 9 ? dex : Dex.mod(`gen${gen}`);
 	return Teams.pack(ids.map(id => {
-		const s = dex.species.get(id);
-		const learnset = dex.species.getLearnsetData(s.id).learnset || dex.species.getLearnsetData(dex.species.get(s.baseSpecies).id).learnset;
-		const moves = Object.keys(learnset).filter(m => learnset[m].some(src => src.startsWith('9')) && dex.moves.get(m).basePower > 0).slice(0, 4);
-		return { name: '', species: s.name, item: '', ability: Object.values(s.abilities).find(a => !['Sand Veil', 'Snow Cloak', 'Moody', 'Shadow Tag', 'Arena Trap'].includes(a)), moves, nature: 'Hardy', evs: { hp: 84, atk: 84, def: 84, spa: 84, spd: 84, spe: 84 }, ivs: {}, teraType: s.types[0], level: 100 };
+		let s = d.species.get(id);
+		let item = items[id] || '';
+		if (s.isMega || s.isPrimal) {
+			item = s.requiredItem;
+			s = d.species.get(s.baseSpecies);
+		}
+		const learnset = d.species.getLearnsetData(s.id).learnset || d.species.getLearnsetData(d.species.get(s.baseSpecies).id).learnset;
+		const moves = Object.keys(learnset).filter(m => learnset[m].some(src => src.startsWith(String(gen))) && d.moves.get(m).basePower > 0).slice(0, 4);
+		return { name: '', species: s.name, item, ability: Object.values(s.abilities).find(a => !['Sand Veil', 'Snow Cloak', 'Moody', 'Shadow Tag', 'Arena Trap'].includes(a)), moves, nature: 'Hardy', evs: { hp: 84, atk: 84, def: 84, spa: 84, spd: 84, spe: 84 }, ivs: {}, ...(gen === 9 ? { teraType: s.types[0] } : {}), level: 100 };
 	}));
 }
 function connect(client) {
@@ -266,6 +273,68 @@ assert(/Final/.test(s2), 'preview series final');
 assert((s2.match(/Brought a different 6/g) || []).length === 1, 'series flags the player who changed their 6');
 A2.ws.close();
 B2.ws.close();
+
+// ---- ORAS: a Mega is its own pick ----
+async function waitForShowdown() {
+	await new Promise(r => setTimeout(r, 3000));
+	for (let i = 0; i < 60; i++) {
+		if ((await alice.req('GET', '/showdown/info')).status === 200) break;
+		await new Promise(r => setTimeout(r, 1000));
+	}
+	await new Promise(r => setTimeout(r, 1500));
+}
+r = await alice.req('POST', '/leagues/new', { name: 'Oras League', format: 'oras' });
+const league3 = r.headers.get('location').replace('/admin', '');
+await bob.req('GET', '/join/' + /\/join\/([\w-]+)/.exec(await (await alice.req('GET', league3 + '/admin')).text())[1]);
+await alice.req('POST', league3 + '/admin/settings', {
+	name: 'Oras League', format: 'oras', draftType: 'snake', budget: '120', rosterMin: '6', rosterMax: '6', bestOf: '1', playoffTeams: '2',
+	clauses: 'Species Clause',
+});
+assert((await (await alice.req('GET', league3 + '/rules')).text()).includes('ORAS: Gen 6 Singles'), 'ORAS rules page');
+await alice.req('POST', league3 + '/admin/start-draft', { order: 'listed' });
+const plans3 = {
+	Alice: ['venusaurmega', 'scizor', 'heatran', 'skarmory', 'rotomwash', 'latios'],
+	Bob: ['charizard', 'tyranitar', 'garchomp', 'swampertmega', 'pinsirmega', 'slowbromega'],
+};
+const idx3 = { Alice: 0, Bob: 0 };
+for (const p of order) {
+	r = await who[p].req('POST', league3 + '/draft/pick', { species: plans3[p][idx3[p]++] });
+	if (r.headers.get('location').includes('msg=')) assert(false, `ORAS: ${p} picks ${plans3[p][idx3[p] - 1]}: ${msgOf(r)}`);
+}
+assert(true, 'ORAS draft with Mega picks');
+await alice.req('POST', league3 + '/admin/schedule', {});
+const series3 = /\/series\/(\d+)/.exec(await (await alice.req('GET', league3 + '/schedule')).text())[1];
+await waitForShowdown();
+const A4 = await connect(alice);
+const B4 = await connect(bob);
+autoplay(A4, 'Alice');
+autoplay(B4, 'Bob');
+const format3 = 'gen6orasleague';
+const popups = bot => bot.lines.filter(l => l.startsWith('|popup|')).join('\n');
+// Bob drafted Charizard, not Mega Charizard X
+B4.send(`|/utm ${makeTeam(plans3.Bob, { gen: 6, items: { charizard: 'Charizardite X' } })}`);
+B4.send(`|/challenge Alice, ${format3}`);
+await new Promise(r => setTimeout(r, 1500));
+assert(popups(B4).includes("Charizard-Mega-X isn't on your roster"), 'base pick cannot hold its Mega Stone');
+// Alice drafted Mega Venusaur, which doesn't give her Venusaur without the stone
+A4.send(`|/utm ${makeTeam(['venusaur', ...plans3.Alice.slice(1)], { gen: 6 })}`);
+A4.send(`|/challenge Bob, ${format3}`);
+await new Promise(r => setTimeout(r, 1500));
+assert(popups(A4).includes("Venusaur isn't on your roster"), 'Mega pick does not cover the base without its stone');
+A4.send(`|/utm ${makeTeam(plans3.Alice, { gen: 6 })}`);
+B4.send(`|/utm ${makeTeam(plans3.Bob, { gen: 6 })}`);
+A4.send(`|/challenge Bob, ${format3}`);
+await new Promise(r => setTimeout(r, 800));
+B4.send('|/accept Alice');
+await new Promise(r => setTimeout(r, 1500));
+const room3 = [...new Set(A4.lines.map(l => (new RegExp(`(battle-${format3}-\\d+)`).exec(l) || [])[1]).filter(Boolean))].pop();
+assert(room3, 'ORAS battle started with Venusaur @ Venusaurite');
+B4.send(`${room3}|/forfeit`);
+for (let i = 0; i < 100 && !A4.lines.some(l => l.startsWith('|win|')); i++) await new Promise(r => setTimeout(r, 300));
+await new Promise(r => setTimeout(r, 1000));
+assert(/Final/.test(await (await alice.req('GET', `${league3}/series/${series3}`)).text()), 'ORAS Bo1 series final');
+A4.ws.close();
+B4.ws.close();
 
 // ---- one league per format: seeded pool and a Showdown format that loads ----
 const POOLS = { sv: [766, 34], svlowtier: [653, 145], svnatdex: [1107, 58], svnatdexubers: [1160, 16], svaaa: [741, 58], svvgc: [748, 36],

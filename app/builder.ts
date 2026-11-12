@@ -2,7 +2,7 @@
 // the server only hands out public data (rosters, Pokédex entries, finished series' sets).
 import type { Express, Request, Response, Router } from 'express';
 import { all, one } from './db.ts';
-import { descs, dex, mon, toID, TYPES } from './dex.ts';
+import { descs, dex, mon, pickSpecies, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
 import { playButton } from './pages.ts';
@@ -34,13 +34,17 @@ function dexJson(seasonId: number, settings: L.Settings) {
 	const anyAbility = rules.includes('!Obtainable Abilities') ? d.abilities.all()
 		.filter((a: any) => legal(a) && a.id !== 'noability' && !banned(`ability:${a.id}`)).map((a: any) => a.name).sort() : null;
 	const index = L.poolIndex(seasonId);
+	const hiddenPowers: string[] = d.moves.all().filter((m: any) => m.exists && m.id === 'hiddenpower' && m.name !== 'Hidden Power').map((m: any) => toID(m.name));
 	const species: { [id: string]: any } = {};
 	const moves: { [id: string]: any } = {};
 	for (const p of picks) {
 		for (const id of L.entryIds(index, p.species_id, settings.mod)) {
 			if (species[id]) continue;
 			const s = d.species.get(id);
-			const pool: string[] = [...d.species.getMovePool(s.id)].filter(m => legal(d.moves.get(m)) && !banned(`move:${m}`));
+			let pool: string[] = [...d.species.getMovePool(s.id)];
+			// Hidden Power is one move per type in the builder ("Hidden Power Fire"), which Showdown reads as the type to use
+			if (pool.includes('hiddenpower') && !banned('move:hiddenpower')) pool = [...pool.filter(m => m !== 'hiddenpower'), ...hiddenPowers];
+			pool = pool.filter(m => legal(d.moves.get(m)) && !banned(`move:${m}`));
 			for (const m of pool) {
 				if (moves[m]) continue;
 				const mv = d.moves.get(m);
@@ -58,7 +62,10 @@ function dexJson(seasonId: number, settings: L.Settings) {
 			};
 		}
 	}
-	const itemList = d.items.all().filter((i: any) => legal(i) && !banned(`item:${i.id}`));
+	// Mega Stones and Primal orbs only come with a Mega or Primal pick (as that species' fixed item)
+	const formeItems = new Set(Object.values(species).map(s => s.item).filter(Boolean));
+	const itemList = d.items.all().filter((i: any) => legal(i) && !banned(`item:${i.id}`) &&
+		(!(i.megaStone || i.isPrimalOrb) || formeItems.has(i.name)));
 	const items = itemList.map((i: any) => i.name).sort();
 	const itemDesc: { [name: string]: string } = {};
 	for (const i of itemList) itemDesc[i.name] = text.items[i.id]?.shortDesc || text.items[i.id]?.desc || '';
@@ -80,13 +87,17 @@ function namesOf(leagueId: number) {
 }
 
 /** Sets a player actually brought in a final series, from its revealed games. */
-function revealedSets(matchId: number, userId: number) {
+function revealedSets(matchId: number, userId: number, mod: string) {
 	const sets = new Map<string, any>();
 	for (const g of L.battlesFor(matchId)) {
 		if (!g.teams) continue;
 		const teams = JSON.parse(g.teams);
 		const side = g.p1 === userId ? 'p1' : 'p2';
-		for (const set of teams[side]?.team || []) sets.set(toID(set.species), set);
+		for (const set of teams[side]?.team || []) {
+			// A Mega pick is played as its base holding the stone; the builder knows it by its Mega forme
+			const pick = pickSpecies(set, mod);
+			sets.set(pick.id, pick.isMega || pick.isPrimal ? { ...set, species: pick.name } : set);
+		}
 	}
 	return [...sets.values()];
 }
@@ -112,21 +123,26 @@ function builderContext(req: Request) {
 		rosters[opp] ||= rosterOf(season.id, opp, settings.mod);
 		if (!scouting[opp]) {
 			scouting[opp] = all.filter(x => x.status === 'final' && (x.p1 === opp || x.p2 === opp))
-				.map(x => ({ week: x.week, sets: revealedSets(x.id, opp) })).filter(x => x.sets.length);
+				.map(x => ({ week: x.week, sets: revealedSets(x.id, opp, settings.mod) })).filter(x => x.sets.length);
 		}
 		return {
 			week: m.week, matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?',
 			score: m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins],
-			played: m.status === 'final' ? revealedSets(m.id, me) : null,
+			played: m.status === 'final' ? revealedSets(m.id, me, settings.mod) : null,
 		};
 	});
 	return {
 		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name,
-		format: toID(league.format_name), teraMode: settings.teraMode,
+		format: toID(league.format_name), teraMode: settings.teraMode, ...gameOf(settings),
 		roster: myRoster, rosters, scouting, weeks,
 		teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, myRoster.length),
 		current: L.currentWeek(season.id),
 	};
+}
+
+/** Generation, singles or doubles, and level, for the damage calc in the browser. */
+export function gameOf(settings: L.Settings) {
+	return { gen: L.genOf(settings.mod), gameType: settings.gameType, level: settings.gameType === 'doubles' ? 50 : 100 };
 }
 
 function json(value: unknown) {
@@ -218,7 +234,7 @@ export function builderRoutes(lg: Router) {
 		const ctx = {
 			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, format: toID(league.format_name),
 			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id, myName: req.user!.showdown_name,
-			roster, teraMode: settings.teraMode,
+			roster, teraMode: settings.teraMode, ...gameOf(settings),
 			teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, roster.length),
 			state: seriesState(m, me, settings.bestOf),
 		};

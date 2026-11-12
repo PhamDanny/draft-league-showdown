@@ -111,6 +111,26 @@ export function rosterIds(speciesId: string, poolIds: Set<string>, mod = 'gen9',
 	return [...ids];
 }
 
+/**
+ * The pool entry a set uses. A base species holding its Mega Stone or orb (or Rayquaza knowing
+ * Dragon Ascent) is its Mega or Primal forme, as the league's Showdown validator counts it.
+ */
+export function pickSpecies(set: { species: string, item?: string, moves?: string[] }, mod = 'gen9') {
+	const d = dex(mod);
+	const species = d.species.get(set.species);
+	if (!species.exists || species.battleOnly) return species;
+	const item = d.items.get(set.item || '');
+	const moves = (set.moves || []).map(toID);
+	for (const name of species.otherFormes || []) {
+		const forme = d.species.get(name);
+		if (!forme.exists || !(forme.isMega || forme.isPrimal)) continue;
+		const items: string[] = forme.requiredItems || (forme.requiredItem ? [forme.requiredItem] : []);
+		if (item.exists && items.includes(item.name)) return forme;
+		if (forme.requiredMove && moves.includes(toID(forme.requiredMove))) return forme;
+	}
+	return species;
+}
+
 /** Parse the teams out of a battle input log (">player p1 {...}"). */
 export function teamsFromInputLog(inputLog: string[]): { [slot: string]: { name: string, team: any[] } } {
 	const out: { [slot: string]: { name: string, team: any[] } } = {};

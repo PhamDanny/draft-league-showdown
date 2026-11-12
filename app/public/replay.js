@@ -6,7 +6,7 @@
 	const root = document.getElementById('replay');
 	const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 	const toID = t => String(t ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-	const G = window.calc?.Generations ? calc.Generations.get(9) : null;
+	const G = window.calc?.Generations ? calc.Generations.get(R.gen || 9) : null;
 
 	let mode = 'full';
 	try { mode = localStorage.getItem('dls:replay:mode') || 'full'; } catch {}
@@ -278,7 +278,7 @@
 		try {
 			const a = calcMon(hit.atk), d = calcMon(hit.def);
 			const f = new calc.Field({
-				gameType: 'Singles', weather: WEATHER_CALC[hit.field.weather], terrain: hit.field.terrain || undefined,
+				gameType: R.gameType === 'doubles' ? 'Doubles' : 'Singles', weather: WEATHER_CALC[hit.field.weather], terrain: hit.field.terrain || undefined,
 				isGravity: false, attackerSide: sideCalc(hit.field.atk), defenderSide: sideCalc(hit.field.def),
 			});
 			const r = calc.calculate(G, a, d, new calc.Move(G, hit.move, { isCrit: hit.crit }), f);

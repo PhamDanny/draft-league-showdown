@@ -87,12 +87,12 @@ export const PRESETS: { [k: string]: Preset } = {
 		rules: ['Standard Draft', 'Min Source Gen = 9', '-Moody', '-Drought', '-Drizzle', '-Last Respects', '-Shed Tail'],
 	}),
 	svnatdex: preset('svnatdex', 'SV NatDex', 'gen9', {
-		budget: 120, roster: [9, 12], hidden: true,
+		budget: 120, roster: [9, 12],
 		rules: ['Standard Draft', '+Unobtainable', '+Past', 'Min Source Gen = 1', '-Moody', '-Power Construct', '-Hidden Power',
 			'-Last Respects', '-Shed Tail', '-Ultranecrozium Z'],
 	}),
 	svnatdexubers: preset('svnatdexubers', 'SV NatDex Ubers', 'gen9', {
-		budget: 200, roster: [10, 12], clauses: NO_BATON_PASS, hidden: true,
+		budget: 200, roster: [10, 12], clauses: NO_BATON_PASS,
 		rules: ['Standard Draft', '+Unobtainable', '+Past', 'Min Source Gen = 1', '-Moody', '-Xerneas + Geomancy', '-Revival Blessing',
 			'-Shed Tail', '-Arena Trap', '-Shadow Tag', '-Magnet Pull', '-Ultranecrozium Z'],
 	}),
@@ -107,37 +107,37 @@ export const PRESETS: { [k: string]: Preset } = {
 		rules: ['Standard Draft', 'Min Source Gen = 9', 'Item Clause = 1', 'Adjust Level = 50', 'Picked Team Size = 4'],
 	}),
 	ss: preset('ss', 'SS', 'gen8', {
-		budget: 115, roster: [9, 12], hidden: true,
+		budget: 115, roster: [9, 12],
 		rules: ['Standard Draft', 'Dynamax Clause', '-Moody', '-Cinderace + Libero', '-Power Construct'],
 	}),
 	ssnatdex: preset('ssnatdex', 'SS NatDex', 'gen8', {
-		budget: 115, roster: [9, 12], hidden: true,
+		budget: 115, roster: [9, 12],
 		rules: ['Standard Draft', 'NatDex Mod', 'Dynamax Clause', '-Moody', '-Greninja + Protean', '-Battle Bond', '-Power Construct',
 			'-Cinderace + Libero', '-Ultranecrozium Z'],
 	}),
 	usum: preset('usum', 'USUM', 'gen7', {
-		budget: 120, roster: [9, 12], hidden: true,
+		budget: 120, roster: [9, 12],
 		rules: ['Standard Draft', '+LGPE', '-Moody', '-Kangaskhanite + Seismic Toss', '-Blaziken + Speed Boost', '-Greninja + Protean',
 			'-Battle Bond', '-Power Construct', '-Ultranecrozium Z'],
 	}),
 	oras: preset('oras', 'ORAS', 'gen6', {
-		budget: 120, roster: [9, 12], hidden: true,
+		budget: 120, roster: [9, 12],
 		rules: ['Standard Draft', '-Moody', '-Swagger', '-Blaziken + Speed Boost', '-Greninja + Protean', '-Battle Bond',
 			'-Latios + Soul Dew', '-Latias + Soul Dew'],
 	}),
 	bw: preset('bw', 'BW', 'gen5', {
-		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS, hidden: true,
+		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS,
 		rules: ['Standard Draft', '-Moody', 'Sleep Moves Clause', 'Gems Clause', '-Swagger', 'Baton Pass Stat Clause',
 			'Baton Pass Stat Trap Clause', '-Excadrill + Sand Rush', '-Landorus + Sheer Force', '-Sand Stream ++ Sand Rush',
 			'-Drizzle ++ Swift Swim', '-Drought ++ Chlorophyll'],
 	}),
 	dpp: preset('dpp', 'DPP', 'gen4', {
-		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS, hidden: true,
+		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS,
 		rules: ['Standard Draft', '!Evasion Abilities Clause', '-Swagger', 'Baton Pass Stat Clause', 'Baton Pass Stat Trap Clause',
 			'Accuracy Moves Clause', '-Sand Stream ++ Sand Veil', '-Snow Warning ++ Snow Cloak'],
 	}),
 	adv: preset('adv', 'ADV', 'gen3', {
-		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS, hidden: true,
+		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS,
 		rules: ['Standard Draft', 'Speed Pass Clause'],
 	}),
 };

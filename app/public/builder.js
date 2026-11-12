@@ -7,7 +7,7 @@
 	const root = document.getElementById('builder');
 	root.innerHTML = '<p class="muted">Loading…</p>';
 	const D = await Sets.loadDex(B.leagueId);
-	const G = window.calc?.Generations ? calc.Generations.get(9) : null;
+	const G = window.calc?.Generations ? calc.Generations.get(B.gen || 9) : null;
 
 	const rosterEntry = id => B.roster.find(r => r.formes.includes(id));
 	const isCaptain = id => !!rosterEntry(id)?.captain && B.teraMode !== 'none';
@@ -566,6 +566,7 @@
 		const them = calcMon(C.oset, other(attacking ? C.oppDefBoost : C.oppBoost), C.oppTera && oppTeraOk());
 		const [atk, def, moves] = attacking ? [me, them, mine.moves] : [them, me, C.oset.moves];
 		const field = new calc.Field({
+			gameType: B.gameType === 'doubles' ? 'Doubles' : 'Singles',
 			weather: C.weather || undefined, terrain: C.terrain || undefined,
 			defenderSide: new calc.Side({ isSR: C.sr, spikes: C.spikes, isReflect: C.reflect, isLightScreen: C.screen, isAuroraVeil: C.veil }),
 		});
