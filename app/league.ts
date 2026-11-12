@@ -81,7 +81,13 @@ function inStandardDraft(clause: string) {
 	return baseRules.has(toID(clause));
 }
 export function ruleset(settings: Settings): string[] {
-	const rules = ['Standard Draft', 'Min Source Gen = 9', ...settings.clauses.filter(c => !inStandardDraft(c))];
+	const rules = ['Standard Draft', 'Min Source Gen = 9'];
+	// Standard Draft bundles some clauses, so an unchecked one has to be taken out explicitly
+	for (const c of CLAUSES) {
+		const on = settings.clauses.includes(c);
+		if (on && !inStandardDraft(c)) rules.push(c);
+		else if (!on && inStandardDraft(c)) rules.push(`!${c}`);
+	}
 	if (settings.teraPreview && settings.teraMode !== 'none') rules.push('Tera Type Preview');
 	return rules;
 }
@@ -358,6 +364,19 @@ export function roster(seasonId: number, userId: number) {
 		WHERE picks.season_id = ? AND picks.user_id = ? ORDER BY picks.cost DESC, pool.name`, seasonId, userId);
 }
 
+/** Every species id a player's roster covers (formes included), mapped to the roster entry it belongs to. */
+export function rosterFormes(seasonId: number, userId: number) {
+	const poolIds = new Set(all<{ species_id: string }>('SELECT species_id FROM pool WHERE season_id = ?', seasonId).map(r => r.species_id));
+	const map = new Map<string, string>();
+	for (const r of roster(seasonId, userId)) for (const id of rosterIds(r.species_id, poolIds)) map.set(id, r.species_id);
+	return map;
+}
+
+/** Captain prices follow the Tera settings until the draft starts (hand-edited captain prices are replaced). */
+export function repricePoolCaptains(seasonId: number, tcMaxCost: number, tcExtra: number) {
+	run('UPDATE pool SET tc_cost = CASE WHEN cost <= ? THEN cost + ? ELSE NULL END WHERE season_id = ?', tcMaxCost, tcExtra, seasonId);
+}
+
 // ---------- schedule and series ----------
 
 export function matches(seasonId: number) {
@@ -447,7 +466,9 @@ export function recordBattleEnd(leagueId: number, users: [number, number], winne
 		if (winnerId === match.p1) p1w++;
 		else if (winnerId === match.p2) p2w++;
 		const need = Math.ceil(settings.bestOf / 2);
-		const winner = p1w >= need ? match.p1 : p2w >= need ? match.p2 : null;
+		// Both can be at the mark if the series length was shortened mid-series; the leader takes it
+		const winner = p1w < need && p2w < need ? null :
+			p1w > p2w ? match.p1 : p2w > p1w ? match.p2 : (winnerId === match.p2 ? match.p2 : match.p1);
 		run('UPDATE matches SET p1_wins = ?, p2_wins = ?, status = ?, winner = ? WHERE id = ?',
 			p1w, p2w, winner ? 'final' : 'live', winner, match.id);
 		if (winner) revealSeries(match.id);
@@ -517,14 +538,19 @@ export function revealSeries(matchId: number) {
 	run('UPDATE matches SET revealed_at = ? WHERE id = ?', now(), matchId);
 }
 
+/** Commissioner override. Returns an error message for a score the series length can't produce, or ''. */
 export function setResult(matchId: number, p1Wins: number, p2Wins: number, settings: Settings, userId: number, leagueId: number) {
 	const match = one<Match>('SELECT * FROM matches WHERE id = ?', matchId)!;
 	const need = Math.ceil(settings.bestOf / 2);
+	if (p1Wins > need || p2Wins > need || (p1Wins >= need && p2Wins >= need)) {
+		return `A best of ${settings.bestOf} ends when one player has ${need} win${need === 1 ? '' : 's'}, so ${p1Wins}–${p2Wins} isn't a possible score.`;
+	}
 	const winner = p1Wins >= need ? match.p1 : p2Wins >= need ? match.p2 : null;
 	run('UPDATE matches SET p1_wins = ?, p2_wins = ?, winner = ?, status = ? WHERE id = ?',
 		p1Wins, p2Wins, winner, winner ? 'final' : (p1Wins + p2Wins ? 'live' : 'scheduled'), matchId);
 	if (winner && !match.revealed_at) revealSeries(matchId);
 	audit(leagueId, userId, 'result.override', `match ${matchId}: ${p1Wins}-${p2Wins}`);
+	return '';
 }
 
 export function userIdByShowdownId(showdownId: string) {

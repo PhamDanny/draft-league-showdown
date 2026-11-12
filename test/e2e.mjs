@@ -110,7 +110,8 @@ function connect(client) {
 					ws.send(`|/trn ${j.username},0,${j.assertion}`);
 				}
 				for (const h of bot.handlers) h(line, room);
-				if (line.startsWith('|updateuser|') && line.includes('|1|')) resolve(bot);
+				// |updateuser|NAME|NAMED|AVATAR|...: wait for the signed-in name, not the guest one (whose avatar can be "1")
+				if (line.startsWith('|updateuser|') && line.split('|')[3] === '1') resolve(bot);
 			}
 		});
 		ws.on('error', e => { console.error(client.name, e.message); process.exit(1); });
@@ -244,7 +245,12 @@ async function playGame2(n, aliceSix) {
 }
 await playGame2(1, plans2.Alice.slice(0, 6));
 await playGame2(2, plans2.Alice.slice(2, 8)); // a different 6, which an Each match league doesn't allow
-const s2 = await (await alice.req('GET', `${league2}/series/${series2}`)).text();
+let s2 = await (await alice.req('GET', `${league2}/series/${series2}`)).text();
+// The bots usually finish a game before the forfeit lands, so the first two games can be split
+if (!/Final/.test(s2)) {
+	await playGame2(3, plans2.Alice.slice(2, 8));
+	s2 = await (await alice.req('GET', `${league2}/series/${series2}`)).text();
+}
 assert(/Final/.test(s2), 'preview series final');
 assert((s2.match(/Brought a different 6/g) || []).length === 1, 'series flags the player who changed their 6');
 console.log('\nAll good.');

@@ -58,7 +58,7 @@ document.addEventListener('change', e => { if (e.target.id === 'pool-type') wind
 const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel bt-dialog">
 	<form method="post" action="/l/${leagueId}/draft/pick">
 		<h2 id="pick-q" style="margin-top:0"></h2><p id="pick-left" class="muted"></p>
-		<input type="hidden" name="species"><input type="hidden" name="captain">
+		<input type="hidden" name="species"><input type="hidden" name="captain"><input type="hidden" name="for">
 		<div class="row" style="justify-content:flex-end"><button class="btn" type="button" value="cancel" autofocus>Cancel</button><button class="btn primary" type="submit">Draft</button></div>
 	</form>
 </dialog>
@@ -79,6 +79,7 @@ const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel
 		dlg.querySelector('#pick-left').textContent = (who ? cost + ' points. ' + who + ' would have ' : 'You would have ') + left + ' points left.';
 		f.species.value = src.species.value;
 		f.captain.value = captain ? '1' : '';
+		f.for.value = root?.dataset.forId || '';
 		dlg.showModal();
 	});
 })();
@@ -279,7 +280,7 @@ export function pageRoutes(app: Express) {
 				card = `<section class="panel your-match"><p class="eyebrow">Week ${week} · Your match</p><p style="margin:4px 0 0">${ms.length ? 'No match this week.' : 'No matches this week.'}</p></section>`;
 			}
 			const others = ms.filter(m => m !== my);
-			main = `${card}<div class="grid g2" style="margin-top:16px">
+			main = `${card}<div class="grid g2 top" style="margin-top:16px">
 				${others.length ? `<section class="panel"><h2>Week ${week}</h2><div class="list">${others.map(m => `<a class="rowlink" href="/l/${league.id}/series/${m.id}">
 					<div class="match"><span class="p">${esc(n.get(m.p1))}</span><span class="score num">${score(m)}</span><span class="p r">${esc(n.get(m.p2))}</span></div>
 					${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>` : ''}
@@ -339,28 +340,29 @@ export function pageRoutes(app: Express) {
 		const teamCol = (uid: number) => {
 			if (!final) {
 				return `<section class="panel"><h2>${esc(n.get(uid))}</h2><div class="bench">${L.roster(season.id, uid).map(r =>
-					monChip(r.species_id, { name: r.name, captain: !!r.captain })).join('')}</div></section>`;
+					monChip(r.species_id, { name: r.name, captain: settings.teraMode === 'captains' && !!r.captain })).join('')}</div></section>`;
 			}
 			const sets = new Map<string, any>();
-			const brought: string[] = []; // each game's species, to check Each match leagues kept the same 6
+			const entry = L.rosterFormes(season.id, uid);
+			const brought: string[] = []; // each game's roster entries, to check the same 6 were kept where the league says so
 			for (const g of games) {
 				if (!g.teams) continue;
 				const teams = JSON.parse(g.teams);
 				const slot = g.p1 === uid ? 'p1' : 'p2';
 				const team: any[] = teams[slot]?.team || [];
-				brought.push(team.map(s => toID(s.species)).sort().join(','));
+				brought.push(team.map(s => entry.get(toID(s.species)) || toID(s.species)).sort().join(','));
 				for (const set of team) {
 					const key = exportSet(set);
 					if (!sets.has(key)) sets.set(key, set);
 				}
 			}
-			const changed = settings.teamPreview === 'match' && new Set(brought).size > 1;
+			const changed = settings.teamPreview !== 'game' && new Set(brought).size > 1;
 			return `<section class="panel">${setList([...sets].map(([text, set]) => ({ set, text })), 'No games were recorded for this player (result entered by a commissioner).', n.get(uid))}
-				${changed ? '<p class="flash" style="margin:12px 0 0">Brought a different 6 in different games of this series. This league locks each player\'s 6 for the whole series.</p>' : ''}</section>`;
+				${changed ? '<p class="flash warn" style="margin:12px 0 0">Brought a different 6 in different games of this series. This league locks each player\'s 6 for the whole series.</p>' : ''}</section>`;
 		};
 		const mine = m.p1 === req.user!.id || m.p2 === req.user!.id;
 		render(req, res, {
-			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule',
+			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule', flash: req.query.msg as string,
 			body: `<a class="eyebrow back" href="/l/${league.id}/schedule#wk${m.week}">← Schedule · Week ${m.week} · Bo${settings.bestOf}</a>
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">${esc(n.get(m.p1))} ${score(m)} ${esc(n.get(m.p2))}</h1>${statusPill(m.status)}<span class="spacer"></span>
 				${!final && mine ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Play game ${games.length + 1}</a>` : ''}</div>
@@ -375,8 +377,8 @@ export function pageRoutes(app: Express) {
 			${league.role === 'commissioner' ? `<details class="panel fold override"><summary><h3>Override result (commissioner)</h3></summary>
 				<form method="post" action="/l/${league.id}/admin/result/${m.id}" class="row" style="margin-top:10px" data-p1="${esc(n.get(m.p1))}" data-p2="${esc(n.get(m.p2))}"
 					onsubmit="return confirm('Save the result ' + this.dataset.p1 + ' ' + this.p1.value + '–' + this.p2.value + ' ' + this.dataset.p2 + '? This replaces the recorded score.')">
-					<label class="f">${esc(n.get(m.p1))}<input class="inp" name="p1" type="number" min="0" max="${settings.bestOf}" value="${m.p1_wins}" style="width:80px"></label>
-					<label class="f">${esc(n.get(m.p2))}<input class="inp" name="p2" type="number" min="0" max="${settings.bestOf}" value="${m.p2_wins}" style="width:80px"></label>
+					<label class="f">${esc(n.get(m.p1))}<input class="inp" name="p1" type="number" min="0" max="${Math.ceil(settings.bestOf / 2)}" value="${m.p1_wins}" style="width:80px"></label>
+					<label class="f">${esc(n.get(m.p2))}<input class="inp" name="p2" type="number" min="0" max="${Math.ceil(settings.bestOf / 2)}" value="${m.p2_wins}" style="width:80px"></label>
 					<button class="btn" type="submit" style="align-self:flex-end">Save result</button>
 				</form></details>` : ''}`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
@@ -421,14 +423,14 @@ export function pageRoutes(app: Express) {
 				const pts = r.reduce((a, x) => a + x.cost, 0);
 				return `<a class="panel team-card" href="/l/${league.id}/team/${p.user_id}">
 					<div class="row panel-head"><h2>${esc(p.showdown_name)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
-					<div class="bench">${r.map(x => monChip(x.species_id, { name: x.name, captain: !!x.captain })).join('')}</div></a>`;
+					<div class="bench">${r.map(x => monChip(x.species_id, { name: x.name, captain: settings.teraMode === 'captains' && !!x.captain })).join('')}</div></a>`;
 			}).join('')}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
 		});
 	});
 
 	lg.get('/team/:userId', (req, res) => {
-		const { league, season } = req as LReq;
+		const { league, season, settings } = req as LReq;
 		const uid = Number(req.params.userId);
 		const n = names(league.id);
 		if (!n.has(uid)) return res.status(404).send('Not found');
@@ -451,7 +453,7 @@ export function pageRoutes(app: Express) {
 			title: n.get(uid)!, tab: 'teams',
 			body: `${rec ? `<p class="eyebrow">${rec.sw}–${rec.sl} · ${st.indexOf(rec) + 1}${['st', 'nd', 'rd'][st.indexOf(rec)] || 'th'}</p>` : ''}<h1>${esc(n.get(uid))}</h1>
 			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
-				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}</td></tr>`).join('')}
+				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && settings.teraMode === 'captains' ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}</td></tr>`).join('')}
 			</tbody></table></div></section>
 			${ms.length ? `<section class="panel"><h2>Series</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
@@ -474,17 +476,18 @@ export function pageRoutes(app: Express) {
 		}
 		const state = L.draftState(season, settings);
 		const n = state.players.length;
-		const rounds = Math.max(1, Math.ceil(Math.max(state.picks.length, 1) / Math.max(n, 1)) + (state.onClock ? 1 : 0));
-		const shownRounds = Math.min(settings.rosterMax, Math.max(rounds, Math.min(settings.rosterMax, 4)));
+		const rounds = Math.max(0, ...state.picks.map(p => p.round + 1), state.onClock ? state.round + 1 : 0);
+		const shownRounds = Math.max(rounds, Math.min(settings.rosterMax, 4));
+		const tc = settings.teraMode === 'captains';
 		const pickBySlot = new Map<string, L.Pick>();
 		for (const p of state.picks) pickBySlot.set(`${p.round}:${p.user_id}`, p);
 		const board = `<section class="panel"><div class="table-wrap"><div class="board" style="--n:${n}"><div class="h"></div>
 			${state.players.map(p => `<div class="h ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}"><span>${esc(p.showdown_name)}</span><small class="num">${settings.budget - (state.spent.get(p.user_id) || 0)} left</small></div>`).join('')}
 			${Array.from({ length: shownRounds }, (_, r) => {
 		const arrow = settings.draftType === 'snake' && r % 2 ? '←' : '→';
-		return `<div class="h">${r + 1} ${arrow}</div>${state.players.map(p => {
+		return `<div class="h rd">${r + 1} ${arrow}</div>${state.players.map(p => {
 			const pick = pickBySlot.get(`${r}:${p.user_id}`);
-			if (pick) return `<div class="cell ${pick.captain ? 'tc' : ''}">${sprite(pick.species_id)}<b title="${esc(pick.name)}">${esc(pick.name)}</b><span class="c num">${pick.captain ? 'TC ' : ''}${pick.cost}</span></div>`;
+			if (pick) return `<div class="cell ${tc && pick.captain ? 'tc' : ''}">${sprite(pick.species_id)}<b title="${esc(pick.name)}">${esc(pick.name)}</b><span class="c num">${tc && pick.captain ? 'TC ' : ''}${pick.cost}</span></div>`;
 			if (state.onClock?.user_id === p.user_id && state.round === r) return `<div class="cell now"><b>${esc(p.showdown_name)}</b>…</div>`;
 			return '<div class="cell empty"></div>';
 		}).join('')}`;
@@ -524,19 +527,19 @@ export function pageRoutes(app: Express) {
 			(state.onClock ? `<span class="pill live">Round ${state.round + 1} · ${myTurn ? 'Your pick' : `${esc(state.onClock.showdown_name)} is picking`}</span>` : '<span class="pill final">Done</span>') :
 			'<span class="pill final">Final</span>';
 
-		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
+		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-for-id="${actingFor || ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Draft</h1>${status}
 				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}
 				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
-			${req.query.msg ? `<div class="flash">${esc(req.query.msg)}</div>` : ''}
+			${req.query.msg ? `<div class="flash bad">${esc(req.query.msg)}</div>` : ''}
 			${board}
 			${season.status === 'drafting' ? `<div class="split" style="margin-top:16px">
 				<section class="panel"><div class="row panel-head"><h2>Pool</h2><span class="spacer"></span>
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					<div class="pool-list">${poolRows}</div></section>
-				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: !!p.captain })).join('')}</div>
-					<div class="grid g3" style="margin-top:16px;gap:8px">
+				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: tc && !!p.captain })).join('') || '<span class="muted">No picks yet.</span>'}</div>
+					<div class="tiles">
 						<div><h3 style="margin:0">Budget</h3><div class="num" style="font-size:16px">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
 						${settings.teraMode === 'captains' ? `<div><h3 style="margin:0">Captains</h3><div class="num" style="font-size:16px">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>` : ''}
 						<div><h3 style="margin:0">Picks</h3><div class="num" style="font-size:16px">${myCount} / ${settings.rosterMax}</div></div>
@@ -560,7 +563,10 @@ export function pageRoutes(app: Express) {
 		const state = L.draftState(season, settings);
 		const me = req.user!.id;
 		const forUser = state.onClock?.user_id === me ? me : (league.role === 'commissioner' && state.onClock ? state.onClock.user_id : me);
-		const err = L.makePick(season, settings, me, forUser, toID(req.body.species), req.body.captain === '1');
+		// The confirm dialog says who the pick is for; if the draft moved on while it was open, don't hand the pick to the next player
+		const meant = Number(req.body.for) || forUser;
+		const err = meant !== forUser ? `The draft moved on while you were choosing. It's ${state.onClock ? state.onClock.showdown_name + "'s" : "nobody's"} pick now.` :
+			L.makePick(season, settings, me, forUser, toID(req.body.species), req.body.captain === '1');
 		if (!err) {
 			syncShowdown();
 			notify(league.id);
@@ -618,6 +624,9 @@ export function pageRoutes(app: Express) {
 		const players = season.status === 'setup' ? [] : L.draftPlayers(season.id);
 		const last = season.status === 'drafting' ? L.picks(season.id).at(-1) : undefined;
 		const lastBy = last ? players.find(p => p.user_id === last.user_id)?.showdown_name : '';
+		const counts = season.status === 'drafting' ? L.draftState(season, settings).counts : new Map<number, number>();
+		const short = players.filter(p => (counts.get(p.user_id) || 0) < settings.rosterMin).map(p => p.showdown_name);
+		const shortNote = short.length ? ` ${short.join(', ')} ${short.length === 1 ? 'has' : 'have'} fewer than the minimum ${settings.rosterMin} Pokémon.` : '';
 		const invite = `${PUBLIC_URL}/join/${league.invite_code}`;
 		adminPage(req, res, '', 'Admin', `<div class="stack">
 			<section class="panel"><h2>Members</h2>
@@ -637,7 +646,7 @@ export function pageRoutes(app: Express) {
 				${season.status === 'drafting' ? `<div class="row">
 					<span>Order: ${players.map(p => esc(p.showdown_name)).join(', ')}</span><span class="spacer"></span>
 					${last ? `<form method="post" action="/l/${league.id}/admin/undo" class="inline" ${confirmAttr(`Undo ${lastBy || 'the last player'}'s pick of ${last.name}${last.captain ? ' (Tera Captain)' : ''} in round ${last.round + 1}?`)}><button class="btn" type="submit">Undo last pick</button></form>` : ''}
-					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr("End the draft and generate the schedule? Picks can't be changed afterwards.")}><button class="btn primary" type="submit">End draft and make schedule</button></form></div>` : ''}
+					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`End the draft and generate the schedule? Picks can't be changed afterwards.${shortNote}`)}><button class="btn primary" type="submit">End draft and make schedule</button></form></div>` : ''}
 				${season.status === 'regular' ? `<p class="muted" style="margin:0">Regular season. Best of ${settings.bestOf}.</p>` : ''}
 			</section>
 		</div>`, `<script>
@@ -651,11 +660,12 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 	});
 
 	lg.get('/admin/settings', commissioner, (req, res) => {
-		const { league, settings } = req as LReq;
+		const { league, season, settings } = req as LReq;
+		const setup = season.status === 'setup';
 		const sel = (name: string, value: string, opts: [string, string][]) =>
 			`<select name="${name}">${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
-		const num = (name: keyof L.Settings, label: string, min = 0, max = 999) =>
-			`<label class="f">${label}<input type="number" name="${name}" min="${min}" max="${max}" value="${settings[name]}"></label>`;
+		const num = (name: keyof L.Settings, label: string, min = 0, max = 999, locked = false) =>
+			`<label class="f">${label}<input type="number" name="${name}" min="${min}" max="${max}" value="${settings[name]}" ${locked ? 'disabled' : ''}></label>`;
 		const check = (name: keyof L.Settings, label: string) =>
 			`<label class="row chk"><input type="checkbox" name="${name}" value="1" ${settings[name] ? 'checked' : ''}>${label}</label>`;
 		adminPage(req, res, 'settings', 'Settings', `<section class="panel">
@@ -676,9 +686,11 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 				</div>
 				<div class="form" id="tc-fields" ${settings.teraMode === 'captains' ? '' : 'hidden'}>
 					${num('maxCaptains', 'Max captains', 0, 6)}
-					${num('tcMaxCost', 'Captain max cost', 0, 40)}
-					${num('tcExtra', 'Captain extra cost', 0, 20)}
+					${num('tcMaxCost', 'Captain max cost', 0, 40, !setup)}
+					${num('tcExtra', 'Captain extra cost', 0, 20, !setup)}
 				</div>
+				<p class="muted field-help" id="tc-help" ${settings.teraMode === 'captains' ? '' : 'hidden'}>${setup ? 'Captain prices in the draft pool are worked out from these two when you save (this replaces captain prices edited by hand).' :
+					'Captain prices were set when the draft started. Change a single price from Draft pool.'}</p>
 				<div class="row">${check('teraPreview', 'Tera preview')}</div>
 				<h3>Series</h3>
 				<div class="form">
@@ -686,7 +698,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					<label class="f">Team preview${sel('teamPreview', settings.teamPreview, Object.entries(L.TEAM_PREVIEW).map(([v, o]) => [v, o.label] as [string, string]))}</label>
 					${num('playoffTeams', 'Playoff teams', 0, 12)}
 				</div>
-				<p class="muted" id="tp-help" style="margin:0;font-size:13px">${esc(L.TEAM_PREVIEW[settings.teamPreview].rule)}.</p>
+				<p class="muted field-help" id="tp-help">${esc(L.TEAM_PREVIEW[settings.teamPreview].rule)}.</p>
 				<h3>Clauses</h3>
 				<div class="row">${L.CLAUSES.map(c => `<label class="row chk"><input type="checkbox" name="clauses" value="${esc(c)}" ${settings.clauses.includes(c) ? 'checked' : ''}>${esc(c)}</label>`).join('')}</div>
 				<div><button class="btn primary" type="submit">Save</button></div>
@@ -694,7 +706,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 		</section>`, `<script>
 // Captain fields only matter with Tera Captains; they're still submitted either way
 document.querySelector('[name=teraMode]').addEventListener('change', e => {
-	document.getElementById('tc-fields').hidden = e.target.value !== 'captains';
+	document.getElementById('tc-fields').hidden = document.getElementById('tc-help').hidden = e.target.value !== 'captains';
 });
 const TP = ${JSON.stringify(Object.fromEntries(Object.entries(L.TEAM_PREVIEW).map(([k, o]) => [k, o.rule]))).replace(/</g, '\\u003c')};
 document.querySelector('[name=teamPreview]').addEventListener('change', e => {
@@ -736,7 +748,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 	});
 
 	lg.post('/admin/settings', commissioner, form, (req, res) => {
-		const { league, settings } = req as LReq;
+		const { league, season, settings } = req as LReq;
 		const b = req.body;
 		const int = (v: unknown, d: number, min: number, max: number) => {
 			const x = parseInt(String(v));
@@ -764,8 +776,13 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		const name = String(b.name || league.name).replace(/[^\p{L}\p{N} '&.-]+/gu, '').trim().slice(0, 40) || league.name;
 		run('UPDATE leagues SET name = ?, format_name = ?, settings = ? WHERE id = ?', name, L.formatNameFor(name, league.id), JSON.stringify(next), league.id);
 		audit(league.id, req.user!.id, 'settings.update', JSON.stringify(next));
+		let note = 'Saved.';
+		if (season.status === 'setup' && (next.tcMaxCost !== settings.tcMaxCost || next.tcExtra !== settings.tcExtra)) {
+			L.repricePoolCaptains(season.id, next.tcMaxCost, next.tcExtra);
+			note = 'Saved. Captain prices in the draft pool were updated to match.';
+		}
 		syncShowdown();
-		res.redirect(`/l/${league.id}/admin/settings?msg=Saved.`);
+		res.redirect(`/l/${league.id}/admin/settings?msg=${encodeURIComponent(note)}`);
 	});
 
 	lg.post('/admin/remove', commissioner, form, (req, res) => {
@@ -817,10 +834,11 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		const m = one<L.Match>('SELECT * FROM matches WHERE id = ? AND season_id = ?', Number(req.params.matchId), season.id);
 		if (m) {
 			const clamp = (v: unknown) => Math.max(0, Math.min(settings.bestOf, parseInt(String(v)) || 0));
-			L.setResult(m.id, clamp(req.body.p1), clamp(req.body.p2), settings, req.user!.id, league.id);
+			const err = L.setResult(m.id, clamp(req.body.p1), clamp(req.body.p2), settings, req.user!.id, league.id);
+			if (err) return res.redirect(`/l/${league.id}/series/${m.id}?msg=${encodeURIComponent(err)}`);
 			notify(league.id);
 		}
-		res.redirect(`/l/${league.id}/series/${req.params.matchId}`);
+		res.redirect(`/l/${league.id}/series/${Number(req.params.matchId)}`);
 	});
 
 	lg.get('/admin/pool', commissioner, (req, res) => {

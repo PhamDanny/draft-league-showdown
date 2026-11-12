@@ -12,7 +12,10 @@
 	const D = await Sets.loadDex(C.leagueId);
 	const allowed = new Set(C.roster.flatMap(r => r.formes));
 	/** Every set saved for this week (6 in Pre-select leagues, the whole roster otherwise). */
-	const prepared = () => Sets.load(C.leagueId, C.seasonId, C.week).team.filter(s => s && D.species[s.species] && allowed.has(s.species));
+	// Capped like the teambuilder caps it, so sets left over from a different team preview setting aren't brought
+	const prepared = () => Sets.load(C.leagueId, C.seasonId, C.week).team.slice(0, C.teamSize || 6).filter(s => s && D.species[s.species] && allowed.has(s.species));
+	// Picks are kept by roster entry, so switching a Pokémon's forme doesn't drop it from the picked 6
+	const entryOf = id => C.roster.find(r => r.formes.includes(id))?.id || id;
 	// "Each game" and "Each match" leagues pick 6 of the prepared sets here, hidden until the battle starts.
 	// "Each match" keeps the 6 from game 1 for the rest of the series.
 	const PICKING = C.teamPreview === 'game' || C.teamPreview === 'match';
@@ -21,7 +24,7 @@
 		try {
 			const v = JSON.parse(localStorage.getItem(pickKey) || 'null');
 			// A remake starts the series over, so a lock from before it no longer applies
-			if (v && Array.isArray(v.species)) return { species: v.species, locked: !!v.locked && (v.resets || 0) === (C.state.resets || 0) };
+			if (v && Array.isArray(v.species)) return { species: [...new Set(v.species.map(entryOf))], locked: !!v.locked && (v.resets || 0) === (C.state.resets || 0) };
 		} catch {}
 		return { species: [], locked: false };
 	}
@@ -33,9 +36,19 @@
 	const team = () => {
 		const all = prepared();
 		if (!PICKING) return all;
-		return S.pick.species.map(id => all.find(s => s.species === id)).filter(Boolean);
+		return S.pick.species.map(id => all.find(s => entryOf(s.species) === id)).filter(Boolean);
 	};
-	const lockedIn = () => C.teamPreview === 'match' && S.pick.locked;
+	// A lock with nothing in it (the series was started from another browser) would leave no way to play on
+	const lockedIn = () => C.teamPreview === 'match' && S.pick.locked && S.pick.species.length > 0;
+	/** With 6 or fewer sets prepared there is nothing to choose: they all come. */
+	function syncPick() {
+		if (!PICKING || lockedIn() || S.myReady || S.wantReady) return;
+		const all = prepared().map(s => entryOf(s.species));
+		if (!all.length || all.length > 6) return;
+		if (all.length === S.pick.species.length && all.every(id => S.pick.species.includes(id))) return;
+		S.pick = { ...S.pick, species: all };
+		savePick();
+	}
 	const teamReady = () => team().length > 0 && (!PICKING || team().length === (lockedIn() ? S.pick.species.length : pickSize()));
 
 	const S = {
@@ -78,7 +91,8 @@
 	const sprite = (id, cls = '') => D.species[id] ? `<img class="spr ${cls}" src="${esc(D.species[id].sprite)}" alt="${esc(D.species[id].name)}" title="${esc(D.species[id].name)}">` : '';
 	function pips() {
 		const out = [];
-		for (let i = 0; i < S.series.bestOf; i++) {
+		const shown = Math.max(S.series.bestOf, S.series.games.length + (seriesOver() ? 0 : 1));
+		for (let i = 0; i < shown; i++) {
 			const g = S.series.games[i];
 			const live = !g && i === S.series.games.length && phase() === 'live';
 			out.push(`<span class="pip ${g ? g.result.toLowerCase() : live ? 'live' : ''}" title="Game ${i + 1}${g ? `: ${g.result === 'W' ? 'won' : g.result === 'L' ? 'lost' : 'tie'}` : live ? ': in progress' : ''}">${g ? g.result : ''}</span>`);
@@ -133,6 +147,11 @@
 			status = '<span class="muted">The game starts as soon as you\'re both ready.</span>';
 			action = `<button class="btn primary lg" data-act="ready">Ready for game ${g}</button>`;
 		}
+		// Nothing stops a short team, but it's usually an unfinished one
+		const full = Math.min(6, C.roster.length);
+		if (S.online && !PICKING && t.length && t.length < full) {
+			status += `<div class="bt-short">Your team has ${t.length} Pokémon, not ${full}. <a href="/l/${C.leagueId}/builder#week-${C.week}">Add more in the teambuilder</a> if that isn't on purpose.</div>`;
+		}
 		const side = (name, ready, sub) => `<div class="bt-side ${ready ? 'ready' : ''}">
 			<span class="bt-dot" aria-hidden="true"></span>
 			<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
@@ -140,7 +159,7 @@
 		</div>`;
 		const oppSub = S.oppOnline === false ? 'Offline' : S.oppOnline ? 'Online' : '&nbsp;';
 		return `<section class="panel bt-lobby">
-			<p class="eyebrow">Game ${g} of ${S.series.bestOf}</p>
+			<p class="eyebrow">Game ${g}${g <= S.series.bestOf ? ` of ${S.series.bestOf}` : ''}</p>
 			<div class="bt-sides">
 				${side(C.myName, S.myReady || S.wantReady, `<span class="bt-team">${t.map(s => sprite(s.species, 'sm')).join('') || 'No team'}</span>`)}
 				<span class="bt-vs">vs</span>
@@ -156,22 +175,24 @@
 	function picker() {
 		const all = prepared();
 		const n = pickSize();
-		const chosen = S.pick.species.filter(id => all.some(s => s.species === id));
+		const chosen = S.pick.species.filter(id => all.some(s => entryOf(s.species) === id));
 		const busy = S.myReady || S.wantReady;
 		const locked = lockedIn();
-		const title = locked ? 'Your 6 for this series' : `Pick ${n} · ${chosen.length}/${n}`;
+		const noChoice = all.length <= 6;
+		const title = locked ? `Your ${chosen.length} for this series` : noChoice ? `Bringing all ${all.length}` : `Pick ${n} · ${chosen.length}/${n}`;
 		const note = locked ? 'Locked in at game 1. They stay the same for every game of the series.' :
+			noChoice ? `You have ${all.length === 6 ? 'exactly 6 sets' : `only ${all.length} set${all.length === 1 ? '' : 's'}`} prepared, so ${all.length === 1 ? 'it comes' : 'they all come'}. Prepare more in the teambuilder to have a choice.` :
 			busy ? 'To change your picks, click Not ready first.' :
 			C.teamPreview === 'match' ? 'These stay locked in for the whole series once game 1 starts.' :
 			'You pick again before every game. Leads are chosen at team preview once the battle starts.';
 		return `<div class="bt-pick">
 			<p class="eyebrow">${title}</p>
 			<div class="bt-pickgrid">${all.map(s => {
-				const on = chosen.includes(s.species);
-				const off = locked || busy || (!on && chosen.length >= n);
-				return `<button type="button" class="tslot bt-pickmon ${on ? 'on' : ''}" data-act="pick" data-species="${esc(s.species)}" aria-pressed="${on}" ${off ? 'disabled' : ''}>
+				const on = chosen.includes(entryOf(s.species));
+				const off = locked || busy || noChoice || (!on && chosen.length >= n);
+				return `<button type="button" class="tslot bt-pickmon ${on ? 'on' : ''}" data-act="pick" data-species="${esc(entryOf(s.species))}" aria-pressed="${on}" ${off ? 'disabled' : ''}>
 					${sprite(s.species)}<span class="tmeta"><b>${esc(s.nickname || D.species[s.species].name)}</b><small>${esc(s.item || 'No item')}</small></span>
-					${on && !locked ? `<span class="pill">${chosen.indexOf(s.species) + 1}</span>` : ''}</button>`;
+					${on && !locked && !noChoice ? `<span class="pill">${chosen.indexOf(entryOf(s.species)) + 1}</span>` : ''}</button>`;
 			}).join('')}</div>
 			<p class="muted bt-picknote">${note}</p>
 		</div>`;
@@ -179,7 +200,7 @@
 	function togglePick(id) {
 		if (S.myReady || S.wantReady || lockedIn()) return;
 		const all = prepared();
-		let chosen = S.pick.species.filter(x => all.some(s => s.species === x));
+		let chosen = S.pick.species.filter(x => all.some(s => entryOf(s.species) === x));
 		if (chosen.includes(id)) chosen = chosen.filter(x => x !== id);
 		else if (chosen.length < pickSize()) chosen.push(id);
 		S.pick = { ...S.pick, species: chosen };
@@ -204,6 +225,7 @@
 
 	function render() {
 		const p = phase();
+		if (p === 'lobby') syncPick();
 		// Status updates re-render the page; keep the ⋯ menu open if the player had it open
 		const menuOpen = ui.querySelector('.bt-head .menu details')?.open;
 		ui.innerHTML = `${header()}
@@ -261,11 +283,12 @@
 		try { win.PS.join(want); } catch { win.location.hash = want; }
 	}
 
-	const TYPE_COLORS = [['Normal', '#9a9a7a'], ['Fire', '#e0702e'], ['Water', '#4f7fe0'], ['Electric', '#d1a815'], ['Grass', '#5ea73b'],
-		['Ice', '#5fb8b3'], ['Fighting', '#b0302a'], ['Poison', '#93409a'], ['Ground', '#c99b45'], ['Flying', '#8a76d8'], ['Psychic', '#e2507c'],
-		['Bug', '#94a21e'], ['Rock', '#a9922f'], ['Ghost', '#6a5590'], ['Dragon', '#6038e8'], ['Dark', '#6a5546'], ['Steel', '#8f8fa8'],
-		['Fairy', '#d6719a'], ['Stellar', '#40b5a5']];
-	const TOKENS = ['--bg', '--surface', '--surface-2', '--line', '--fg', '--muted', '--accent', '--accent-soft', '--good', '--bad', '--tera'];
+	// Same values as the .t-* rules in style.css
+	const TYPE_COLORS = [['Normal', '#8f917a'], ['Fire', '#ea5f1e'], ['Water', '#3b7cf0'], ['Electric', '#cf9f00'], ['Grass', '#44a22c'],
+		['Ice', '#2fa9b8'], ['Fighting', '#c93a2e'], ['Poison', '#a23fba'], ['Ground', '#c08a2c'], ['Flying', '#7286e8'], ['Psychic', '#ea4777'],
+		['Bug', '#869c12'], ['Rock', '#a38a2e'], ['Ghost', '#6b53a6'], ['Dragon', '#5a3cf0'], ['Dark', '#5d4a42'], ['Steel', '#6f8aa6'],
+		['Fairy', '#dd5fa6'], ['Stellar', '#40b5a5']];
+	const TOKENS = ['--bg', '--surface', '--surface-2', '--line', '--fg', '--muted', '--accent', '--accent-soft', '--sel', '--sel-soft', '--good', '--bad', '--tera'];
 	function frameCss(roomid) {
 		const cs = getComputedStyle(document.documentElement);
 		const vars = TOKENS.map(t => `${t}:${cs.getPropertyValue(t).trim()};`).join('');
@@ -300,7 +323,7 @@ ${room} .chat-log-add,${room} .battle-log-add{background:var(--surface)!importan
 ${room} textarea.textbox,${room} .textbox{background:var(--surface-2)!important;color:var(--fg)!important;border:1px solid var(--line)!important;border-radius:8px!important;box-shadow:none!important}
 /* Buttons follow the site's */
 ${room} .button{background:var(--surface)!important;color:var(--fg)!important;border:1px solid var(--line)!important;border-radius:8px!important;box-shadow:none!important;text-shadow:none!important}
-${room} .button:hover{border-color:var(--accent)!important}
+${room} .button:hover{border-color:var(--sel)!important}
 ${room} .button.disabled,${room} .button:disabled{opacity:.5}
 ${room} .battle-controls{color:var(--fg)}
 ${room} .battle-controls .whatdo{color:var(--fg)}
@@ -308,7 +331,7 @@ ${room} .battle-controls .whatdo{color:var(--fg)}
 ${room} .movemenu button,${room} .switchmenu button{border-radius:10px!important;background:var(--surface-2)!important;color:var(--fg)!important;border:1px solid var(--line)!important;text-shadow:none!important;box-shadow:none!important}
 ${room} .movemenu button{border-left:5px solid var(--tc,var(--line))!important}
 ${room} .movemenu button small{color:var(--muted)!important}
-${room} .movemenu button:hover:not(.disabled),${room} .switchmenu button:hover:not(.disabled){border-color:var(--accent)!important;border-left-color:var(--tc,var(--accent))!important;background:var(--surface)!important}
+${room} .movemenu button:hover:not(.disabled),${room} .switchmenu button:hover:not(.disabled){border-color:var(--sel)!important;border-left-color:var(--tc,var(--sel))!important;background:var(--sel-soft)!important}
 ${room} .movemenu button.disabled,${room} .switchmenu button.disabled{opacity:.45}
 ${TYPE_COLORS.map(([t, c]) => `${room} .movemenu .type-${t}{--tc:${c}}`).join('\n')}
 ${room} .timerbutton,${room} button[name="openTimer"]{border-radius:8px!important}
@@ -568,7 +591,7 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 					r.watching = true;
 					r.game = S.series.games.length + 1;
 					// Each match: the 6 brought to game 1 are the 6 for the series
-					if (C.teamPreview === 'match' && !S.pick.locked) { S.pick = { ...S.pick, locked: true }; savePick(); }
+					if (C.teamPreview === 'match' && !S.pick.locked && S.pick.species.length) { S.pick = { ...S.pick, locked: true }; savePick(); }
 					S.myReady = S.oppReady = false;
 					S.pendingRetry = 0;
 					S.error = '';

@@ -520,23 +520,29 @@
 		C.preset = scoutedSets(id).length ? 'wk0' : 'off';
 		C.oset = presetSet(id, C.preset);
 		C.oppTera = false;
-		C.move = 0;
+		C.sel = '';
 	}
 	function initCalc() {
-		C = { dir: 'atk', move: 0, myBoost: 0, oppBoost: 0, myTera: false, oppTera: false, sr: false, spikes: 0, reflect: false, screen: false, veil: false, crit: false, weather: '', terrain: '', oedit: false, fieldOpen: false };
+		// sel is the move whose full calc is spelled out: 'atk:<slot>' for this set's moves, 'def:<slot>' for theirs
+		C = { sel: '', myBoost: 0, oppBoost: 0, myDefBoost: 0, oppDefBoost: 0, myTera: false, oppTera: false, sr: false, spikes: 0, reflect: false, screen: false, veil: false, crit: false, weather: '', terrain: '', oedit: false, fieldOpen: false };
 		const { theirs, rest } = oppChoices();
 		const first = theirs[0] || rest[0];
 		if (first) setOpp(first);
 	}
 
-	function calcMon(s, boostStats, boost, tera) {
-		const opts = { level: s.level || 100, nature: s.nature || 'Serious', evs: { ...s.evs }, ivs: { ...s.ivs }, boosts: {} };
+	/** The calculator's name for a species: cosmetic formes it doesn't know fall back to the base forme. */
+	function calcName(id) {
+		let name = nameOf(id);
+		while (!G.species.get(toID(name)) && name.includes('-')) name = name.slice(0, name.lastIndexOf('-'));
+		return name;
+	}
+	function calcMon(s, boosts, tera) {
+		const opts = { level: s.level || 100, nature: s.nature || 'Serious', evs: { ...s.evs }, ivs: { ...s.ivs }, boosts };
 		if (s.item) opts.item = s.item;
 		if (s.ability) opts.ability = s.ability;
 		if (/^(Protosynthesis|Quark Drive)$/.test(s.ability)) opts.boostedStat = 'auto';
 		if (tera && s.teraType) opts.teraType = s.teraType;
-		for (const k of boostStats) opts.boosts[k] = boost;
-		return new calc.Pokemon(G, nameOf(s.species), opts);
+		return new calc.Pokemon(G, calcName(s.species), opts);
 	}
 	function hazardShare(mon) {
 		let share = 0;
@@ -546,82 +552,90 @@
 		if (C.spikes && grounded && !mon.hasItem('Heavy-Duty Boots')) share += [0, 1 / 8, 1 / 6, 1 / 4][C.spikes];
 		return Math.min(1, share);
 	}
-	function results() {
+	/** Can the opposing Pokémon Terastallize under this league's rules? */
+	const oppTeraOk = () => B.teraMode === 'all' || (B.teraMode === 'captains' &&
+		(week ? (B.rosters[week.opp] || []).some(r => r.captain && r.formes.includes(C.opp)) : true));
+	/** One direction of the matchup: 'atk' is this set hitting theirs, 'def' is theirs hitting this one. */
+	function results(dir) {
 		const mine = team()[slot];
 		if (!G || !mine || !C?.oset) return null;
-		const attacking = C.dir === 'atk';
-		const off = ['atk', 'spa'], def = ['def', 'spd'];
-		const me = calcMon(mine, attacking ? off : def, C.myBoost, C.myTera && teraAllowed(mine.species));
-		const them = calcMon(C.oset, attacking ? def : off, C.oppBoost, C.oppTera);
-		const [a, d, moves] = attacking ? [me, them, mine.moves] : [them, me, C.oset.moves];
+		const attacking = dir === 'atk';
+		const both = v => (attacking ? { atk: v, spa: v } : { def: v, spd: v });
+		const other = v => (attacking ? { def: v, spd: v } : { atk: v, spa: v });
+		const me = calcMon(mine, both(attacking ? C.myBoost : C.myDefBoost), C.myTera && teraAllowed(mine.species));
+		const them = calcMon(C.oset, other(attacking ? C.oppDefBoost : C.oppBoost), C.oppTera && oppTeraOk());
+		const [atk, def, moves] = attacking ? [me, them, mine.moves] : [them, me, C.oset.moves];
 		const field = new calc.Field({
 			weather: C.weather || undefined, terrain: C.terrain || undefined,
 			defenderSide: new calc.Side({ isSR: C.sr, spikes: C.spikes, isReflect: C.reflect, isLightScreen: C.screen, isAuroraVeil: C.veil }),
 		});
-		const haz = hazardShare(d);
-		return {
-			haz,
-			rows: moves.map((id, i) => {
-				if (!id) return null;
-				const name = moveName(id);
-				try {
-					const mv = new calc.Move(G, name, { isCrit: C.crit || undefined });
-					if (mv.category === 'Status') return { i, name, status: true };
-					const r = calc.calculate(G, a, d, mv, field);
-					const [lo, hi] = r.range();
-					const hp = r.defender.maxHP();
-					let ko = '', n = 0, desc = '';
-					try { const k = r.kochance(); ko = k.text; n = k.n; } catch {}
-					try { desc = r.desc(); } catch {}
-					return { i, name, type: mv.type, lo: lo / hp * 100, hi: hi / hp * 100, ko, n, desc };
-				} catch (e) {
-					return { i, name, error: true };
-				}
-			}).filter(Boolean),
-		};
+		const rows = [];
+		let status = 0;
+		moves.forEach((id, i) => {
+			if (!id) return;
+			const name = moveName(id);
+			try {
+				const mv = new calc.Move(G, name, { isCrit: C.crit || undefined });
+				if (mv.category === 'Status') { status++; return; }
+				const r = calc.calculate(G, atk, def, mv, field);
+				const [lo, hi] = r.range();
+				const hp = r.defender.maxHP();
+				let ko = '', n = 0, desc = '';
+				try { const k = r.kochance(); ko = k.text; n = k.n; } catch {}
+				try { desc = r.desc(); } catch {}
+				rows.push({ key: `${dir}:${i}`, name, type: mv.type, lo: lo / hp * 100, hi: hi / hp * 100, ko, n, desc });
+			} catch (e) {
+				rows.push({ key: `${dir}:${i}`, name, error: true });
+			}
+		});
+		return { haz: hazardShare(def), rows, status };
 	}
 
+	const FIELD_FLAGS = ['sr', 'reflect', 'screen', 'veil', 'crit'];
 	function fieldCount() {
-		return ['sr', 'reflect', 'screen', 'veil', 'crit'].filter(k => C[k]).length + (C.spikes ? 1 : 0) + (C.weather ? 1 : 0) + (C.terrain ? 1 : 0);
+		return FIELD_FLAGS.filter(k => C[k]).length + (C.spikes ? 1 : 0) + (C.weather ? 1 : 0) + (C.terrain ? 1 : 0) + (C.myDefBoost ? 1 : 0) + (C.oppDefBoost ? 1 : 0);
 	}
+	const osetSummary = o => [o.nature, o.item, STATS.filter(k => o.evs[k]).map(k => `${o.evs[k]} ${LABEL[k]}`).join(' / ')].filter(Boolean).join(' · ');
 	function renderCalc() {
 		const el = document.getElementById('tb-calc');
 		if (!el) return;
 		const mine = team()[slot];
-		if (!G) { el.innerHTML = '<h3>Damage calc</h3><p class="muted">The damage calculator didn\'t load.</p>'; return; }
-		if (!mine) { el.innerHTML = '<h3>Damage calc</h3><p class="muted">Pick a Pokémon to run calcs.</p>'; return; }
+		if (!G) { el.innerHTML = '<h3>Damage calc</h3><p class="muted cempty">The damage calculator didn\'t load.</p>'; return; }
+		if (!mine) { el.innerHTML = '<h3>Damage calc</h3><p class="muted cempty">Pick a Pokémon to run calcs.</p>'; return; }
 		if (!C) initCalc();
-		if (!C.opp) { el.innerHTML = '<h3>Damage calc</h3><p class="muted">No opposing Pokémon to calc against yet.</p>'; return; }
+		if (!C.opp) { el.innerHTML = '<h3>Damage calc</h3><p class="muted cempty">No opposing Pokémon to calc against yet.</p>'; return; }
 		const o = C.oset;
 		const osp = D.species[C.opp];
 		const myName = mine.nickname || nameOf(mine.species);
-		const boostSel = (key, v) => `<select class="inp mini" data-c="${key}" aria-label="Stat boost">${[-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map(n =>
-			`<option value="${n}" ${n === v ? 'selected' : ''}>${n > 0 ? '+' : ''}${n}</option>`).join('')}</select>`;
-		const flag = (k, l) => `<button class="chip ${C[k] ? 'on' : ''}" type="button" data-flag="${k}">${l}</button>`;
+		const boostSel = (key, v, label) => `<select class="inp mini" data-c="${key}" aria-label="${label}" title="${label}">${[6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6].map(n =>
+			`<option value="${n}" ${n === v ? 'selected' : ''}>${n > 0 ? '+' : n < 0 ? '−' : '±'}${Math.abs(n)}</option>`).join('')}</select>`;
+		const flag = (k, l) => `<button class="chip ${C[k] ? 'on' : ''}" type="button" data-flag="${k}" aria-pressed="${!!C[k]}">${l}</button>`;
 		const { theirs, rest } = oppChoices();
 		const scouted = scoutedSets(C.opp);
-		const presetChip = (v, l) => `<button type="button" class="chip ${C.preset === v ? 'on' : ''}" data-preset="${v}">${l}</button>`;
+		const presetChip = (v, l, title) => `<button type="button" class="chip ${C.preset === v ? 'on' : ''}" data-preset="${v}" title="${title}">${l}</button>`;
 		const ostats = Sets.stats(D, o);
 		const omult = st => Sets.natureMult(D, o.nature, st);
-		const oTeraOk = B.teraMode === 'all' || (B.teraMode === 'captains' && (week ? (B.rosters[week.opp] || []).some(r => r.captain && r.formes.includes(C.opp)) : true));
+		const myTeraOk = teraAllowed(mine.species) && mine.teraType;
 		const nField = fieldCount();
 		el.innerHTML = `
 			<h3>Damage calc</h3>
-			<div class="seg cdir"><button type="button" class="${C.dir === 'atk' ? 'on' : ''}" data-dir="atk">${esc(myName)} attacks</button><button type="button" class="${C.dir === 'def' ? 'on' : ''}" data-dir="def">${esc(myName)} defends</button></div>
-			<div class="cside">
-				<div class="row" style="gap:8px;flex-wrap:nowrap">${img(C.opp)}
-					<select class="inp" data-c="opp" aria-label="Opposing Pokémon">
-						${theirs.length ? `<optgroup label="${esc(week.oppName)}">${theirs.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
-						${rest.length ? `<optgroup label="Rest of the league">${rest.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
-					</select></div>
-				<div class="row chips" id="osets">${scouted.map((s, i) => presetChip('wk' + i, `Wk ${s.week}`)).join('')}${presetChip('off', 'Offensive')}${presetChip('bulk', 'Bulky')}${presetChip('blank', 'Blank')}${C.preset === 'custom' ? presetChip('custom', 'Custom') : ''}</div>
-				<details class="fold" ${C.oedit ? 'open' : ''} data-fold="oedit"><summary>Edit their set <span class="muted">· ${esc(o.nature)}${o.item ? ` · ${esc(o.item)}` : ''}</span></summary>
+			<div class="cvs">
+				<span class="cvs-mon">${img(mine.species)}<b title="${esc(myName)}">${esc(myName)}</b></span>
+				<span class="cvs-x" aria-hidden="true">vs</span>
+				<span class="cvs-mon">${img(C.opp)}<select class="inp" data-c="opp" aria-label="Opposing Pokémon">
+					${theirs.length ? `<optgroup label="${esc(week.oppName)}">${theirs.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
+					${rest.length ? `<optgroup label="Rest of the league">${rest.map(id => `<option value="${id}" ${id === C.opp ? 'selected' : ''}>${esc(nameOf(id))}</option>`).join('')}</optgroup>` : ''}
+				</select></span>
+			</div>
+			<div class="coset">
+				<div class="row chips" id="osets"><span class="sd-lbl">Their set</span>${scouted.map((s, i) => presetChip('wk' + i, `Wk ${s.week}`, `The set they brought in week ${s.week}`)).join('')}${
+					presetChip('off', 'Offensive', 'Max attack and speed, likely moves')}${presetChip('bulk', 'Bulky', 'Max HP and one defense, likely moves')}${
+					presetChip('blank', 'No EVs', 'No investment, neutral nature')}${C.preset === 'custom' ? presetChip('custom', 'Custom', 'Edited by you') : ''}</div>
+				<details class="fold" ${C.oedit ? 'open' : ''} data-fold="oedit"><summary><span class="fold-t">Edit</span> <span class="muted" id="oset-sum">${esc(osetSummary(o))}</span></summary>
 					<div class="oform">
-						<label class="f">Nature<select class="inp" data-o="nature">${D.natures.map(n => `<option value="${n.name}" ${n.name === o.nature ? 'selected' : ''}>${n.name}</option>`).join('')}</select></label>
-						<label class="f">Item<input class="inp" data-o="item" value="${esc(o.item)}" list="dl-items-calc"></label>
+						<label class="f">Nature<select class="inp" data-o="nature">${D.natures.map(n => `<option value="${n.name}" ${n.name === o.nature ? 'selected' : ''}>${natureLabel(n)}</option>`).join('')}</select></label>
 						<label class="f">Ability<select class="inp" data-o="ability">${osp.abilities.map(a => `<option ${a === o.ability ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></label>
-						<div class="f"><span>Boost${oTeraOk ? ' · Tera' : ''}</span><span class="row" style="gap:6px;flex-wrap:nowrap">${boostSel('oppBoost', C.oppBoost)}
-							${oTeraOk ? `<input type="checkbox" data-c="oppTera" aria-label="Terastallized" ${C.oppTera ? 'checked' : ''}><select class="inp mini" data-o="teraType" aria-label="Tera type">${D.types.map(t => `<option ${t === o.teraType ? 'selected' : ''}>${t}</option>`).join('')}</select>` : ''}</span></div>
+						<label class="f wide">Item<input class="inp" data-o="item" value="${esc(o.item)}" list="dl-items-calc" placeholder="No item"></label>
 					</div>
 					<div class="oevs">${STATS.map(st => `<span class="sl ${omult(st) > 1 ? 'plus' : omult(st) < 1 ? 'minus' : ''}">${LABEL[st]}</span>
 						<input class="inp" type="number" min="0" max="252" step="4" data-oev="${st}" value="${o.evs[st] || 0}" aria-label="${LABEL[st]} EVs">
@@ -629,54 +643,86 @@
 					<div class="omoves">${[0, 1, 2, 3].map(i => `<input class="inp" data-omove="${i}" value="${esc(o.moves[i] ? moveName(o.moves[i]) : '')}" list="dl-omoves" placeholder="Move ${i + 1}" aria-label="Opposing move ${i + 1}">`).join('')}</div>
 				</details>
 			</div>
-			<div class="row cboost">
-				<span class="muted">Your boost</span>${boostSel('myBoost', C.myBoost)}
-				${teraAllowed(mine.species) && mine.teraType ? `<label class="tchk"><input type="checkbox" data-c="myTera" ${C.myTera ? 'checked' : ''}> Tera ${esc(mine.teraType)}</label>` : ''}
-			</div>
-			<details class="fold" ${C.fieldOpen ? 'open' : ''} data-fold="fieldOpen"><summary>Field <span class="muted" id="field-n">${nField ? `· ${nField} on` : ''}</span></summary>
+			<section class="csec">
+				<div class="csec-h"><b>Your attacks</b><span class="spacer"></span>
+					${myTeraOk ? `<label class="tchk"><input type="checkbox" data-c="myTera" ${C.myTera ? 'checked' : ''}> Tera ${esc(mine.teraType)}</label>` : ''}
+					${boostSel('myBoost', C.myBoost, 'Your Attack and Sp. Atk stages')}</div>
+				<div class="crows" id="calc-atk"></div>
+			</section>
+			<section class="csec">
+				<div class="csec-h"><b>Their attacks</b>${/^wk|custom/.test(C.preset) ? '' : '<span class="muted cguess" title="Their four strongest moves by type, guessed from what they can learn. Edit their set to change them.">likely moves</span>'}<span class="spacer"></span>
+					${oppTeraOk() ? `<label class="tchk"><input type="checkbox" data-c="oppTera" ${C.oppTera ? 'checked' : ''}> Tera</label><select class="inp mini" data-o="teraType" aria-label="Their Tera type">${D.types.map(t => `<option ${t === o.teraType ? 'selected' : ''}>${t}</option>`).join('')}</select>` : ''}
+					${boostSel('oppBoost', C.oppBoost, 'Their Attack and Sp. Atk stages')}</div>
+				<div class="crows" id="calc-def"></div>
+			</section>
+			<p class="num cdesc" id="calc-desc"></p>
+			<details class="fold cfold" ${C.fieldOpen ? 'open' : ''} data-fold="fieldOpen"><summary><span class="fold-t">Field and defenses</span> <span class="muted" id="field-n">${nField ? `· ${nField} on` : ''}</span></summary>
 				<div class="row chips cfield">
 					${flag('sr', 'Stealth Rock')}<button class="chip ${C.spikes ? 'on' : ''}" type="button" data-act="spikes">Spikes${C.spikes > 1 ? ` ×${C.spikes}` : ''}</button>
 					${flag('reflect', 'Reflect')}${flag('screen', 'Light Screen')}${flag('veil', 'Aurora Veil')}${flag('crit', 'Crit')}
-					<select class="inp mini" data-c="weather" aria-label="Weather"><option value="">No weather</option>${['Sun', 'Rain', 'Sand', 'Snow'].map(w => `<option ${C.weather === w ? 'selected' : ''}>${w}</option>`).join('')}</select>
-					<select class="inp mini" data-c="terrain" aria-label="Terrain"><option value="">No terrain</option>${['Electric', 'Grassy', 'Psychic', 'Misty'].map(t => `<option ${C.terrain === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
 				</div>
-				<p class="muted cnote">Hazards and screens are on the defender's side.</p>
+				<div class="cgrid2">
+					<label class="f">Weather<select class="inp" data-c="weather"><option value="">None</option>${['Sun', 'Rain', 'Sand', 'Snow'].map(w => `<option ${C.weather === w ? 'selected' : ''}>${w}</option>`).join('')}</select></label>
+					<label class="f">Terrain<select class="inp" data-c="terrain"><option value="">None</option>${['Electric', 'Grassy', 'Psychic', 'Misty'].map(t => `<option ${C.terrain === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+					<label class="f">Your Def / SpD${boostSel('myDefBoost', C.myDefBoost, 'Your Defense and Sp. Def stages')}</label>
+					<label class="f">Their Def / SpD${boostSel('oppDefBoost', C.oppDefBoost, 'Their Defense and Sp. Def stages')}</label>
+				</div>
+				<p class="muted cnote">Hazards and screens count for whichever side is taking the hit.</p>
 			</details>
-			<div id="calc-res"></div>
 			<datalist id="dl-omoves">${osp.moves.map(m => `<option value="${esc(D.moves[m].name)}">`).join('')}</datalist>
 			<datalist id="dl-items-calc">${D.items.map(i => `<option value="${esc(i)}">`).join('')}</datalist>`;
 		renderResults();
 	}
 
-	function renderResults() {
-		const el = document.getElementById('calc-res');
-		if (!el) return;
-		const n = document.getElementById('field-n');
-		if (n && C) { const c = fieldCount(); n.textContent = c ? `· ${c} on` : ''; }
-		let res;
-		try { res = results(); } catch (e) { el.innerHTML = `<p class="muted cdesc">Couldn't calc this matchup (${esc(e.message)}).</p>`; return; }
-		if (!res) { el.innerHTML = ''; return; }
-		if (!res.rows.length) { el.innerHTML = `<p class="muted" style="margin:12px 0 0">${C.dir === 'atk' ? 'Add moves to this set.' : 'Add moves to their set.'}</p>`; return; }
-		if (!res.rows.some(r => r.i === C.move && !r.status && !r.error)) C.move = (res.rows.find(r => !r.status && !r.error) || res.rows[0]).i;
-		const hazAt = res.haz ? `<span class="chaz" style="left:${(100 - res.haz * 100).toFixed(1)}%" title="Hazard damage"></span>` : '';
-		el.innerHTML = `<div class="cmoves">${res.rows.map(r => {
-			if (r.status || r.error) return `<div class="cmove nodmg"><span class="row" style="gap:6px"><span class="type" style="background:var(--muted)">${r.status ? 'Status' : '?'}</span><b>${esc(r.name)}</b></span></div>`;
+	/** "guaranteed 2HKO after Stealth Rock" -> "Guaranteed 2HKO w/ hazards"; the full text is in the description line. */
+	function koLabel(r) {
+		if (!r.hi) return 'No damage';
+		if (!r.ko || r.n > 4) return r.n > 4 ? '5+ hits' : '';
+		const [t, after = ''] = r.ko.split(' after ');
+		return t[0].toUpperCase() + t.slice(1) + (/Stealth Rock|Spikes/.test(after) ? ' w/ hazards' : after ? ' *' : '');
+	}
+	function rowsHtml(res, empty) {
+		if (!res) return '';
+		if (!res.rows.length) return `<p class="muted cempty">${res.status ? 'Only status moves here.' : empty}</p>`;
+		const hazAt = res.haz ? `<span class="chaz" style="left:${(100 - res.haz * 100).toFixed(1)}%" title="HP left after hazards"></span>` : '';
+		return res.rows.map(r => {
+			if (r.error) return `<div class="crow nodmg"><span class="crow-top"><span class="crow-n"><b>${esc(r.name)}</b></span><span class="ko">Can't calc this move</span></span></div>`;
 			const lo = Math.min(r.lo, 100), hi = Math.min(r.hi, 100);
-			return `<button class="cmove ${r.i === C.move ? 'on' : ''}" type="button" data-cmove="${r.i}">
-				<span class="row" style="gap:6px;flex-wrap:nowrap">${typeTag(r.type)}<b>${esc(r.name)}</b></span>
-				<span class="num">${r.lo.toFixed(1)}–${r.hi.toFixed(1)}%</span>
+			const sev = r.n === 1 ? 'k1' : r.n === 2 ? 'k2' : '';
+			return `<button class="crow ${sev} ${r.key === C.sel ? 'on' : ''}" type="button" data-cmove="${r.key}" aria-pressed="${r.key === C.sel}">
+				<span class="crow-top"><span class="crow-n">${typeTag(r.type)}<b>${esc(r.name)}</b></span><span class="ko" title="${esc(r.ko)}">${esc(koLabel(r))}</span></span>
 				<span class="ctrack"><span class="cbase" style="width:${lo}%"></span><span class="cfill" style="left:${lo}%;width:${Math.max(0.5, hi - lo)}%"></span>${hazAt}</span>
-				<span class="ko ${r.n === 1 ? 'kill' : ''}">${esc(r.ko || (r.hi ? 'not a KO' : 'no damage'))}</span></button>`;
-		}).join('')}</div>
-		<p class="num cdesc">${esc(res.rows.find(r => r.i === C.move)?.desc || '')}</p>`;
+				<span class="num crow-p">${r.lo.toFixed(1)}–${r.hi.toFixed(1)}%</span></button>`;
+		}).join('');
+	}
+	function renderResults() {
+		const atkEl = document.getElementById('calc-atk'), defEl = document.getElementById('calc-def'), descEl = document.getElementById('calc-desc');
+		if (!atkEl || !defEl || !C) return;
+		const n = document.getElementById('field-n');
+		if (n) { const c = fieldCount(); n.textContent = c ? `· ${c} on` : ''; }
+		let atk, def;
+		try { atk = results('atk'); def = results('def'); } catch (e) {
+			atkEl.innerHTML = `<p class="muted cempty">Couldn't calc this matchup (${esc(e.message)}).</p>`;
+			defEl.innerHTML = ''; descEl.textContent = '';
+			return;
+		}
+		const all = [...(atk?.rows || []), ...(def?.rows || [])].filter(r => !r.error);
+		if (!all.some(r => r.key === C.sel)) C.sel = all[0]?.key || '';
+		atkEl.innerHTML = rowsHtml(atk, 'Add moves to this set to see its damage.');
+		defEl.innerHTML = rowsHtml(def, 'Add moves to their set (under Edit).');
+		descEl.textContent = all.find(r => r.key === C.sel)?.desc || '';
+		descEl.hidden = !descEl.textContent;
 	}
 
 	function toCustom() {
+		const sum = document.getElementById('oset-sum');
+		if (sum) sum.textContent = osetSummary(C.oset);
 		if (C.preset === 'custom') return;
 		C.preset = 'custom';
 		const box = document.getElementById('osets');
 		box.querySelectorAll('.chip').forEach(b => b.classList.remove('on'));
-		box.insertAdjacentHTML('beforeend', '<button type="button" class="chip on" data-preset="custom">Custom</button>');
+		box.insertAdjacentHTML('beforeend', '<button type="button" class="chip on" data-preset="custom" title="Edited by you">Custom</button>');
+		document.querySelector('#tb-calc .cguess')?.remove();
 	}
 
 	// ---------- dialogs ----------
@@ -732,12 +778,12 @@
 
 	root.addEventListener('click', e => {
 		if (e.target.dataset?.pick) { setPick(e.target.dataset.pick); return; }
-		const t = e.target.closest('[data-slot],[data-act],[data-dir],[data-flag],[data-preset],[data-cmove],[data-pickbtn],[data-tera]');
+		const t = e.target.closest('[data-slot],[data-act],[data-flag],[data-preset],[data-cmove],[data-pickbtn],[data-tera]');
 		if (!t || t.tagName === 'SELECT') return;
 		const d = t.dataset;
 		if (d.slot) {
 			slot = Number(d.slot);
-			if (C) { C.myTera = false; C.move = 0; }
+			if (C) { C.myTera = false; C.sel = ''; }
 			renderTeam(); renderEditor(); renderCalc();
 			if (!team()[slot] && !readOnly()) root.querySelector('#tb-edit input[data-pick="species"]')?.focus();
 		} else if (d.pickbtn) {
@@ -746,15 +792,13 @@
 			if (readOnly()) return;
 			data.team[slot].teraType = d.tera;
 			save(); renderTeam(); renderEditor(); setPick('details'); renderCalc();
-		} else if (d.dir) {
-			C.dir = d.dir; C.move = 0; renderCalc();
 		} else if (d.flag) {
-			C[d.flag] = !C[d.flag]; t.classList.toggle('on', C[d.flag]); renderResults();
+			C[d.flag] = !C[d.flag]; t.classList.toggle('on', C[d.flag]); t.setAttribute('aria-pressed', C[d.flag]); renderResults();
 		} else if (d.preset) {
 			if (d.preset === 'custom') return;
-			C.preset = d.preset; C.oset = presetSet(C.opp, d.preset); C.move = 0; renderCalc();
+			C.preset = d.preset; C.oset = presetSet(C.opp, d.preset); C.sel = ''; renderCalc();
 		} else if (d.cmove) {
-			C.move = Number(d.cmove); renderResults();
+			C.sel = d.cmove; renderResults();
 		} else if (d.act === 'spikes') {
 			C.spikes = (C.spikes + 1) % 4;
 			t.classList.toggle('on', !!C.spikes); t.textContent = `Spikes${C.spikes > 1 ? ` ×${C.spikes}` : ''}`;
