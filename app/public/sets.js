@@ -25,11 +25,13 @@
 		if (stat === 'hp') return base === 1 ? 1 : Math.floor((2 * base + iv + Math.floor(ev / 4)) * level / 100) + level + 10;
 		return Math.floor((Math.floor((2 * base + iv + Math.floor(ev / 4)) * level / 100) + 5) * mult);
 	}
+	/** The level a set battles at: fixed in VGC leagues, otherwise the set's own. */
+	const levelOf = (D, set) => D.fixedLevel || set.level || 100;
 	function stats(D, set) {
 		const s = D.species[set.species];
 		const out = {};
 		for (const st of STATS) {
-			out[st] = calcStat(st, s.stats[st], set.evs?.[st] || 0, set.ivs?.[st] ?? 31, set.level || 100, natureMult(D, set.nature, st));
+			out[st] = calcStat(st, s.stats[st], set.evs?.[st] || 0, set.ivs?.[st] ?? 31, levelOf(D, set), natureMult(D, set.nature, st));
 		}
 		return out;
 	}
@@ -48,7 +50,8 @@
 	function toShowdown(D, set) {
 		const s = D.species[set.species];
 		const out = {
-			name: (set.nickname || '').trim().slice(0, 18), species: s.name, item: set.item || '', ability: set.ability || '',
+			// A Mega or Primal pick goes to Showdown as its base species holding the stone
+			name: (set.nickname || '').trim().slice(0, 18), species: s.showdown || s.name, item: set.item || '', ability: set.ability || '',
 			moves: set.moves.filter(Boolean).map(m => D.moves[m]?.name || m),
 			nature: set.nature || '', evs: { ...set.evs }, ivs: { ...set.ivs }, gender: set.gender || '',
 		};
@@ -60,7 +63,7 @@
 
 	function exportSet(D, set) {
 		const s = D.species[set.species];
-		let t = s ? s.name : set.species;
+		let t = s ? s.showdown || s.name : set.species;
 		if (set.nickname && set.nickname !== t) t = `${set.nickname} (${t})`;
 		if (set.gender) t += ` (${set.gender})`;
 		if (set.item) t += ` @ ${set.item}`;
@@ -90,7 +93,10 @@
 			head = head.replace(/\s*\((M|F)\)\s*$/, (_, g) => { gender = g; return ''; });
 			const nick = /^(.*)\(([^()]+)\)\s*$/.exec(head);
 			const name = nick ? nick[2] : head;
-			const id = D.speciesByName.get(toID(name));
+			let id = D.speciesByName.get(toID(name));
+			// "Venusaur @ Venusaurite" is a Mega Venusaur pick
+			const formeId = item && Object.keys(D.species).find(k => toID(D.species[k].showdown) === toID(name) && toID(D.species[k].item) === toID(item));
+			if (formeId && (!allowed || allowed.has(formeId))) id = formeId;
 			if (!id || (allowed && !allowed.has(id))) { skipped.push(name.trim()); continue; }
 			const set = blank(D, id, false);
 			set.item = item ? (D.itemIds.get(toID(item)) || item.trim()) : '';
@@ -134,5 +140,5 @@
 		try { localStorage.setItem(key(leagueId, seasonId, week), JSON.stringify(value)); } catch {}
 	}
 
-	window.Sets = { STATS, LABEL, toID, esc, loadDex, natureMult, calcStat, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
+	window.Sets = { STATS, LABEL, toID, esc, loadDex, natureMult, calcStat, levelOf, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
 })();

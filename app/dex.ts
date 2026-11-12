@@ -1,4 +1,5 @@
 // Pokémon data, read straight from the built Showdown server in vendor/.
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { SERVER_DIR } from './config.ts';
@@ -6,10 +7,15 @@ import { SERVER_DIR } from './config.ts';
 const require = createRequire(import.meta.url);
 const sim = () => require(path.join(SERVER_DIR, 'dist', 'sim'));
 
-let dexCache: any = null;
-export function dex() {
-	if (!dexCache) dexCache = sim().Dex.forGen(9);
-	return dexCache;
+const dexCache = new Map<string, any>();
+/** Showdown's dex for a mod ('gen9', 'gen8', ...). */
+export function dex(mod = 'gen9') {
+	let d = dexCache.get(mod);
+	if (!d) {
+		d = sim().Dex.mod(mod);
+		dexCache.set(mod, d);
+	}
+	return d;
 }
 /** Short descriptions for moves, items and abilities, keyed by id. */
 let textCache: { moves: any, items: any, abilities: any } | null = null;
@@ -38,11 +44,11 @@ export interface MonInfo {
 	spe: number;
 }
 const infoCache = new Map<string, MonInfo>();
-export function mon(idOrName: string): MonInfo {
+export function mon(idOrName: string, mod = 'gen9'): MonInfo {
 	const key = toID(idOrName);
-	let info = infoCache.get(key);
+	let info = infoCache.get(`${mod}:${key}`);
 	if (!info) {
-		const s = dex().species.get(idOrName);
+		const s = dex(mod).species.get(idOrName);
 		info = {
 			id: s.id || key,
 			name: s.name || idOrName,
@@ -52,7 +58,7 @@ export function mon(idOrName: string): MonInfo {
 			bst: s.bst || 0,
 			spe: s.baseStats?.spe || 0,
 		};
-		infoCache.set(key, info);
+		infoCache.set(`${mod}:${key}`, info);
 	}
 	return info;
 }
@@ -61,45 +67,39 @@ export const TYPES = ['Normal', 'Fire', 'Water', 'Electric', 'Grass', 'Ice', 'Fi
 	'Flying', 'Psychic', 'Bug', 'Rock', 'Ghost', 'Dragon', 'Dark', 'Steel', 'Fairy'];
 
 /**
- * Starting draft pool: every fully evolved Gen 9 Pokémon (plus NFEs that see play),
- * priced from its Smogon tier. Commissioners adjust prices and bans afterwards.
+ * Starting draft pools, one per format (app/pools/draft-pools.json, from Princess Autumn's
+ * example draft boards). Commissioners adjust prices and bans afterwards.
  */
-const TIER_COST: { [tier: string]: number } = {
-	'Uber': 19, '(Uber)': 19, 'OU': 17, '(OU)': 15, 'UUBL': 14, 'UU': 12, 'RUBL': 11, 'RU': 10,
-	'NUBL': 9, 'NU': 8, 'PUBL': 7, 'PU': 6, 'ZUBL': 5, 'ZU': 4, '(PU)': 4, 'NFE': 2, 'LC': 1,
-};
-export interface PoolSeed { id: string; name: string; cost: number; tcCost: number | null; banned: boolean }
-export function seedPool(tcMaxCost: number, tcExtra = 3): PoolSeed[] {
-	const out: PoolSeed[] = [];
-	for (const s of dex().species.all()) {
-		if (!s.exists || s.isNonstandard || s.tier === 'Illegal' || s.tier === 'Unreleased') continue;
-		if (s.battleOnly || s.isCosmeticForme) continue;
-		if (s.forme && /^(Totem|Gmax|Mega|Primal|Starter|Antique|Artisan|Masterpiece)/.test(s.forme)) continue;
-		if (s.nfe && s.tier !== 'NFE') continue; // skip LC
-		if (s.tier === 'LC') continue;
-		// Same Pokémon in a different color etc.: keep only the base entry
-		if (s.forme && s.baseSpecies && !s.requiredItem) {
-			const base = dex().species.get(s.baseSpecies);
-			if (JSON.stringify(base.baseStats) === JSON.stringify(s.baseStats) && base.types.join() === s.types.join()) continue;
-		}
-		let cost = TIER_COST[s.tier] ?? 4;
-		// Spread within a tier a little by base stat total
-		if (cost >= 4 && s.bst >= 600 && cost < 19) cost += 1;
-		const banned = (s.tier === 'Uber' || s.tier === 'AG') && (s.bst >= 670 ||
-			s.tags?.includes('Restricted Legendary') || s.tags?.includes('Mythical'));
-		const tcCost = cost <= tcMaxCost ? cost + tcExtra : null;
-		out.push({ id: s.id, name: s.name, cost, tcCost, banned: !!banned });
-	}
-	return out.sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name));
+interface PoolFileEntry { id: string; name: string; cost?: number; tc?: number | null; banned?: boolean; covers?: string[] }
+let poolFile: { [format: string]: { label: string, mod: string, pool: PoolFileEntry[] } } | null = null;
+function pools() {
+	poolFile ||= JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'pools', 'draft-pools.json'), 'utf8'));
+	return poolFile!;
+}
+export interface PoolSeed { id: string; name: string; cost: number; tcCost: number | null; banned: boolean; covers: string[] | null }
+export function seedPool(format: string): PoolSeed[] {
+	const entries = pools()[format]?.pool;
+	if (!entries) throw new Error(`No draft pool for format ${format}`);
+	// A banned row has no price on the sheet; give it the format's top price as a starting point
+	const top = Math.max(...entries.map(e => e.cost || 0));
+	return entries.map(e => ({
+		id: e.id, name: e.name, cost: e.banned ? top : e.cost!, tcCost: e.tc ?? null, banned: !!e.banned, covers: e.covers || null,
+	})).sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name));
 }
 
-/** Ids a roster entry covers in battle: the species plus same-slot formes that aren't their own pool entry. */
-export function rosterIds(speciesId: string, poolIds: Set<string>): string[] {
-	const s = dex().species.get(speciesId);
+/**
+ * Ids a roster entry covers in battle: the species plus same-slot formes that aren't their own pool entry,
+ * or exactly `covers` when the pool entry lists them. Mega and Primal formes are battle-only, so a base
+ * entry never covers them; they are only usable from their own pool entry.
+ */
+export function rosterIds(speciesId: string, poolIds: Set<string>, mod = 'gen9', covers?: string[] | null): string[] {
+	const d = dex(mod);
+	const s = d.species.get(speciesId);
+	if (covers?.length) return [...new Set([s.id || speciesId, ...covers])];
 	const ids = new Set([s.id]);
-	const base = dex().species.get(s.baseSpecies);
-	const family = [base, ...(base.otherFormes || []).map((f: string) => dex().species.get(f)),
-		...(base.cosmeticFormes || []).map((f: string) => dex().species.get(f))];
+	const base = d.species.get(s.baseSpecies);
+	const family = [base, ...(base.otherFormes || []).map((f: string) => d.species.get(f)),
+		...(base.cosmeticFormes || []).map((f: string) => d.species.get(f))];
 	if (base.id === s.id) {
 		for (const f of family) {
 			if (f.exists && !poolIds.has(f.id) && !f.battleOnly && f.id !== s.id) {
@@ -109,6 +109,42 @@ export function rosterIds(speciesId: string, poolIds: Set<string>): string[] {
 		}
 	}
 	return [...ids];
+}
+
+/**
+ * The pool entry a set uses. A base species holding its Mega Stone or orb (or Rayquaza knowing
+ * Dragon Ascent) is its Mega or Primal forme, as the league's Showdown validator counts it.
+ */
+export function pickSpecies(set: { species: string, item?: string, moves?: string[] }, mod = 'gen9') {
+	const d = dex(mod);
+	const species = d.species.get(set.species);
+	if (!species.exists || species.battleOnly) return species;
+	const item = d.items.get(set.item || '');
+	const moves = (set.moves || []).map(toID);
+	for (const name of species.otherFormes || []) {
+		const forme = d.species.get(name);
+		if (!forme.exists || !(forme.isMega || forme.isPrimal)) continue;
+		const items: string[] = forme.requiredItems || (forme.requiredItem ? [forme.requiredItem] : []);
+		if (item.exists && items.includes(item.name)) return forme;
+		if (forme.requiredMove && moves.includes(toID(forme.requiredMove))) return forme;
+	}
+	return species;
+}
+
+/**
+ * How the teambuilder builds a pick. A Mega or Primal pick is sent to Showdown as its base species
+ * holding the stone or orb, so it has the base's abilities to choose from (Showdown would otherwise
+ * swap a Mega ability for the base's first one); `battleAbility` is the ability it has once evolved.
+ */
+export function builtAs(speciesId: string, mod = 'gen9') {
+	const d = dex(mod);
+	const s = d.species.get(speciesId);
+	const abilitiesOf = (x: any) => [...new Set(Object.values(x.abilities) as string[])];
+	if ((s.isMega || s.isPrimal) && typeof s.battleOnly === 'string') {
+		const base = d.species.get(s.battleOnly);
+		return { species: base.name as string, abilities: abilitiesOf(base), battleAbility: s.abilities['0'] as string };
+	}
+	return { species: s.name as string, abilities: abilitiesOf(s), battleAbility: undefined };
 }
 
 /** Parse the teams out of a battle input log (">player p1 {...}"). */

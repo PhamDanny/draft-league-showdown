@@ -13,6 +13,7 @@ interface LeagueFormat {
 	leagueId: number;
 	name: string;
 	mod: string;
+	gameType?: 'singles' | 'doubles';
 	ruleset: string[];
 	banlist?: string[];
 	teraMode: 'captains' | 'all' | 'none';
@@ -54,8 +55,29 @@ function rosterFor(formatid: string, userid: string): RosterEntry | null {
  */
 function onRoster(species: Species, list: string[]) {
 	if (list.includes(species.id)) return true;
-	if (typeof species.battleOnly === 'string' && list.includes(id(species.battleOnly))) return true;
+	// Formes that aren't a choice (Aegislash-Blade, Mimikyu-Busted, Ogerpon's Tera formes, ...) count as their base.
+	// Mega and Primal formes are their own pick, so they never do.
+	if (typeof species.battleOnly === 'string' && !species.isMega && !species.isPrimal && list.includes(id(species.battleOnly))) return true;
 	return false;
+}
+
+/**
+ * The pick a set uses: a base species holding its Mega Stone or orb (or Rayquaza knowing Dragon Ascent)
+ * is its Mega or Primal forme, which has to be on the roster itself.
+ */
+function pickSpecies(dex: any, set: PokemonSet): Species {
+	const species = dex.species.get(set.species);
+	if (species.battleOnly) return species;
+	const item = dex.items.get(set.item);
+	const moves = (set.moves || []).map(id);
+	for (const name of species.otherFormes || []) {
+		const forme = dex.species.get(name);
+		if (!forme.exists || !(forme.isMega || forme.isPrimal)) continue;
+		const items = forme.requiredItems || (forme.requiredItem ? [forme.requiredItem] : []);
+		if (item.exists && items.includes(item.name)) return forme;
+		if (forme.requiredMove && moves.includes(id(forme.requiredMove))) return forme;
+	}
+	return species;
 }
 
 const leagueFormats = load().formats.map(league => {
@@ -63,6 +85,7 @@ const leagueFormats = load().formats.map(league => {
 	const format: AnyObject = {
 		name: league.name,
 		mod: league.mod || 'gen9',
+		gameType: league.gameType || 'singles',
 		ruleset: league.ruleset,
 		banlist: league.banlist || [],
 		searchShow: false,
@@ -79,7 +102,7 @@ const leagueFormats = load().formats.map(league => {
 				return problems;
 			}
 			for (const set of team) {
-				const species = this.dex.species.get(set.species);
+				const species = pickSpecies(this.dex, set);
 				if (!onRoster(species, roster.species)) {
 					problems.push(`${species.name} isn't on your roster.`);
 				}
@@ -100,7 +123,7 @@ const leagueFormats = load().formats.map(league => {
 			this.add('rule', 'Tera Captains: Only Tera Captains can Terastallize');
 		},
 	};
-	if (league.teraMode === 'none') format.ruleset = [...format.ruleset, 'Terastal Clause'];
+	// The site's ruleset already has Terastal Clause where Tera is off
 	return format;
 });
 
