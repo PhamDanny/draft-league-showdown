@@ -420,6 +420,17 @@
 
 	// ---------- speed tiers ----------
 
+	// One speed spread applied to every opponent Pokémon, so each is listed once
+	const SPEED_OPP = {
+		max: { label: '252+', ev: 252, iv: 31, mult: 1.1 },
+		neutral: { label: '252', ev: 252, iv: 31, mult: 1 },
+		scarf: { label: '252+ Scarf', ev: 252, iv: 31, mult: 1.1, scarf: true },
+		none: { label: 'No investment', ev: 0, iv: 31, mult: 1 },
+		min: { label: 'Min (0 IV, −)', ev: 0, iv: 0, mult: 0.9 },
+	};
+	let speedOpp = 'max';
+	try { const v = localStorage.getItem('dls-speed-opp'); if (SPEED_OPP[v]) speedOpp = v; } catch {}
+
 	function renderSpeed() {
 		const el = document.getElementById('tb-speed');
 		if (!el || !week) return;
@@ -432,9 +443,9 @@
 		for (const r of B.rosters[week.opp] || []) {
 			const sp = D.species[r.id];
 			if (!sp) continue;
-			const b = sp.stats.spe;
-			rws.push({ spe: Sets.calcStat('spe', b, 252, 31, 100, 1.1), id: r.id, note: '252+' });
-			rws.push({ spe: Sets.calcStat('spe', b, 0, 31, 100, 1), id: r.id, note: '0' });
+			const o = SPEED_OPP[speedOpp];
+			const spe = Sets.calcStat('spe', sp.stats.spe, o.ev, o.iv, 100, o.mult);
+			rws.push({ spe: o.scarf ? Math.floor(spe * 1.5) : spe, id: r.id, note: o.scarf ? 'Scarf' : '' });
 		}
 		for (const past of B.scouting[week.opp] || []) {
 			for (const ps of past.sets) {
@@ -443,7 +454,10 @@
 			}
 		}
 		rws.sort((a, b) => b.spe - a.spe || (a.mine ? -1 : 1));
-		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed · vs ${esc(week.oppName)}</h3></summary><div class="speedlist">${rws.map(r => `
+		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed · vs ${esc(week.oppName)}</h3></summary>
+			<label class="row speed-opp"><span class="muted">Their Pokémon</span><select class="inp mini" data-act="speed-opp" aria-label="Opponent speed spread">${Object.entries(SPEED_OPP).map(([v, o]) =>
+				`<option value="${v}" ${v === speedOpp ? 'selected' : ''}>${o.label}</option>`).join('')}</select></label>
+			<div class="speedlist">${rws.map(r => `
 			<div class="row ${r.mine ? 'mine' : ''} ${r.scouted ? 'scouted' : ''}"><span class="num">${r.spe}</span>${img(r.id, 'xs')}<span class="nm">${esc(nameOf(r.id))}</span><span class="spacer"></span><small class="muted">${r.note}</small></div>`).join('') ||
 			'<p class="muted">Add Pokémon to compare.</p>'}</div></details>`;
 	}
@@ -797,6 +811,12 @@
 	root.addEventListener('change', e => {
 		const t = e.target;
 		const d = t.dataset;
+		if (d.act === 'speed-opp') {
+			speedOpp = t.value;
+			try { localStorage.setItem('dls-speed-opp', speedOpp); } catch {}
+			renderSpeed();
+			return;
+		}
 		if (d.act === 'week') { goWeek(B.weeks.find(w => w.week === Number(t.value))); return; }
 		if (d.act === 'copy' && t.value) {
 			const w = B.weeks.find(x => x.week === Number(t.value));
