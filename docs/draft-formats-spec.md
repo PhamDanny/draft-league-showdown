@@ -220,6 +220,8 @@ These are the Gen 9 assumptions found by searching. Audit each file for more bef
 
 ## Open points to confirm with Danny
 
+Resolved: Danny agreed with points 1, 2, 3, 5 and 6 as written. For point 4, VGC defaults to **best of 3 with Item Clause** (`Item Clause = 1` in the `svvgc` rules, `bestOf: 3`); Tera for everyone and pick 4 at level 50 stand.
+
 1. **SV roster minimum.** The league template says 10 to 12; the draft boards sheet says 9 to 12. This spec uses 10 to 12 for SV and 9 to 12 where only the boards sheet speaks.
 2. **SV sleep rule.** The boards sheet bans "Spore and all directly sleep inducing moves" in SV (implemented as Sleep Moves Clause); the league template only has Sleep Clause. This spec follows the boards sheet.
 3. **SV item bans in other formats.** Quick Claw, King's Rock and Razor Fang are banned only in `sv`, because only the SV template lists them.
