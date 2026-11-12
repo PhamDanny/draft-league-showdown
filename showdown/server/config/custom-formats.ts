@@ -13,6 +13,7 @@ interface LeagueFormat {
 	leagueId: number;
 	name: string;
 	mod: string;
+	gameType?: 'singles' | 'doubles';
 	ruleset: string[];
 	banlist?: string[];
 	teraMode: 'captains' | 'all' | 'none';
@@ -63,6 +64,7 @@ const leagueFormats = load().formats.map(league => {
 	const format: AnyObject = {
 		name: league.name,
 		mod: league.mod || 'gen9',
+		gameType: league.gameType || 'singles',
 		ruleset: league.ruleset,
 		banlist: league.banlist || [],
 		searchShow: false,
@@ -100,7 +102,7 @@ const leagueFormats = load().formats.map(league => {
 			this.add('rule', 'Tera Captains: Only Tera Captains can Terastallize');
 		},
 	};
-	if (league.teraMode === 'none') format.ruleset = [...format.ruleset, 'Terastal Clause'];
+	// The site's ruleset already has Terastal Clause where Tera is off
 	return format;
 });
 

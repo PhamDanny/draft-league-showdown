@@ -5,11 +5,15 @@ import { dex, rosterIds, seedPool, teamsFromInputLog, toID } from './dex.ts';
 import { seal, unseal } from './seal.ts';
 
 export interface Settings {
-	mod: 'gen9';
+	/** Key of the league's format in PRESETS. */
+	format: string;
+	/** Showdown mod and game type; always the format's, never stored on their own. */
+	mod: string;
+	gameType: 'singles' | 'doubles';
 	teraMode: 'captains' | 'all' | 'none';
 	maxCaptains: number;
-	tcMaxCost: number;
-	tcExtra: number;
+	/** Tera points each player has for drafting Tera Captains. */
+	tcBudget: number;
 	draftType: 'snake' | 'linear';
 	budget: number;
 	rosterMin: number;
@@ -39,19 +43,115 @@ export function teamSize(settings: Settings, rosterSize: number) {
 	return settings.teamPreview === 'preselect' ? 6 : Math.max(6, rosterSize);
 }
 
-export const PRESETS: { [k: string]: { label: string, settings: Settings } } = {
-	gen9tc: {
-		label: 'Gen 9 Tera Captains',
+/** The commissioner's clause checkboxes. Everything else about a format's rules is fixed by its preset. */
+export const CLAUSES = ['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause', 'Baton Pass Clause'];
+const ALL_CLAUSES = CLAUSES;
+const NO_BATON_PASS = CLAUSES.filter(c => c !== 'Baton Pass Clause');
+
+export interface Preset {
+	label: string;
+	/** Not offered when creating a league (yet). */
+	hidden?: boolean;
+	/** Showdown rules that come with the format and aren't one of the clause checkboxes. */
+	rules: string[];
+	settings: Settings;
+}
+
+// Formats and pools from Princess Autumn's Draft League example draft boards (February 2026)
+// and the SV league template. Pools are in app/pools/draft-pools.json under the same keys.
+function preset(format: string, label: string, mod: string, o: {
+	budget: number, roster: [number, number], tera?: Settings['teraMode'], rules: string[], clauses?: string[],
+	gameType?: Settings['gameType'], bestOf?: number, hidden?: boolean,
+}): Preset {
+	return {
+		label, hidden: o.hidden, rules: o.rules,
 		settings: {
-			mod: 'gen9', teraMode: 'captains', maxCaptains: 2, tcMaxCost: 13, tcExtra: 3,
-			draftType: 'snake', budget: 120, rosterMin: 10, rosterMax: 12, bestOf: 3, playoffTeams: 6,
-			teraPreview: true, teamPreview: 'preselect', clauses: ['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause'],
-			trades: true, freeAgency: true,
+			format, mod, gameType: o.gameType || 'singles', teraMode: o.tera || 'none', maxCaptains: 2, tcBudget: 28,
+			draftType: 'snake', budget: o.budget, rosterMin: o.roster[0], rosterMax: o.roster[1], bestOf: o.bestOf || 1, playoffTeams: 6,
+			teraPreview: true, teamPreview: 'preselect', clauses: o.clauses || ALL_CLAUSES, trades: true, freeAgency: true,
 		},
-	},
+	};
+}
+const AAA_BANNED_ABILITIES = ['Arena Trap', 'Comatose', 'Contrary', 'Fur Coat', 'Good as Gold', 'Gorilla Tactics', 'Huge Power',
+	'Ice Scales', 'Illusion', 'Imposter', 'Innards Out', 'Magic Bounce', 'Magnet Pull', 'Moody', 'Neutralizing Gas', 'Orichalcum Pulse',
+	'Parental Bond', 'Poison Heal', 'Pure Power', 'Shadow Tag', 'Simple', 'Speed Boost', 'Stakeout', 'Triage', 'Toxic Debris',
+	'Unburden', 'Water Bubble', 'Wonder Guard'];
+export const PRESETS: { [k: string]: Preset } = {
+	sv: preset('sv', 'SV', 'gen9', {
+		budget: 115, roster: [10, 12], tera: 'captains',
+		rules: ['Standard Draft', 'Min Source Gen = 9', '-Moody', 'Sleep Moves Clause', '-Last Respects', '-Shed Tail',
+			'-Quick Claw', "-King's Rock", '-Razor Fang'],
+	}),
+	svlowtier: preset('svlowtier', 'SV Low Tier', 'gen9', {
+		budget: 90, roster: [8, 8], tera: 'captains',
+		rules: ['Standard Draft', 'Min Source Gen = 9', '-Moody', '-Drought', '-Drizzle', '-Last Respects', '-Shed Tail'],
+	}),
+	svnatdex: preset('svnatdex', 'SV NatDex', 'gen9', {
+		budget: 120, roster: [9, 12], hidden: true,
+		rules: ['Standard Draft', '+Unobtainable', '+Past', 'Min Source Gen = 1', '-Moody', '-Power Construct', '-Hidden Power',
+			'-Last Respects', '-Shed Tail', '-Ultranecrozium Z'],
+	}),
+	svnatdexubers: preset('svnatdexubers', 'SV NatDex Ubers', 'gen9', {
+		budget: 200, roster: [10, 12], clauses: NO_BATON_PASS, hidden: true,
+		rules: ['Standard Draft', '+Unobtainable', '+Past', 'Min Source Gen = 1', '-Moody', '-Xerneas + Geomancy', '-Revival Blessing',
+			'-Shed Tail', '-Arena Trap', '-Shadow Tag', '-Magnet Pull', '-Ultranecrozium Z'],
+	}),
+	svaaa: preset('svaaa', 'SV AAA', 'gen9', {
+		budget: 100, roster: [8, 8],
+		rules: ['Standard Draft', 'Min Source Gen = 9', '!Obtainable Abilities', 'Ability Clause = 1', '-Revival Blessing', '-Shed Tail',
+			...AAA_BANNED_ABILITIES.map(a => `-${a}`)],
+	}),
+	svvgc: preset('svvgc', 'SV VGC', 'gen9', {
+		budget: 115, roster: [9, 12], tera: 'all', gameType: 'doubles', bestOf: 3, hidden: true,
+		clauses: ['Species Clause', 'Evasion Clause', 'Endless Battle Clause'],
+		rules: ['Standard Draft', 'Min Source Gen = 9', 'Item Clause = 1', 'Adjust Level = 50', 'Picked Team Size = 4'],
+	}),
+	ss: preset('ss', 'SS', 'gen8', {
+		budget: 115, roster: [9, 12], hidden: true,
+		rules: ['Standard Draft', 'Dynamax Clause', '-Moody', '-Cinderace + Libero', '-Power Construct'],
+	}),
+	ssnatdex: preset('ssnatdex', 'SS NatDex', 'gen8', {
+		budget: 115, roster: [9, 12], hidden: true,
+		rules: ['Standard Draft', 'NatDex Mod', 'Dynamax Clause', '-Moody', '-Greninja + Protean', '-Battle Bond', '-Power Construct',
+			'-Cinderace + Libero', '-Ultranecrozium Z'],
+	}),
+	usum: preset('usum', 'USUM', 'gen7', {
+		budget: 120, roster: [9, 12], hidden: true,
+		rules: ['Standard Draft', '+LGPE', '-Moody', '-Kangaskhanite + Seismic Toss', '-Blaziken + Speed Boost', '-Greninja + Protean',
+			'-Battle Bond', '-Power Construct', '-Ultranecrozium Z'],
+	}),
+	oras: preset('oras', 'ORAS', 'gen6', {
+		budget: 120, roster: [9, 12], hidden: true,
+		rules: ['Standard Draft', '-Moody', '-Swagger', '-Blaziken + Speed Boost', '-Greninja + Protean', '-Battle Bond',
+			'-Latios + Soul Dew', '-Latias + Soul Dew'],
+	}),
+	bw: preset('bw', 'BW', 'gen5', {
+		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS, hidden: true,
+		rules: ['Standard Draft', '-Moody', 'Sleep Moves Clause', 'Gems Clause', '-Swagger', 'Baton Pass Stat Clause',
+			'Baton Pass Stat Trap Clause', '-Excadrill + Sand Rush', '-Landorus + Sheer Force', '-Sand Stream ++ Sand Rush',
+			'-Drizzle ++ Swift Swim', '-Drought ++ Chlorophyll'],
+	}),
+	dpp: preset('dpp', 'DPP', 'gen4', {
+		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS, hidden: true,
+		rules: ['Standard Draft', '!Evasion Abilities Clause', '-Swagger', 'Baton Pass Stat Clause', 'Baton Pass Stat Trap Clause',
+			'Accuracy Moves Clause', '-Sand Stream ++ Sand Veil', '-Snow Warning ++ Snow Cloak'],
+	}),
+	adv: preset('adv', 'ADV', 'gen3', {
+		budget: 90, roster: [8, 8], clauses: NO_BATON_PASS, hidden: true,
+		rules: ['Standard Draft', 'Speed Pass Clause'],
+	}),
 };
-export const CLAUSES = ['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Moody Clause',
-	'Endless Battle Clause', 'Baton Pass Clause'];
+export const DEFAULT_FORMAT = 'sv';
+export function presetOf(format: string | undefined): Preset {
+	return PRESETS[format || DEFAULT_FORMAT] || PRESETS[DEFAULT_FORMAT];
+}
+export function genOf(mod: string) {
+	return Number(/\d+/.exec(mod)?.[0]) || 9;
+}
+/** Showdown's base custom format for a league, to build its rules on. */
+export function customGameFor(settings: Settings) {
+	return `gen${genOf(settings.mod)}${settings.gameType === 'doubles' ? 'doubles' : ''}customgame`;
+}
 
 export interface League {
 	id: number; name: string; format_name: string; settings: string; invite_code: string;
@@ -64,47 +164,104 @@ export interface Match {
 	p1_wins: number; p2_wins: number; winner: number | null; revealed_at: number | null;
 }
 
+/** A league's settings: its format's preset under what the league stored. Leagues from before formats are SV. */
 export function settingsOf(league: League): Settings {
-	return { ...PRESETS.gen9tc.settings, ...JSON.parse(league.settings) };
+	const stored = JSON.parse(league.settings);
+	const p = presetOf(stored.format);
+	// Captain pricing settings from before Tera budgets
+	delete stored.tcMaxCost;
+	delete stored.tcExtra;
+	return { ...p.settings, ...stored, format: p.settings.format, mod: p.settings.mod, gameType: p.settings.gameType };
 }
 
 // Clauses Standard Draft already has; Showdown rejects a format that lists them twice.
-let baseRules: Set<string> | null = null;
-function inStandardDraft(clause: string) {
-	if (!baseRules) {
+const baseRules = new Map<string, Set<string>>();
+function inStandardDraft(settings: Settings, clause: string) {
+	const key = customGameFor(settings);
+	let rules = baseRules.get(key);
+	if (!rules) {
+		const d = dex(settings.mod);
 		try {
-			baseRules = new Set(dex().formats.getRuleTable(dex().formats.get('gen9customgame@@@Standard Draft', true)).keys());
+			rules = new Set(d.formats.getRuleTable(d.formats.get(`${key}@@@Standard Draft`, true)).keys());
 		} catch {
-			baseRules = new Set(['sleepclausemod', 'ohkoclause', 'evasionclause', 'endlessbattleclause']);
+			rules = new Set(['sleepclausemod', 'ohkoclause', 'evasionclause', 'endlessbattleclause']);
 		}
+		baseRules.set(key, rules);
 	}
-	return baseRules.has(toID(clause));
+	return rules.has(toID(clause));
 }
 export function ruleset(settings: Settings): string[] {
-	const rules = ['Standard Draft', 'Min Source Gen = 9'];
+	const rules = [...presetOf(settings.format).rules];
 	// Standard Draft bundles some clauses, so an unchecked one has to be taken out explicitly
 	for (const c of CLAUSES) {
 		const on = settings.clauses.includes(c);
-		if (on && !inStandardDraft(c)) rules.push(c);
-		else if (!on && inStandardDraft(c)) rules.push(`!${c}`);
+		if (on && !inStandardDraft(settings, c)) rules.push(c);
+		else if (!on && inStandardDraft(settings, c)) rules.push(`!${c}`);
 	}
-	if (settings.teraPreview && settings.teraMode !== 'none') rules.push('Tera Type Preview');
+	// "Moody Clause" was a checkbox once but isn't a rule in Showdown; it means banning Moody
+	if (settings.clauses.includes('Moody Clause') && !rules.includes('-Moody')) rules.push('-Moody');
+	if (genOf(settings.mod) === 9) {
+		if (settings.teraMode === 'none') rules.push('Terastal Clause');
+		else if (settings.teraPreview) rules.push('Tera Type Preview');
+	}
 	return rules;
 }
 
-export function formatNameFor(name: string, leagueId?: number) {
-	let formatName = `[Gen 9] ${name}`;
+export function formatNameFor(name: string, settings: Settings, leagueId?: number) {
+	const prefix = `[Gen ${genOf(settings.mod)}]`;
+	let formatName = `${prefix} ${name}`;
 	const clash = one<{ id: number }>('SELECT id FROM leagues WHERE format_name = ?', formatName);
-	if (clash && clash.id !== leagueId) formatName = `[Gen 9] ${name} ${leagueId ?? Date.now() % 1000}`;
+	if (clash && clash.id !== leagueId) formatName = `${prefix} ${name} ${leagueId ?? Date.now() % 1000}`;
 	return formatName;
+}
+
+/** What the Rules page says about a format: its game, and its fixed rules in plain words. */
+export function formatDescription(settings: Settings) {
+	const p = presetOf(settings.format);
+	const gen = genOf(settings.mod);
+	const game = settings.gameType === 'doubles' ? `Gen ${gen} Doubles, bring 6, pick 4, level 50` : `Gen ${gen} Singles, bring 6, team preview`;
+	const d = dex(settings.mod);
+	const banned: { [kind: string]: string[] } = { Pokémon: [], moves: [], abilities: [], items: [], combinations: [] };
+	const other: string[] = [];
+	const PLAIN: { [rule: string]: string } = {
+		'minsourcegen9': 'Only Pokémon, moves and abilities obtainable in Scarlet and Violet',
+		'+unobtainable': 'National Dex: Pokémon, moves and items from past generations are allowed',
+		'natdexmod': 'National Dex: Pokémon, moves and items from past generations are allowed',
+		'+lgpe': "Pokémon from Let's Go Pikachu and Eevee are allowed",
+		'!obtainableabilities': 'Almost Any Ability: any Pokémon can have any ability that isn\'t banned',
+		'abilityclause1': 'Ability Clause: no two Pokémon on a team can have the same ability',
+	};
+	for (const rule of p.rules) {
+		const id = rule.startsWith('+') || rule.startsWith('!') ? rule[0] + toID(rule) : toID(rule);
+		if (['standarddraft', 'minsourcegen1', '+past', 'adjustlevel50', 'pickedteamsize4'].includes(id)) continue;
+		if (PLAIN[id]) {
+			if (!other.includes(PLAIN[id])) other.push(PLAIN[id]);
+		} else if (rule.startsWith('-')) {
+			const thing = rule.slice(1).trim();
+			if (thing.includes('++')) banned.combinations.push(thing.split('++').map(s => s.trim()).join(' and ') + ' on the same team');
+			else if (thing.includes('+')) banned.combinations.push(thing.split('+').map(s => s.trim()).join(' with '));
+			else if (d.moves.get(thing).exists) banned.moves.push(thing);
+			else if (d.abilities.get(thing).exists) banned.abilities.push(thing);
+			else if (d.items.get(thing).exists) banned.items.push(thing);
+			else banned['Pokémon'].push(thing);
+		} else if (rule.startsWith('!')) {
+			const f = d.formats.get(rule.slice(1));
+			other.push(`No ${f.exists ? f.name : rule.slice(1)}`);
+		} else {
+			const f = d.formats.get(rule.replace(/ = .*/, ''));
+			other.push(f.exists && f.desc ? `${f.name}: ${f.desc.replace(/\.$/, '')}` : rule);
+		}
+	}
+	return { label: p.label, game, banned, other };
 }
 
 // ---------- leagues and members ----------
 
-export function createLeague(name: string, userId: number): number {
+export function createLeague(name: string, userId: number, format = DEFAULT_FORMAT): number {
 	return tx(() => {
+		const settings = presetOf(format).settings;
 		const r = run(`INSERT INTO leagues (name, format_name, settings, invite_code, created_by, created_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, name, formatNameFor(name), JSON.stringify(PRESETS.gen9tc.settings),
+			VALUES (?, ?, ?, ?, ?, ?)`, name, formatNameFor(name, settings), JSON.stringify(settings),
 		crypto.randomBytes(9).toString('base64url'), userId, now());
 		const leagueId = Number(r.lastInsertRowid);
 		run('INSERT INTO league_members (league_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)',
@@ -121,12 +278,35 @@ export function createSeason(leagueId: number) {
 	const r = run('INSERT INTO seasons (league_id, number, status, created_at) VALUES (?, ?, ?, ?)',
 		leagueId, (last?.n || 0) + 1, 'setup', now());
 	const seasonId = Number(r.lastInsertRowid);
-	const s = settingsOf(league);
-	const stmt = 'INSERT INTO pool (season_id, species_id, name, cost, tc_cost, banned) VALUES (?, ?, ?, ?, ?, ?)';
-	for (const p of seedPool(s.tcMaxCost, s.tcExtra)) {
-		run(stmt, seasonId, p.id, p.name, p.cost, p.tcCost, p.banned ? 1 : 0);
-	}
+	seedSeasonPool(seasonId, settingsOf(league).format);
 	return seasonId;
+}
+
+function seedSeasonPool(seasonId: number, format: string) {
+	run('DELETE FROM pool WHERE season_id = ?', seasonId);
+	const stmt = 'INSERT INTO pool (season_id, species_id, name, cost, tc_cost, banned, covers) VALUES (?, ?, ?, ?, ?, ?, ?)';
+	for (const p of seedPool(format)) {
+		run(stmt, seasonId, p.id, p.name, p.cost, p.tcCost, p.banned ? 1 : 0, p.covers ? JSON.stringify(p.covers) : null);
+	}
+}
+
+/** The format can only change before the league's first draft. */
+export function canChangeFormat(leagueId: number, season: Season) {
+	return season.status === 'setup' && season.number === 1 &&
+		!one('SELECT 1 FROM seasons WHERE league_id = ? AND id != ?', leagueId, season.id);
+}
+
+/** Switch a league to another format: its settings become the new preset's and the season's pool is reseeded. */
+export function changeFormat(league: League, season: Season, format: string, userId: number) {
+	if (!PRESETS[format] || !canChangeFormat(league.id, season)) return false;
+	const settings = PRESETS[format].settings;
+	tx(() => {
+		run('UPDATE leagues SET format_name = ?, settings = ? WHERE id = ?',
+			formatNameFor(league.name, settings, league.id), JSON.stringify(settings), league.id);
+		seedSeasonPool(season.id, format);
+	});
+	audit(league.id, userId, 'league.format', format);
+	return true;
 }
 
 export function leaguesFor(userId: number) {
@@ -169,6 +349,8 @@ export function joinLeague(code: string, userId: number): number | null {
 export interface DraftPlayer { user_id: number; draft_pos: number; finished: number; showdown_name: string }
 export interface Pick {
 	id: number; overall: number; slot: number; round: number; user_id: number; species_id: string; cost: number; captain: number; name: string;
+	/** Tera points spent on a captain pick; NULL for picks made before Tera budgets. */
+	tc_cost: number | null;
 }
 
 export function draftPlayers(seasonId: number) {
@@ -207,6 +389,8 @@ export interface DraftState {
 	spent: Map<number, number>;
 	counts: Map<number, number>;
 	captains: Map<number, number>;
+	/** Tera points each player has spent on captains. */
+	tcSpent: Map<number, number>;
 }
 
 export function draftState(season: Season, settings: Settings): DraftState {
@@ -215,10 +399,14 @@ export function draftState(season: Season, settings: Settings): DraftState {
 	const spent = new Map<number, number>();
 	const counts = new Map<number, number>();
 	const captains = new Map<number, number>();
+	const tcSpent = new Map<number, number>();
 	for (const p of ps) {
 		spent.set(p.user_id, (spent.get(p.user_id) || 0) + p.cost);
 		counts.set(p.user_id, (counts.get(p.user_id) || 0) + 1);
-		if (p.captain) captains.set(p.user_id, (captains.get(p.user_id) || 0) + 1);
+		if (p.captain) {
+			captains.set(p.user_id, (captains.get(p.user_id) || 0) + 1);
+			tcSpent.set(p.user_id, (tcSpent.get(p.user_id) || 0) + (p.tc_cost || 0));
+		}
 	}
 	const n = players.length;
 	let onClock: DraftPlayer | null = null;
@@ -236,7 +424,7 @@ export function draftState(season: Season, settings: Settings): DraftState {
 			}
 		}
 	}
-	return { players, picks: ps, onClock, slot: slotK, round, done: season.status === 'drafting' && !onClock, spent, counts, captains };
+	return { players, picks: ps, onClock, slot: slotK, round, done: season.status === 'drafting' && !onClock, spent, counts, captains, tcSpent };
 }
 
 export function cheapestAvailable(seasonId: number) {
@@ -253,12 +441,12 @@ export function pickProblem(season: Season, settings: Settings, state: DraftStat
 		'SELECT * FROM pool WHERE season_id = ? AND species_id = ?', season.id, speciesId);
 	if (!entry || entry.banned) return 'Not in the draft pool.';
 	if (state.picks.some(p => p.species_id === speciesId)) return `${entry.name} is taken.`;
-	let cost = entry.cost;
+	const cost = entry.cost;
 	if (captain) {
 		if (settings.teraMode !== 'captains') return 'This league has no Tera Captains.';
 		if (entry.tc_cost == null) return `${entry.name} can't be a Tera Captain.`;
 		if ((state.captains.get(userId) || 0) >= settings.maxCaptains) return 'No captain slots left.';
-		cost = entry.tc_cost;
+		if ((state.tcSpent.get(userId) || 0) + entry.tc_cost > settings.tcBudget) return 'Over the Tera budget.';
 	}
 	const count = state.counts.get(userId) || 0;
 	const left = settings.budget - (state.spent.get(userId) || 0) - cost;
@@ -277,9 +465,9 @@ export function makePick(season: Season, settings: Settings, byUserId: number, f
 		if (problem) return problem;
 		const entry = one<{ cost: number, tc_cost: number | null }>('SELECT * FROM pool WHERE season_id = ? AND species_id = ?', season.id, speciesId)!;
 		const overall = state.picks.length;
-		run(`INSERT INTO picks (season_id, overall, slot, round, user_id, species_id, cost, captain, made_by, made_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, season.id, overall, state.slot, state.round, forUserId, speciesId,
-		captain ? entry.tc_cost : entry.cost, captain ? 1 : 0, byUserId, now());
+		run(`INSERT INTO picks (season_id, overall, slot, round, user_id, species_id, cost, tc_cost, captain, made_by, made_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, season.id, overall, state.slot, state.round, forUserId, speciesId,
+		entry.cost, captain ? entry.tc_cost : null, captain ? 1 : 0, byUserId, now());
 		advance(season.id, settings, state.slot);
 		audit(season.league_id, byUserId, 'draft.pick', `${speciesId}${captain ? ' (captain)' : ''} for user ${forUserId}`);
 		return null;
@@ -364,17 +552,31 @@ export function roster(seasonId: number, userId: number) {
 		WHERE picks.season_id = ? AND picks.user_id = ? ORDER BY picks.cost DESC, pool.name`, seasonId, userId);
 }
 
-/** Every species id a player's roster covers (formes included), mapped to the roster entry it belongs to. */
-export function rosterFormes(seasonId: number, userId: number) {
-	const poolIds = new Set(all<{ species_id: string }>('SELECT species_id FROM pool WHERE season_id = ?', seasonId).map(r => r.species_id));
-	const map = new Map<string, string>();
-	for (const r of roster(seasonId, userId)) for (const id of rosterIds(r.species_id, poolIds)) map.set(id, r.species_id);
-	return map;
+/** A season's pool ids (including ids an entry covers) and each entry's explicit `covers`. */
+export function poolIndex(seasonId: number) {
+	const ids = new Set<string>();
+	const covers = new Map<string, string[]>();
+	for (const r of all<{ species_id: string, covers: string | null }>('SELECT species_id, covers FROM pool WHERE season_id = ?', seasonId)) {
+		ids.add(r.species_id);
+		if (!r.covers) continue;
+		const list: string[] = JSON.parse(r.covers);
+		covers.set(r.species_id, list);
+		for (const id of list) ids.add(id);
+	}
+	return { ids, covers };
+}
+export type PoolIndex = ReturnType<typeof poolIndex>;
+/** Ids a pool entry covers in battle; see rosterIds. */
+export function entryIds(index: PoolIndex, speciesId: string, mod: string) {
+	return rosterIds(speciesId, index.ids, mod, index.covers.get(speciesId));
 }
 
-/** Captain prices follow the Tera settings until the draft starts (hand-edited captain prices are replaced). */
-export function repricePoolCaptains(seasonId: number, tcMaxCost: number, tcExtra: number) {
-	run('UPDATE pool SET tc_cost = CASE WHEN cost <= ? THEN cost + ? ELSE NULL END WHERE season_id = ?', tcMaxCost, tcExtra, seasonId);
+/** Every species id a player's roster covers (formes included), mapped to the roster entry it belongs to. */
+export function rosterFormes(seasonId: number, userId: number, mod: string) {
+	const index = poolIndex(seasonId);
+	const map = new Map<string, string>();
+	for (const r of roster(seasonId, userId)) for (const id of entryIds(index, r.species_id, mod)) map.set(id, r.species_id);
+	return map;
 }
 
 // ---------- schedule and series ----------
@@ -563,18 +765,19 @@ export function showdownData() {
 	const leagues = all<League>('SELECT * FROM leagues ORDER BY id');
 	const formats = leagues.map(l => {
 		const s = settingsOf(l);
-		return { leagueId: l.id, name: l.format_name, mod: s.mod, ruleset: ruleset(s), teraMode: s.teraMode };
+		return { leagueId: l.id, name: l.format_name, mod: s.mod, gameType: s.gameType, ruleset: ruleset(s), teraMode: s.teraMode };
 	});
 	const rosters: { [formatid: string]: { [userid: string]: { species: string[], captains: string[] } } } = {};
 	for (const l of leagues) {
 		const season = currentSeason(l.id);
 		if (!season) continue;
-		const poolIds = new Set(all<{ species_id: string }>('SELECT species_id FROM pool WHERE season_id = ?', season.id).map(r => r.species_id));
+		const mod = settingsOf(l).mod;
+		const index = poolIndex(season.id);
 		const byUser: typeof rosters[string] = {};
 		for (const p of all<{ species_id: string, captain: number, showdown_id: string }>(`SELECT picks.species_id, picks.captain, users.showdown_id
 			FROM picks JOIN users ON users.id = picks.user_id WHERE picks.season_id = ?`, season.id)) {
 			const entry = (byUser[p.showdown_id] ||= { species: [], captains: [] });
-			const ids = rosterIds(p.species_id, poolIds);
+			const ids = entryIds(index, p.species_id, mod);
 			entry.species.push(...ids);
 			if (p.captain) entry.captains.push(...ids);
 		}

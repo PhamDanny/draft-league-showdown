@@ -72,11 +72,13 @@ const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel
 		if (!src) return;
 		e.preventDefault();
 		const root = document.getElementById('draft-root');
-		const { name, cost, captain } = src.dataset;
+		const { name, cost, captain, tc } = src.dataset;
 		const who = root?.dataset.for || '';
 		const left = Number(root?.dataset.left) - Number(cost);
-		dlg.querySelector('#pick-q').textContent = 'Draft ' + name + (captain ? ' as a Tera Captain' : '') + ' for ' + (who || cost + ' points') + '?';
-		dlg.querySelector('#pick-left').textContent = (who ? cost + ' points. ' + who + ' would have ' : 'You would have ') + left + ' points left.';
+		const price = cost + ' points' + (captain ? ' and ' + tc + ' Tera points' : '');
+		dlg.querySelector('#pick-q').textContent = 'Draft ' + name + (captain ? ' as a Tera Captain' : '') + ' for ' + (who || price) + '?';
+		dlg.querySelector('#pick-left').textContent = (who ? price + '. ' + who + ' would have ' : 'You would have ') + left + ' points' +
+			(captain ? ' and ' + (Number(root?.dataset.tcLeft) - Number(tc)) + ' Tera points' : '') + ' left.';
 		f.species.value = src.species.value;
 		f.captain.value = captain ? '1' : '';
 		f.for.value = root?.dataset.forId || '';
@@ -86,6 +88,12 @@ const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel
 </script>`;
 
 // ---------- helpers ----------
+
+/** Format picker for new leagues and for a league that hasn't drafted yet. */
+function formatSelect(current: string) {
+	return `<select name="format">${Object.entries(L.PRESETS).filter(([k, p]) => !p.hidden || k === current).map(([k, p]) =>
+		`<option value="${k}" ${k === current ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
+}
 
 function names(leagueId: number) {
 	const map = new Map<number, string>();
@@ -186,6 +194,7 @@ export function pageRoutes(app: Express) {
 	const newLeagueForm = (heading = true) => `<section class="panel" style="max-width:480px">${heading ? '<h2>New league</h2>' : ''}
 		<form method="post" action="/leagues/new" class="stack" style="gap:10px">
 			<label class="f">Name<input name="name" required maxlength="40"></label>
+			<label class="f">Format${formatSelect(L.DEFAULT_FORMAT)}</label>
 			<button class="btn primary" type="submit">Create</button>
 		</form></section>`;
 	app.get('/leagues/new', requireUser, (req, res) => {
@@ -196,7 +205,8 @@ export function pageRoutes(app: Express) {
 		if (!req.user!.is_admin) return res.status(403).send('Admins only.');
 		const name = String(req.body.name || '').replace(/[^\p{L}\p{N} '&.-]+/gu, '').trim().slice(0, 40);
 		if (!name) return res.redirect('/leagues/new');
-		const id = L.createLeague(name, req.user!.id);
+		const format = String(req.body.format || L.DEFAULT_FORMAT);
+		const id = L.createLeague(name, req.user!.id, L.PRESETS[format] && !L.PRESETS[format].hidden ? format : L.DEFAULT_FORMAT);
 		syncShowdown();
 		res.redirect(`/l/${id}/admin`);
 	});
@@ -343,7 +353,7 @@ export function pageRoutes(app: Express) {
 					monChip(r.species_id, { name: r.name, captain: settings.teraMode === 'captains' && !!r.captain })).join('')}</div></section>`;
 			}
 			const sets = new Map<string, any>();
-			const entry = L.rosterFormes(season.id, uid);
+			const entry = L.rosterFormes(season.id, uid, settings.mod);
 			const brought: string[] = []; // each game's roster entries, to check the same 6 were kept where the league says so
 			for (const g of games) {
 				if (!g.teams) continue;
@@ -500,6 +510,7 @@ export function pageRoutes(app: Express) {
 		const spent = actingFor ? state.spent.get(actingFor) || 0 : 0;
 		const count = actingFor ? state.counts.get(actingFor) || 0 : 0;
 		const caps = actingFor ? state.captains.get(actingFor) || 0 : 0;
+		const tcLeft = actingFor ? settings.tcBudget - (state.tcSpent.get(actingFor) || 0) : 0;
 		const cheapest = L.cheapestAvailable(season.id);
 		const taken = new Map(state.picks.map(p => [p.species_id, p.user_id]));
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
@@ -511,13 +522,13 @@ export function pageRoutes(app: Express) {
 		};
 		const poolRows = pool.filter(p => !taken.has(p.species_id)).map(p => {
 			const m = mon(p.species_id);
-			const tcOk = settings.teraMode === 'captains' && p.tc_cost != null && caps < settings.maxCaptains && canAfford(p.tc_cost);
+			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
 				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"><input type="hidden" name="species" value="${esc(p.species_id)}">
 					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points"><span class="hide-sm">Draft · </span>${p.cost}</button></form>
-				${settings.teraMode === 'captains' ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
-					<button class="btn sm tera" type="submit" ${tcOk ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.tc_cost} points"><span class="hide-sm">Captain · </span>${p.tc_cost}</button></form>` : '<span class="btn sm tera" style="visibility:hidden" aria-hidden="true"><span class="hide-sm">Captain · </span>00</span>') : ''}
+				${tc ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}" data-tc="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
+					<button class="btn sm tera" type="submit" ${tcOk ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points and ${p.tc_cost} Tera points"><span class="hide-sm">Captain · </span>${p.tc_cost} T</button></form>` : '<span class="btn sm tera" style="visibility:hidden" aria-hidden="true"><span class="hide-sm">Captain · </span>00 T</span>') : ''}
 			</div>`;
 		}).join('');
 		const myCount = state.counts.get(me) || 0;
@@ -527,7 +538,7 @@ export function pageRoutes(app: Express) {
 			(state.onClock ? `<span class="pill live">Round ${state.round + 1} · ${myTurn ? 'Your pick' : `${esc(state.onClock.showdown_name)} is picking`}</span>` : '<span class="pill final">Done</span>') :
 			'<span class="pill final">Final</span>';
 
-		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-for-id="${actingFor || ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
+		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-tc-left="${actingFor ? tcLeft : ''}" data-for-id="${actingFor || ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Draft</h1>${status}
 				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}
 				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
@@ -541,7 +552,8 @@ export function pageRoutes(app: Express) {
 				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: tc && !!p.captain })).join('') || '<span class="muted">No picks yet.</span>'}</div>
 					<div class="tiles">
 						<div><h3 style="margin:0">Budget</h3><div class="num" style="font-size:16px">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
-						${settings.teraMode === 'captains' ? `<div><h3 style="margin:0">Captains</h3><div class="num" style="font-size:16px">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>` : ''}
+						${tc ? `<div><h3 style="margin:0">Captains</h3><div class="num" style="font-size:16px">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>
+							<div><h3 style="margin:0">Tera budget</h3><div class="num" style="font-size:16px">${settings.tcBudget - (state.tcSpent.get(me) || 0)} / ${settings.tcBudget}</div></div>` : ''}
 						<div><h3 style="margin:0">Picks</h3><div class="num" style="font-size:16px">${myCount} / ${settings.rosterMax}</div></div>
 					</div>
 					${myCount >= settings.rosterMin && !myFinished && myCount < settings.rosterMax ? `<form method="post" action="/l/${league.id}/draft/finish" style="margin-top:16px"><button class="btn" type="submit">Done drafting</button></form>` : ''}
@@ -585,15 +597,21 @@ export function pageRoutes(app: Express) {
 
 	lg.get('/rules', (req, res) => {
 		const { settings } = req as LReq;
+		const f = L.formatDescription(settings);
+		const hasTera = L.genOf(settings.mod) === 9;
 		const rows: [string, string][] = [
-			['Format', 'Gen 9 Singles, bring 6, team preview'],
+			['Format', `${f.label}: ${f.game}`],
 			['Series', `Best of ${settings.bestOf}`],
 			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
-			['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, ${settings.tcMaxCost} points and under, +${settings.tcExtra} to draft as captain` :
-				settings.teraMode === 'all' ? 'Everyone can Terastallize' : 'No Terastallization'],
-			['Tera preview', settings.teraPreview ? 'On' : 'Off'],
+			...(hasTera ? [
+				['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, paid from a separate ${settings.tcBudget}-point Tera budget` :
+					settings.teraMode === 'all' ? 'Everyone can Terastallize' : 'No Terastallization'],
+				...(settings.teraMode !== 'none' ? [['Tera preview', settings.teraPreview ? 'On' : 'Off']] : []),
+			] as [string, string][] : []),
 			['Clauses', settings.clauses.join(', ') || 'None'],
+			...Object.entries(f.banned).filter(([, list]) => list.length).map(([kind, list]) => [`Banned ${kind}`, list.join(', ')] as [string, string]),
+			...(f.other.length ? [['Other rules', f.other.join('. ') + '.'] as [string, string]] : []),
 			['Trades', settings.trades ? 'On' : 'Off'],
 			['Free agency', settings.freeAgency ? 'On' : 'Off'],
 		];
@@ -661,17 +679,20 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 
 	lg.get('/admin/settings', commissioner, (req, res) => {
 		const { league, season, settings } = req as LReq;
-		const setup = season.status === 'setup';
 		const sel = (name: string, value: string, opts: [string, string][]) =>
 			`<select name="${name}">${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
 		const num = (name: keyof L.Settings, label: string, min = 0, max = 999, locked = false) =>
 			`<label class="f">${label}<input type="number" name="${name}" min="${min}" max="${max}" value="${settings[name]}" ${locked ? 'disabled' : ''}></label>`;
 		const check = (name: keyof L.Settings, label: string) =>
 			`<label class="row chk"><input type="checkbox" name="${name}" value="1" ${settings[name] ? 'checked' : ''}>${label}</label>`;
+		const formatOpen = L.canChangeFormat(league.id, season);
+		const hasTera = L.genOf(settings.mod) === 9;
 		adminPage(req, res, 'settings', 'Settings', `<section class="panel">
 			<form method="post" action="/l/${league.id}/admin/settings" class="stack settings-form" style="gap:12px">
 				<h3>League</h3>
-				<div class="form"><label class="f">Name<input name="name" value="${esc(league.name)}" maxlength="40"></label></div>
+				<div class="form"><label class="f">Name<input name="name" value="${esc(league.name)}" maxlength="40"></label>
+					<label class="f">Format${formatOpen ? formatSelect(settings.format) : `<input value="${esc(L.presetOf(settings.format).label)}" disabled>`}</label></div>
+				<p class="muted field-help">${formatOpen ? 'Changing the format replaces every setting below with that format\'s and resets the draft pool.' : 'The format is fixed once the first draft has started.'}</p>
 				<div class="row">${check('trades', 'Trades')}${check('freeAgency', 'Free agency')}</div>
 				<h3>Draft</h3>
 				<div class="form">
@@ -680,18 +701,17 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					${num('rosterMin', 'Min roster', 1, 20)}
 					${num('rosterMax', 'Max roster', 1, 20)}
 				</div>
+				<div class="stack" style="gap:12px" ${hasTera ? '' : 'hidden'}>
 				<h3>Tera</h3>
 				<div class="form">
 					<label class="f">Tera${sel('teraMode', settings.teraMode, [['captains', 'Tera Captains'], ['all', 'Everyone'], ['none', 'No Tera']])}</label>
 				</div>
 				<div class="form" id="tc-fields" ${settings.teraMode === 'captains' ? '' : 'hidden'}>
 					${num('maxCaptains', 'Max captains', 0, 6)}
-					${num('tcMaxCost', 'Captain max cost', 0, 40, !setup)}
-					${num('tcExtra', 'Captain extra cost', 0, 20, !setup)}
+					${num('tcBudget', 'Tera budget', 0, 200)}
 				</div>
-				<p class="muted field-help" id="tc-help" ${settings.teraMode === 'captains' ? '' : 'hidden'}>${setup ? 'Captain prices in the draft pool are worked out from these two when you save (this replaces captain prices edited by hand).' :
-					'Captain prices were set when the draft started. Change a single price from Draft pool.'}</p>
 				<div class="row">${check('teraPreview', 'Tera preview')}</div>
+				</div>
 				<h3>Series</h3>
 				<div class="form">
 					<label class="f">Series${sel('bestOf', String(settings.bestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']])}</label>
@@ -706,7 +726,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 		</section>`, `<script>
 // Captain fields only matter with Tera Captains; they're still submitted either way
 document.querySelector('[name=teraMode]').addEventListener('change', e => {
-	document.getElementById('tc-fields').hidden = document.getElementById('tc-help').hidden = e.target.value !== 'captains';
+	document.getElementById('tc-fields').hidden = e.target.value !== 'captains';
 });
 const TP = ${JSON.stringify(Object.fromEntries(Object.entries(L.TEAM_PREVIEW).map(([k, o]) => [k, o.rule]))).replace(/</g, '\\u003c')};
 document.querySelector('[name=teamPreview]').addEventListener('change', e => {
@@ -716,7 +736,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 	});
 
 	const ACTIONS: { [code: string]: string } = {
-		'league.create': 'created the league', 'league.export': 'exported the league', 'settings.update': 'changed settings',
+		'league.create': 'created the league', 'league.format': 'changed the format', 'league.export': 'exported the league', 'settings.update': 'changed settings',
 		'member.join': 'joined the league', 'member.remove': 'removed a member', 'member.promote': 'made a member commissioner',
 		'draft.start': 'started the draft', 'draft.pick': 'made a draft pick', 'draft.undo': 'undid the last pick', 'draft.finish': 'finished drafting',
 		'season.schedule': 'ended the draft and made the schedule', 'pool.edit': 'edited the pool', 'result.override': 'overrode a series result',
@@ -750,6 +770,15 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 	lg.post('/admin/settings', commissioner, form, (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const b = req.body;
+		const name = String(b.name || league.name).replace(/[^\p{L}\p{N} '&.-]+/gu, '').trim().slice(0, 40) || league.name;
+		if (b.format && b.format !== settings.format && L.PRESETS[b.format] && !L.PRESETS[b.format].hidden) {
+			// A new format replaces every setting with its preset's, so the rest of the form is ignored
+			const ok = L.changeFormat({ ...league, name }, season, b.format, req.user!.id);
+			if (ok) run('UPDATE leagues SET name = ? WHERE id = ?', name, league.id);
+			syncShowdown();
+			const note = ok ? `Format changed to ${L.PRESETS[b.format].label}. Settings and the draft pool were reset to match.` : 'The format is fixed once the first draft has started.';
+			return res.redirect(`/l/${league.id}/admin/settings?msg=${encodeURIComponent(note)}`);
+		}
 		const int = (v: unknown, d: number, min: number, max: number) => {
 			const x = parseInt(String(v));
 			return Number.isFinite(x) ? Math.max(min, Math.min(max, x)) : d;
@@ -758,8 +787,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 			...settings,
 			teraMode: ['captains', 'all', 'none'].includes(b.teraMode) ? b.teraMode : settings.teraMode,
 			maxCaptains: int(b.maxCaptains, settings.maxCaptains, 0, 6),
-			tcMaxCost: int(b.tcMaxCost, settings.tcMaxCost, 0, 40),
-			tcExtra: int(b.tcExtra, settings.tcExtra, 0, 20),
+			tcBudget: int(b.tcBudget, settings.tcBudget, 0, 200),
 			draftType: b.draftType === 'linear' ? 'linear' : 'snake',
 			budget: int(b.budget, settings.budget, 1, 500),
 			rosterMin: int(b.rosterMin, settings.rosterMin, 1, 20),
@@ -773,16 +801,11 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 			clauses: ([] as string[]).concat(b.clauses || []).filter(c => L.CLAUSES.includes(c)),
 		};
 		if (next.rosterMin > next.rosterMax) next.rosterMin = next.rosterMax;
-		const name = String(b.name || league.name).replace(/[^\p{L}\p{N} '&.-]+/gu, '').trim().slice(0, 40) || league.name;
-		run('UPDATE leagues SET name = ?, format_name = ?, settings = ? WHERE id = ?', name, L.formatNameFor(name, league.id), JSON.stringify(next), league.id);
+		if (L.genOf(next.mod) !== 9) next.teraMode = 'none';
+		run('UPDATE leagues SET name = ?, format_name = ?, settings = ? WHERE id = ?', name, L.formatNameFor(name, next, league.id), JSON.stringify(next), league.id);
 		audit(league.id, req.user!.id, 'settings.update', JSON.stringify(next));
-		let note = 'Saved.';
-		if (season.status === 'setup' && (next.tcMaxCost !== settings.tcMaxCost || next.tcExtra !== settings.tcExtra)) {
-			L.repricePoolCaptains(season.id, next.tcMaxCost, next.tcExtra);
-			note = 'Saved. Captain prices in the draft pool were updated to match.';
-		}
 		syncShowdown();
-		res.redirect(`/l/${league.id}/admin/settings?msg=${encodeURIComponent(note)}`);
+		res.redirect(`/l/${league.id}/admin/settings?msg=${encodeURIComponent('Saved.')}`);
 	});
 
 	lg.post('/admin/remove', commissioner, form, (req, res) => {
@@ -849,10 +872,10 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 				<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select>
 				<input class="inp" style="max-width:240px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off"></div>
 			<p class="muted" style="margin:0 0 12px">Changes save as you make them.</p>
-			<section class="panel"><div class="table-wrap"><table class="pool-table"><thead><tr><th>Pokémon</th><th class="r">Pts</th><th class="r">TC</th><th>Banned</th><th></th></tr></thead><tbody>
+			<section class="panel"><div class="table-wrap"><table class="pool-table"><thead><tr><th>Pokémon</th><th class="r">Pts</th><th class="r" title="Tera points to draft as a Tera Captain">Tera</th><th>Banned</th><th></th></tr></thead><tbody>
 			${pool.map(p => `<tr data-mon="${esc(p.species_id)}" data-types="${esc(mon(p.species_id).types.join(','))}"><td>${monLabel(p.species_id, { small: true })}</td>
 				<td class="r"><input type="number" min="0" max="99" value="${p.cost}" data-field="cost" data-id="${esc(p.species_id)}" aria-label="Cost"></td>
-				<td class="r"><input type="number" min="0" max="99" value="${p.tc_cost ?? ''}" placeholder="—" data-field="tc_cost" data-id="${esc(p.species_id)}" aria-label="Captain cost"></td>
+				<td class="r"><input type="number" min="0" max="99" value="${p.tc_cost ?? ''}" placeholder="—" data-field="tc_cost" data-id="${esc(p.species_id)}" aria-label="Tera Captain cost in Tera points"></td>
 				<td><input type="checkbox" ${p.banned ? 'checked' : ''} data-field="banned" data-id="${esc(p.species_id)}" aria-label="Banned"></td>
 				<td class="save-note" aria-live="polite"></td></tr>`).join('')}
 			</tbody></table></div></section>`,

@@ -44,12 +44,14 @@ assert((await new Client('Eve').req('GET', leagueUrl)).status === 302, 'signed-o
 
 await alice.req('POST', leagueUrl + '/admin/settings', [
 	...Object.entries({
-		name: 'Test League', teraMode: 'captains', maxCaptains: '1', tcMaxCost: '13', tcExtra: '3', draftType: 'snake',
+		name: 'Test League', teraMode: 'captains', maxCaptains: '1', tcBudget: '28', draftType: 'snake',
 		budget: '120', rosterMin: '6', rosterMax: '6', bestOf: '3', playoffTeams: '2', teraPreview: '1', trades: '1', freeAgency: '1',
 	}),
 	// the default clauses, some of which Standard Draft already includes
-	...['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause'].map(c => ['clauses', c]),
+	...['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause', 'Baton Pass Clause'].map(c => ['clauses', c]),
 ]);
+const rules = await (await alice.req('GET', leagueUrl + '/rules')).text();
+assert(rules.includes('SV: Gen 9 Singles') && rules.includes('separate 28-point Tera budget') && rules.includes('Shed Tail'), 'rules page describes the SV format');
 await alice.req('POST', leagueUrl + '/admin/start-draft', { order: 'listed' });
 
 const plans = {
@@ -63,6 +65,11 @@ const who = { Alice: alice, Bob: bob };
 // Out of turn pick must fail
 r = await bob.req('POST', leagueUrl + '/draft/pick', { species: 'dragapult' });
 assert(r.headers.get('location').includes('msg='), 'out-of-turn pick rejected');
+const msgOf = r => decodeURIComponent(r.headers.get('location').split('msg=')[1] || '');
+r = await alice.req('POST', leagueUrl + '/draft/pick', { species: 'garchomp', captain: '1' });
+assert(msgOf(r).includes("can't be a Tera Captain"), 'Garchomp as a Tera Captain rejected in SV');
+r = await alice.req('POST', leagueUrl + '/draft/pick', { species: 'arceus' });
+assert(msgOf(r) === 'Not in the draft pool.', 'banned Pokémon rejected on the picker\'s own turn');
 for (const p of order) {
 	const [species, captain] = plans[p][idx[p]++];
 	r = await who[p].req('POST', leagueUrl + '/draft/pick', { species, ...(captain ? { captain: '1' } : {}) });
@@ -70,6 +77,10 @@ for (const p of order) {
 }
 const draftPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
 assert(draftPage.includes('Done'), 'draft shows done');
+// Alice: 71 points (Weavile 15 of it) and 12 Tera points; Bob: 69 points and 5 Tera points
+assert(draftPage.includes('<small class="num">49 left</small>') && draftPage.includes('<small class="num">51 left</small>'), 'points budget charged the normal price for captains');
+assert(/Tera budget<\/h3><div class="num"[^>]*>16 \/ 28</.test(draftPage), 'captain Tera price charged to the Tera budget');
+assert(/Tera budget<\/h3><div class="num"[^>]*>23 \/ 28</.test(await (await bob.req('GET', leagueUrl + '/draft')).text()), "Bob's Tera budget");
 await alice.req('POST', leagueUrl + '/admin/schedule', {});
 const sched = await (await alice.req('GET', leagueUrl + '/schedule')).text();
 const seriesId = /\/series\/(\d+)/.exec(sched)[1];
@@ -194,14 +205,14 @@ r = await alice.req('POST', '/leagues/new', { name: 'Preview League' });
 const league2 = r.headers.get('location').replace('/admin', '');
 await bob.req('GET', '/join/' + /\/join\/([\w-]+)/.exec(await (await alice.req('GET', league2 + '/admin')).text())[1]);
 await alice.req('POST', league2 + '/admin/settings', {
-	name: 'Preview League', teraMode: 'all', maxCaptains: '0', tcMaxCost: '13', tcExtra: '3', draftType: 'snake',
+	name: 'Preview League', teraMode: 'all', maxCaptains: '0', tcBudget: '28', draftType: 'snake',
 	budget: '200', rosterMin: '8', rosterMax: '8', bestOf: '3', playoffTeams: '2', teamPreview: 'match', clauses: 'Species Clause',
 });
 assert((await (await alice.req('GET', league2 + '/admin/settings')).text()).includes('<option value="match" selected>'), 'team preview setting saved');
 assert((await (await alice.req('GET', league2 + '/rules')).text()).includes('Each match'), 'rules page shows team preview');
 await alice.req('POST', league2 + '/admin/start-draft', { order: 'listed' });
 const plans2 = {
-	Alice: [...plans.Alice.map(x => x[0]), 'dragapult', 'kingambit'],
+	Alice: [...plans.Alice.map(x => x[0]), 'dragonite', 'kingambit'], // Dragapult is banned in SV
 	Bob: [...plans.Bob.map(x => x[0]), 'heatran', 'ironvaliant'],
 };
 const idx2 = { Alice: 0, Bob: 0 };
@@ -253,5 +264,44 @@ if (!/Final/.test(s2)) {
 }
 assert(/Final/.test(s2), 'preview series final');
 assert((s2.match(/Brought a different 6/g) || []).length === 1, 'series flags the player who changed their 6');
+A2.ws.close();
+B2.ws.close();
+
+// ---- one league per format: seeded pool and a Showdown format that loads ----
+const POOLS = { sv: [766, 34], svlowtier: [653, 145], svnatdex: [1107, 58], svnatdexubers: [1160, 16], svaaa: [741, 58], svvgc: [748, 36],
+	ss: [678, 32], ssnatdex: [956, 62], usum: [851, 48], oras: [748, 38], bw: [634, 25], dpp: [475, 20], adv: [367, 19] };
+const chooser = /<select name="format">(.*?)<\/select>/s.exec(await (await alice.req('GET', '/leagues/new')).text())[1];
+const offered = [...chooser.matchAll(/<option value="(\w+)"/g)].map(m => m[1]);
+assert(offered.includes('sv') && offered.every(f => POOLS[f]), 'format chooser offers ' + offered.join(', '));
+const GEN = { ss: 8, ssnatdex: 8, usum: 7, oras: 6, bw: 5, dpp: 4, adv: 3 };
+for (const f of Object.keys(POOLS)) GEN[f] ||= 9;
+const formatNames = {};
+for (const f of offered) {
+	r = await alice.req('POST', '/leagues/new', { name: 'Fmt ' + f, format: f });
+	const url = r.headers.get('location').replace('/admin', '');
+	const pool = await (await alice.req('GET', url + '/admin/pool')).text();
+	const banned = (pool.match(/<input type="checkbox" checked data-field="banned"/g) || []).length;
+	const total = (pool.match(/<tr data-mon=/g) || []).length;
+	assert(total - banned === POOLS[f][0] && banned === POOLS[f][1], `${f}: pool has ${total - banned} priced and ${banned} banned`);
+	formatNames[f] = `gen${GEN[f]}fmt${f}`;
+}
+// Switching format before the draft reseeds the pool
+r = await alice.req('POST', '/leagues/new', { name: 'Switcher', format: 'sv' });
+const switcher = r.headers.get('location').replace('/admin', '');
+await alice.req('POST', switcher + '/admin/settings', { name: 'Switcher', format: 'svlowtier' });
+const sw = await (await alice.req('GET', switcher + '/admin/pool')).text();
+assert((sw.match(/<tr data-mon=/g) || []).length === 653 + 145, 'changing the format reseeds the pool');
+assert((await (await alice.req('GET', switcher + '/admin/settings')).text()).includes('value="90"'), 'changing the format resets settings');
+await new Promise(r => setTimeout(r, 3000));
+for (let i = 0; i < 60; i++) {
+	if ((await alice.req('GET', '/showdown/info')).status === 200) break;
+	await new Promise(r => setTimeout(r, 1000));
+}
+await new Promise(r => setTimeout(r, 1500));
+const A3 = await connect(alice);
+const formatsLine = A3.lines.find(l => l.startsWith('|formats|')) || '';
+const loaded = formatsLine.split('|').map(s => s.split(',')[0].toLowerCase().replace(/[^a-z0-9]+/g, ''));
+for (const f of offered) assert(loaded.includes(formatNames[f]), `${f}: Showdown loaded ${formatNames[f]}`);
+A3.ws.close();
 console.log('\nAll good.');
 process.exit(0);

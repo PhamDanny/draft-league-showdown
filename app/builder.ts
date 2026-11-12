@@ -2,7 +2,7 @@
 // the server only hands out public data (rosters, Pokédex entries, finished series' sets).
 import type { Express, Request, Response, Router } from 'express';
 import { all, one } from './db.ts';
-import { descs, dex, mon, rosterIds, toID, TYPES } from './dex.ts';
+import { descs, dex, mon, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
 import { playButton } from './pages.ts';
@@ -16,24 +16,31 @@ const dexCache = new Map<string, string>();
 function dexJson(seasonId: number, settings: L.Settings) {
 	const picks = all<{ species_id: string }>('SELECT species_id FROM picks WHERE season_id = ?', seasonId);
 	const rules = L.ruleset(settings);
-	const key = `${seasonId}:${rules.join(',')}:${picks.map(p => p.species_id).sort().join(',')}`;
+	const key = `${seasonId}:${settings.mod}:${rules.join(',')}:${picks.map(p => p.species_id).sort().join(',')}`;
 	const hit = dexCache.get(key);
 	if (hit) return hit;
-	const d = dex();
+	const d = dex(settings.mod);
 	const text = descs();
 	let banned = (_: string) => false;
+	// Moves and items from outside the format's game, allowed by NatDex and similar rules
+	const extra = new Set<string>();
 	try {
-		const table = d.formats.getRuleTable(d.formats.get(`gen9customgame@@@${rules.join(',')}`, true));
+		const table = d.formats.getRuleTable(d.formats.get(`${L.customGameFor(settings)}@@@${rules.join(',')}`, true));
 		banned = (thing: string) => table.isBanned(thing);
+		for (const tag of ['Past', 'Unobtainable', 'LGPE']) if (table.has(`+tag:${toID(tag)}`)) extra.add(tag);
 	} catch {}
-	const poolIds = new Set(all<{ species_id: string }>('SELECT species_id FROM pool WHERE season_id = ?', seasonId).map(r => r.species_id));
+	const legal = (x: any) => x.exists && (!x.isNonstandard || extra.has(x.isNonstandard));
+	// Almost Any Ability: every ability that isn't banned is open to every Pokémon
+	const anyAbility = rules.includes('!Obtainable Abilities') ? d.abilities.all()
+		.filter((a: any) => legal(a) && a.id !== 'noability' && !banned(`ability:${a.id}`)).map((a: any) => a.name).sort() : null;
+	const index = L.poolIndex(seasonId);
 	const species: { [id: string]: any } = {};
 	const moves: { [id: string]: any } = {};
 	for (const p of picks) {
-		for (const id of rosterIds(p.species_id, poolIds)) {
+		for (const id of L.entryIds(index, p.species_id, settings.mod)) {
 			if (species[id]) continue;
 			const s = d.species.get(id);
-			const pool: string[] = [...d.species.getMovePool(s.id)].filter(m => d.moves.get(m).exists && !d.moves.get(m).isNonstandard && !banned(`move:${m}`));
+			const pool: string[] = [...d.species.getMovePool(s.id)].filter(m => legal(d.moves.get(m)) && !banned(`move:${m}`));
 			for (const m of pool) {
 				if (moves[m]) continue;
 				const mv = d.moves.get(m);
@@ -44,14 +51,14 @@ function dexJson(seasonId: number, settings: L.Settings) {
 			}
 			species[id] = {
 				name: s.name, types: s.types, stats: s.baseStats,
-				abilities: [...new Set(Object.values(s.abilities) as string[])].filter(a => !banned(`ability:${toID(a)}`)),
-				moves: pool.sort(), sprite: mon(id).sprite,
+				abilities: anyAbility || [...new Set(Object.values(s.abilities) as string[])].filter(a => !banned(`ability:${toID(a)}`)),
+				moves: pool.sort(), sprite: mon(id, settings.mod).sprite,
 				item: s.requiredItem || (s.requiredItems ? s.requiredItems[0] : undefined),
 				genders: s.gender ? [] : ['M', 'F'],
 			};
 		}
 	}
-	const itemList = d.items.all().filter((i: any) => i.exists && !i.isNonstandard && i.gen <= 9 && !banned(`item:${i.id}`));
+	const itemList = d.items.all().filter((i: any) => legal(i) && !banned(`item:${i.id}`));
 	const items = itemList.map((i: any) => i.name).sort();
 	const itemDesc: { [name: string]: string } = {};
 	for (const i of itemList) itemDesc[i.name] = text.items[i.id]?.shortDesc || text.items[i.id]?.desc || '';
@@ -84,10 +91,10 @@ function revealedSets(matchId: number, userId: number) {
 	return [...sets.values()];
 }
 
-function rosterOf(seasonId: number, userId: number) {
-	const poolIds = new Set(all<{ species_id: string }>('SELECT species_id FROM pool WHERE season_id = ?', seasonId).map(r => r.species_id));
+function rosterOf(seasonId: number, userId: number, mod: string) {
+	const index = L.poolIndex(seasonId);
 	return L.roster(seasonId, userId).map(r => ({
-		id: r.species_id, captain: !!r.captain, formes: rosterIds(r.species_id, poolIds),
+		id: r.species_id, captain: !!r.captain, formes: L.entryIds(index, r.species_id, mod),
 	}));
 }
 
@@ -97,12 +104,12 @@ function builderContext(req: Request) {
 	const n = namesOf(league.id);
 	const all = L.matches(season.id);
 	const mine = all.filter(m => m.p1 === me || m.p2 === me);
-	const myRoster = rosterOf(season.id, me);
+	const myRoster = rosterOf(season.id, me, settings.mod);
 	const rosters: { [uid: number]: ReturnType<typeof rosterOf> } = {};
 	const scouting: { [uid: number]: { week: number, sets: any[] }[] } = {};
 	const weeks = mine.map(m => {
 		const opp = m.p1 === me ? m.p2 : m.p1;
-		rosters[opp] ||= rosterOf(season.id, opp);
+		rosters[opp] ||= rosterOf(season.id, opp, settings.mod);
 		if (!scouting[opp]) {
 			scouting[opp] = all.filter(x => x.status === 'final' && (x.p1 === opp || x.p2 === opp))
 				.map(x => ({ week: x.week, sets: revealedSets(x.id, opp) })).filter(x => x.sets.length);
@@ -206,7 +213,7 @@ export function builderRoutes(lg: Router) {
 		if (!m) return res.redirect(`/l/${league.id}/schedule`);
 		// A final series stays viewable here until the player moves on, so the last game's result shows.
 		const opp = m.p1 === me ? m.p2 : m.p1;
-		const roster = rosterOf(season.id, me);
+		const roster = rosterOf(season.id, me, settings.mod);
 		const oppUser = one<{ showdown_id: string, showdown_name: string }>('SELECT showdown_id, showdown_name FROM users WHERE id = ?', opp)!;
 		const ctx = {
 			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, format: toID(league.format_name),

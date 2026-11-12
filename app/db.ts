@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 `);
 
+/** Adds a column to a table made by an older version of the schema above. */
+function addColumn(table: string, column: string, type: string) {
+	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+	if (!cols.some(c => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+// Tera points a captain pick spent from the Tera budget (NULL: picked before Tera budgets, counts as 0)
+addColumn('picks', 'tc_cost', 'INTEGER');
+// JSON array of species ids one pool entry covers (e.g. DPP's Rotom appliance formes), or NULL
+addColumn('pool', 'covers', 'TEXT');
+
 export function now() {
 	return Math.floor(Date.now() / 1000);
 }
