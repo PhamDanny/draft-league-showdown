@@ -97,6 +97,7 @@ function builderContext(req: Request) {
 	const n = namesOf(league.id);
 	const all = L.matches(season.id);
 	const mine = all.filter(m => m.p1 === me || m.p2 === me);
+	const myRoster = rosterOf(season.id, me);
 	const rosters: { [uid: number]: ReturnType<typeof rosterOf> } = {};
 	const scouting: { [uid: number]: { week: number, sets: any[] }[] } = {};
 	const weeks = mine.map(m => {
@@ -115,7 +116,8 @@ function builderContext(req: Request) {
 	return {
 		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name,
 		format: toID(league.format_name), teraMode: settings.teraMode,
-		roster: rosterOf(season.id, me), rosters, scouting, weeks,
+		roster: myRoster, rosters, scouting, weeks,
+		teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, myRoster.length),
 		current: L.currentWeek(season.id),
 	};
 }
@@ -204,11 +206,13 @@ export function builderRoutes(lg: Router) {
 		if (!m) return res.redirect(`/l/${league.id}/schedule`);
 		// A final series stays viewable here until the player moves on, so the last game's result shows.
 		const opp = m.p1 === me ? m.p2 : m.p1;
+		const roster = rosterOf(season.id, me);
 		const oppUser = one<{ showdown_id: string, showdown_name: string }>('SELECT showdown_id, showdown_name FROM users WHERE id = ?', opp)!;
 		const ctx = {
 			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, format: toID(league.format_name),
 			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id, myName: req.user!.showdown_name,
-			roster: rosterOf(season.id, me), teraMode: settings.teraMode,
+			roster, teraMode: settings.teraMode,
+			teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, roster.length),
 			state: seriesState(m, me, settings.bestOf),
 		};
 		render(req, res, `vs ${oppUser.showdown_name}`, 'schedule', '<div id="battle"></div>',

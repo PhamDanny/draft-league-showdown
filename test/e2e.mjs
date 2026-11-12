@@ -185,5 +185,67 @@ console.log('Tera options seen:', { Alice: [...teraSeen.Alice], Bob: [...teraSee
 assert([...teraSeen.Alice].every(n => n === 'Weavile') && [...teraSeen.Bob].every(n => n === 'Hippowdon'), 'only Tera Captains could Terastallize');
 const st = await (await alice.req('GET', leagueUrl)).text(); // standings are on Home
 assert(/1–0/.test(st), 'standings updated');
+
+// ---- "Each match" team preview: 8-mon rosters, bring 6, same 6 for the whole series ----
+A.ws.close();
+B.ws.close();
+r = await alice.req('POST', '/leagues/new', { name: 'Preview League' });
+const league2 = r.headers.get('location').replace('/admin', '');
+await bob.req('GET', '/join/' + /\/join\/([\w-]+)/.exec(await (await alice.req('GET', league2 + '/admin')).text())[1]);
+await alice.req('POST', league2 + '/admin/settings', {
+	name: 'Preview League', teraMode: 'all', maxCaptains: '0', tcMaxCost: '13', tcExtra: '3', draftType: 'snake',
+	budget: '200', rosterMin: '8', rosterMax: '8', bestOf: '3', playoffTeams: '2', teamPreview: 'match', clauses: 'Species Clause',
+});
+assert((await (await alice.req('GET', league2 + '/admin/settings')).text()).includes('<option value="match" selected>'), 'team preview setting saved');
+assert((await (await alice.req('GET', league2 + '/rules')).text()).includes('Each match'), 'rules page shows team preview');
+await alice.req('POST', league2 + '/admin/start-draft', { order: 'listed' });
+const plans2 = {
+	Alice: [...plans.Alice.map(x => x[0]), 'dragapult', 'kingambit'],
+	Bob: [...plans.Bob.map(x => x[0]), 'heatran', 'ironvaliant'],
+};
+const idx2 = { Alice: 0, Bob: 0 };
+for (const p of [...order, 'Alice', 'Bob', 'Bob', 'Alice']) {
+	r = await who[p].req('POST', league2 + '/draft/pick', { species: plans2[p][idx2[p]++] });
+	if (r.headers.get('location').includes('msg=')) assert(false, `${p} picks ${plans2[p][idx2[p] - 1]}: ${decodeURIComponent(r.headers.get('location'))}`);
+}
+assert(true, 'drafted 8 each');
+await alice.req('POST', league2 + '/admin/schedule', {});
+const series2 = /\/series\/(\d+)/.exec(await (await alice.req('GET', league2 + '/schedule')).text())[1];
+const builder = await (await alice.req('GET', league2 + '/builder')).text();
+assert(/"teamPreview":"match","teamSize":8/.test(builder), 'teambuilder preps sets for the whole roster');
+await new Promise(r => setTimeout(r, 3000)); // Showdown restarts for the new format
+for (let i = 0; i < 60; i++) {
+	if ((await alice.req('GET', '/showdown/info')).status === 200) break;
+	await new Promise(r => setTimeout(r, 1000));
+}
+await new Promise(r => setTimeout(r, 1500));
+const A2 = await connect(alice);
+const B2 = await connect(bob);
+autoplay(A2, 'Alice');
+autoplay(B2, 'Bob');
+const format2 = 'gen9previewleague';
+async function playGame2(n, aliceSix) {
+	const before = A2.lines.filter(l => l.startsWith('|win|')).length;
+	A2.send(`|/utm ${makeTeam(aliceSix)}`);
+	B2.send(`|/utm ${makeTeam(plans2.Bob.slice(2))}`);
+	A2.send(`|/challenge Bob, ${format2}`);
+	await new Promise(r => setTimeout(r, 800));
+	B2.send('|/accept Alice');
+	await new Promise(r => setTimeout(r, 1500));
+	const roomid = [...new Set(A2.lines.map(l => (new RegExp(`(battle-${format2}-\\d+)`).exec(l) || [])[1]).filter(Boolean))].pop();
+	B2.send(`${roomid}|/forfeit`);
+	const start = Date.now();
+	while (A2.lines.filter(l => l.startsWith('|win|')).length === before) {
+		if (Date.now() - start > 60000) assert(false, `preview game ${n} finished in time`);
+		await new Promise(r => setTimeout(r, 300));
+	}
+	assert(true, `preview game ${n}: Alice brought ${aliceSix.join(', ')}`);
+	await new Promise(r => setTimeout(r, 1000));
+}
+await playGame2(1, plans2.Alice.slice(0, 6));
+await playGame2(2, plans2.Alice.slice(2, 8)); // a different 6, which an Each match league doesn't allow
+const s2 = await (await alice.req('GET', `${league2}/series/${series2}`)).text();
+assert(/Final/.test(s2), 'preview series final');
+assert((s2.match(/Brought a different 6/g) || []).length === 1, 'series flags the player who changed their 6');
 console.log('\nAll good.');
 process.exit(0);

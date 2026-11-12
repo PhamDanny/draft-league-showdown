@@ -14,6 +14,8 @@
 	const teraAllowed = id => B.teraMode === 'all' || isCaptain(id);
 	const allowed = new Set(B.roster.flatMap(r => r.formes));
 	const EV_MAX = 508;
+	// Pre-select leagues build the 6 they bring; the others prep a set for every roster Pokémon and pick 6 per game or series
+	const SIZE = B.teamSize || 6;
 	const POPULAR = ['Leftovers', 'Heavy-Duty Boots', 'Choice Scarf', 'Choice Band', 'Choice Specs', 'Life Orb', 'Booster Energy', 'Assault Vest',
 		'Focus Sash', 'Rocky Helmet', 'Black Sludge', 'Eviolite', 'Covert Cloak', 'Loaded Dice', 'Air Balloon', 'Sitrus Berry', 'Lum Berry',
 		'Expert Belt', 'Light Clay', 'Weakness Policy', 'Clear Amulet', 'Mirror Herb', 'Throat Spray', 'Red Card', 'Eject Button', 'Eject Pack',
@@ -28,8 +30,8 @@
 
 	function load() {
 		const d = Sets.load(B.leagueId, B.seasonId, week ? week.week : 0);
-		d.team = d.team.slice(0, 6).map(s => (s && D.species[s.species] && allowed.has(s.species) ? s : null));
-		while (d.team.length < 6) d.team.push(null);
+		d.team = d.team.slice(0, SIZE).map(s => (s && D.species[s.species] && allowed.has(s.species) ? s : null));
+		while (d.team.length < SIZE) d.team.push(null);
 		return d;
 	}
 	function save() { if (!readOnly()) Sets.save(B.leagueId, B.seasonId, week ? week.week : 0, data); }
@@ -46,8 +48,8 @@
 	/** The team shown: what was played for a final week, otherwise what's saved here. */
 	const team = () => {
 		if (readOnly() && week.played?.length) {
-			const t = week.played.map(fromShowdown).filter(s => D.species[s.species]).slice(0, 6);
-			while (t.length < 6) t.push(null);
+			const t = week.played.map(fromShowdown).filter(s => D.species[s.species]).slice(0, SIZE);
+			while (t.length < SIZE) t.push(null);
 			return t;
 		}
 		return data.team;
@@ -93,6 +95,7 @@
 					<section class="panel tb-teampanel">
 						${B.weeks.length ? `<label class="f">Week<select class="inp" data-act="week">${B.weeks.map(w =>
 							`<option value="${w.week}" ${w === week ? 'selected' : ''}>${esc(weekLabel(w))}</option>`).join('')}</select></label>` : '<p class="eyebrow">No schedule yet</p>'}
+						${B.teamPreview === 'game' || B.teamPreview === 'match' ? `<p class="muted tb-hint">Prep a set for every Pokémon on your roster. You pick 6 of them ${B.teamPreview === 'game' ? 'before each game' : 'before game 1, and keep them for the series'} on the battle page.</p>` : ''}
 						<div class="tb-team" id="tb-team"></div>
 						<div class="tb-acts">${acts}</div>
 					</section>
@@ -674,7 +677,7 @@
 	function copyFrom(w) {
 		const src = w.status === 'final' && w.played?.length ? w.played.map(fromShowdown).filter(s => allowed.has(s.species)) :
 			Sets.load(B.leagueId, B.seasonId, w.week).team.filter(s => s && allowed.has(s.species));
-		return JSON.parse(JSON.stringify(src)).slice(0, 6);
+		return JSON.parse(JSON.stringify(src)).slice(0, SIZE);
 	}
 
 	function goWeek(w) {
@@ -749,7 +752,7 @@
 			const src = copyFrom(week);
 			const existing = Sets.load(B.leagueId, B.seasonId, target.week);
 			if (existing.team.some(Boolean) && !confirm(`Replace week ${target.week}'s team with this one?`)) return;
-			while (src.length < 6) src.push(null);
+			while (src.length < SIZE) src.push(null);
 			Sets.save(B.leagueId, B.seasonId, target.week, { ...existing, team: src });
 			goWeek(target);
 		} else if (d.act === 'export') {
@@ -784,9 +787,9 @@
 				if (!teraAllowed(s.species)) delete s.teraType;
 				else s.teraType ||= D.species[s.species].types[0];
 				return true;
-			}).slice(0, 6);
+			}).slice(0, SIZE);
 			if (!imported.length) { dlg.querySelector('#imp-msg').textContent = skipped.length ? `Not on your roster: ${skipped.join(', ')}` : 'Nothing to import.'; return; }
-			while (imported.length < 6) imported.push(null);
+			while (imported.length < SIZE) imported.push(null);
 			data.team = imported; slot = 0; save(); dlg.close(); render();
 		}
 	});
@@ -801,7 +804,7 @@
 			t.value = '';
 			if (!src.length) return;
 			if (data.team.some(Boolean) && !confirm(`Replace this week's team with week ${w.week}'s?`)) return;
-			while (src.length < 6) src.push(null);
+			while (src.length < SIZE) src.push(null);
 			data.team = src; slot = 0; save(); render();
 			return;
 		}

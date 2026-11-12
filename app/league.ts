@@ -17,9 +17,26 @@ export interface Settings {
 	bestOf: number;
 	playoffTeams: number;
 	teraPreview: boolean;
+	/** When each player's 6 are chosen; see TEAM_PREVIEW. */
+	teamPreview: TeamPreview;
 	clauses: string[];
 	trades: boolean;
 	freeAgency: boolean;
+}
+
+// preselect: the 6 are set in the teambuilder before the match.
+// game: sets are prepped for the whole roster, and each player picks 6 before every game.
+// match: like game, but the 6 picked for game 1 are kept for the rest of the series.
+// Either way the battle itself still opens with Showdown's team preview of the two 6s, for leads.
+export type TeamPreview = 'preselect' | 'game' | 'match';
+export const TEAM_PREVIEW: { [k in TeamPreview]: { label: string, rule: string } } = {
+	preselect: { label: 'Pre-select', rule: 'Bring 6, chosen before the series' },
+	game: { label: 'Each game', rule: 'Prep sets for the whole roster, pick 6 before every game' },
+	match: { label: 'Each match', rule: 'Prep sets for the whole roster, pick 6 before game 1 and keep them for the series' },
+};
+/** How many sets a player preps for a week. */
+export function teamSize(settings: Settings, rosterSize: number) {
+	return settings.teamPreview === 'preselect' ? 6 : Math.max(6, rosterSize);
 }
 
 export const PRESETS: { [k: string]: { label: string, settings: Settings } } = {
@@ -28,7 +45,7 @@ export const PRESETS: { [k: string]: { label: string, settings: Settings } } = {
 		settings: {
 			mod: 'gen9', teraMode: 'captains', maxCaptains: 2, tcMaxCost: 13, tcExtra: 3,
 			draftType: 'snake', budget: 120, rosterMin: 10, rosterMax: 12, bestOf: 3, playoffTeams: 6,
-			teraPreview: true, clauses: ['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause'],
+			teraPreview: true, teamPreview: 'preselect', clauses: ['Species Clause', 'Sleep Clause Mod', 'Evasion Clause', 'OHKO Clause', 'Endless Battle Clause'],
 			trades: true, freeAgency: true,
 		},
 	},

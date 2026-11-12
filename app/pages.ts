@@ -342,16 +342,22 @@ export function pageRoutes(app: Express) {
 					monChip(r.species_id, { name: r.name, captain: !!r.captain })).join('')}</div></section>`;
 			}
 			const sets = new Map<string, any>();
+			const brought: string[] = []; // each game's species, to check Each match leagues kept the same 6
 			for (const g of games) {
 				if (!g.teams) continue;
 				const teams = JSON.parse(g.teams);
 				const slot = g.p1 === uid ? 'p1' : 'p2';
-				for (const set of teams[slot]?.team || []) {
+				const team: any[] = teams[slot]?.team || [];
+				brought.push(team.map(s => toID(s.species)).sort().join(','));
+				for (const set of team) {
 					const key = exportSet(set);
 					if (!sets.has(key)) sets.set(key, set);
 				}
 			}
-			return `<section class="panel"><h2>${esc(n.get(uid))}</h2>${setList([...sets].map(([text, set]) => ({ set, text })), 'No games were recorded for this player (result entered by a commissioner).')}</section>`;
+			const changed = settings.teamPreview === 'match' && new Set(brought).size > 1;
+			return `<section class="panel"><h2>${esc(n.get(uid))}</h2>
+				${changed ? '<p class="flash">Brought a different 6 in different games of this series. This league locks each player\'s 6 for the whole series.</p>' : ''}
+				${setList([...sets].map(([text, set]) => ({ set, text })), 'No games were recorded for this player (result entered by a commissioner).')}</section>`;
 		};
 		const mine = m.p1 === req.user!.id || m.p2 === req.user!.id;
 		render(req, res, {
@@ -577,6 +583,7 @@ export function pageRoutes(app: Express) {
 		const rows: [string, string][] = [
 			['Format', 'Gen 9 Singles, bring 6, team preview'],
 			['Series', `Best of ${settings.bestOf}`],
+			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
 			['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, ${settings.tcMaxCost} points and under, +${settings.tcExtra} to draft as captain` :
 				settings.teraMode === 'all' ? 'Everyone can Terastallize' : 'No Terastallization'],
@@ -677,8 +684,10 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 				<h3>Series</h3>
 				<div class="form">
 					<label class="f">Series${sel('bestOf', String(settings.bestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']])}</label>
+					<label class="f">Team preview${sel('teamPreview', settings.teamPreview, Object.entries(L.TEAM_PREVIEW).map(([v, o]) => [v, o.label] as [string, string]))}</label>
 					${num('playoffTeams', 'Playoff teams', 0, 12)}
 				</div>
+				<p class="muted" id="tp-help" style="margin:0;font-size:13px">${esc(L.TEAM_PREVIEW[settings.teamPreview].rule)}.</p>
 				<h3>Clauses</h3>
 				<div class="row">${L.CLAUSES.map(c => `<label class="row chk"><input type="checkbox" name="clauses" value="${esc(c)}" ${settings.clauses.includes(c) ? 'checked' : ''}>${esc(c)}</label>`).join('')}</div>
 				<div><button class="btn primary" type="submit">Save</button></div>
@@ -687,6 +696,10 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 // Captain fields only matter with Tera Captains; they're still submitted either way
 document.querySelector('[name=teraMode]').addEventListener('change', e => {
 	document.getElementById('tc-fields').hidden = e.target.value !== 'captains';
+});
+const TP = ${JSON.stringify(Object.fromEntries(Object.entries(L.TEAM_PREVIEW).map(([k, o]) => [k, o.rule]))).replace(/</g, '\\u003c')};
+document.querySelector('[name=teamPreview]').addEventListener('change', e => {
+	document.getElementById('tp-help').textContent = TP[e.target.value] + '.';
 });
 </script>`);
 	});
@@ -743,6 +756,7 @@ document.querySelector('[name=teraMode]').addEventListener('change', e => {
 			bestOf: [1, 3, 5].includes(Number(b.bestOf)) ? Number(b.bestOf) : settings.bestOf,
 			playoffTeams: int(b.playoffTeams, settings.playoffTeams, 0, 12),
 			teraPreview: b.teraPreview === '1',
+			teamPreview: Object.hasOwn(L.TEAM_PREVIEW, String(b.teamPreview)) ? b.teamPreview : settings.teamPreview,
 			trades: b.trades === '1',
 			freeAgency: b.freeAgency === '1',
 			clauses: ([] as string[]).concat(b.clauses || []).filter(c => L.CLAUSES.includes(c)),

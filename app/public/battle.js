@@ -11,7 +11,32 @@
 	const ui = document.getElementById('bt-ui');
 	const D = await Sets.loadDex(C.leagueId);
 	const allowed = new Set(C.roster.flatMap(r => r.formes));
-	const team = () => Sets.load(C.leagueId, C.seasonId, C.week).team.filter(s => s && D.species[s.species] && allowed.has(s.species));
+	/** Every set saved for this week (6 in Pre-select leagues, the whole roster otherwise). */
+	const prepared = () => Sets.load(C.leagueId, C.seasonId, C.week).team.filter(s => s && D.species[s.species] && allowed.has(s.species));
+	// "Each game" and "Each match" leagues pick 6 of the prepared sets here, hidden until the battle starts.
+	// "Each match" keeps the 6 from game 1 for the rest of the series.
+	const PICKING = C.teamPreview === 'game' || C.teamPreview === 'match';
+	const pickKey = `dls:pick:${C.leagueId}:${C.seasonId}:${C.matchId}`;
+	function loadPick() {
+		try {
+			const v = JSON.parse(localStorage.getItem(pickKey) || 'null');
+			// A remake starts the series over, so a lock from before it no longer applies
+			if (v && Array.isArray(v.species)) return { species: v.species, locked: !!v.locked && (v.resets || 0) === (C.state.resets || 0) };
+		} catch {}
+		return { species: [], locked: false };
+	}
+	function savePick() {
+		try { localStorage.setItem(pickKey, JSON.stringify({ ...S.pick, resets: S.series.resets || 0 })); } catch {}
+	}
+	const pickSize = () => Math.min(6, prepared().length);
+	/** The sets brought to the next game. */
+	const team = () => {
+		const all = prepared();
+		if (!PICKING) return all;
+		return S.pick.species.map(id => all.find(s => s.species === id)).filter(Boolean);
+	};
+	const lockedIn = () => C.teamPreview === 'match' && S.pick.locked;
+	const teamReady = () => team().length > 0 && (!PICKING || team().length === (lockedIn() ? S.pick.species.length : pickSize()));
 
 	const S = {
 		online: false, // our connection is signed in
@@ -23,6 +48,7 @@
 		pendingRetry: 0,
 		wantReady: false, // readied while the opponent was offline; sent when they come online
 		discarded: new Set(), // games wiped by a remake
+		pick: loadPick(), // { species: [ids], locked } in Each game / Each match leagues
 	};
 	let ws;
 
@@ -40,7 +66,7 @@
 	function send(msg) { if (ws?.readyState === 1) ws.send(msg); }
 	function readyUp() {
 		const t = team();
-		if (!t.length) return;
+		if (!teamReady()) return;
 		send(`|/utm ${JSON.stringify(t.map(s => Sets.toShowdown(D, s)))}`);
 		// Challenging someone who is already challenging us in this format accepts theirs.
 		send(`|/challenge ${C.opp}, ${C.format}`);
@@ -85,9 +111,15 @@
 		if (!S.online) {
 			status = '<span class="muted">Connecting…</span>';
 			action = '';
-		} else if (!t.length) {
-			status = `<span>No team for week ${C.week} yet.</span>`;
+		} else if (!prepared().length) {
+			status = `<span>No ${PICKING ? 'sets' : 'team'} for week ${C.week} yet.</span>`;
 			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Build your team</a>`;
+		} else if (!teamReady() && lockedIn()) {
+			status = `<span>One of your locked-in Pokémon has no set saved for week ${C.week}. Restore it in the teambuilder.</span>`;
+			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Open teambuilder</a>`;
+		} else if (!teamReady()) {
+			status = `<span>Pick ${pickSize()} to bring to game ${g}. ${esc(C.oppName)} won't see them until the battle starts.</span>`;
+			action = `<button class="btn primary lg" disabled>Ready for game ${g}</button>`;
 		} else if (S.wantReady) {
 			status = `<span class="bt-wait">You're ready. Waiting for <b>${esc(C.oppName)}</b> to come online</span>`;
 			action = '<button class="btn lg" data-act="unready">Not ready</button>';
@@ -114,9 +146,44 @@
 				<span class="bt-vs">vs</span>
 				${side(C.oppName, S.oppReady, oppSub)}
 			</div>
+			${PICKING && S.online && prepared().length ? picker() : ''}
 			<div class="bt-cta">${action}<div class="bt-status">${status}</div></div>
 			${S.error ? `<p class="bt-err">${esc(S.error)}</p>` : ''}
 		</section>`;
+	}
+
+	/** Choose which prepared sets to bring (Each game / Each match leagues). */
+	function picker() {
+		const all = prepared();
+		const n = pickSize();
+		const chosen = S.pick.species.filter(id => all.some(s => s.species === id));
+		const busy = S.myReady || S.wantReady;
+		const locked = lockedIn();
+		const title = locked ? 'Your 6 for this series' : `Pick ${n} · ${chosen.length}/${n}`;
+		const note = locked ? 'Locked in at game 1. They stay the same for every game of the series.' :
+			busy ? 'To change your picks, click Not ready first.' :
+			C.teamPreview === 'match' ? 'These stay locked in for the whole series once game 1 starts.' :
+			'You pick again before every game. Leads are chosen at team preview once the battle starts.';
+		return `<div class="bt-pick">
+			<p class="eyebrow">${title}</p>
+			<div class="bt-pickgrid">${all.map(s => {
+				const on = chosen.includes(s.species);
+				const off = locked || busy || (!on && chosen.length >= n);
+				return `<button type="button" class="tslot bt-pickmon ${on ? 'on' : ''}" data-act="pick" data-species="${esc(s.species)}" aria-pressed="${on}" ${off ? 'disabled' : ''}>
+					${sprite(s.species)}<span class="tmeta"><b>${esc(s.nickname || D.species[s.species].name)}</b><small>${esc(s.item || 'No item')}</small></span>
+					${on && !locked ? `<span class="pill">${chosen.indexOf(s.species) + 1}</span>` : ''}</button>`;
+			}).join('')}</div>
+			<p class="muted bt-picknote">${note}</p>
+		</div>`;
+	}
+	function togglePick(id) {
+		if (S.myReady || S.wantReady || lockedIn()) return;
+		const all = prepared();
+		let chosen = S.pick.species.filter(x => all.some(s => s.species === x));
+		if (chosen.includes(id)) chosen = chosen.filter(x => x !== id);
+		else if (chosen.length < pickSize()) chosen.push(id);
+		S.pick = { ...S.pick, species: chosen };
+		savePick();
 	}
 
 	function resultBar() {
@@ -277,7 +344,8 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 		S.current = null;
 		S.error = '';
 		render();
-		readyUp();
+		// In Each game leagues the next 6 are picked first; otherwise the same team readies straight away
+		if (C.teamPreview !== 'game') readyUp();
 	}
 
 	// ---------- dialogs ----------
@@ -346,6 +414,8 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 			S.current = null;
 			if (S.myReady) unready();
 			S.myReady = S.wantReady = false;
+			S.pick = { ...S.pick, locked: false };
+			savePick();
 			S.error = '';
 			S.notice = 'The series was remade. Starting again from game 1.';
 		}
@@ -373,7 +443,8 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 		S.notice = '';
 		const a = t.dataset.act;
 		t.closest('details')?.removeAttribute('open');
-		if (a === 'ready') readyUp();
+		if (a === 'pick') togglePick(t.dataset.species);
+		else if (a === 'ready') readyUp();
 		else if (a === 'unready') unready();
 		else if (a === 'next') nextGame();
 		else if (a === 'forfeit') confirmForfeit();
@@ -496,6 +567,8 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 					S.current = room;
 					r.watching = true;
 					r.game = S.series.games.length + 1;
+					// Each match: the 6 brought to game 1 are the 6 for the series
+					if (C.teamPreview === 'match' && !S.pick.locked) { S.pick = { ...S.pick, locked: true }; savePick(); }
 					S.myReady = S.oppReady = false;
 					S.pendingRetry = 0;
 					S.error = '';
