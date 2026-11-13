@@ -92,15 +92,6 @@ function plural(n: number, word: string) {
 	return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
-/** Whether the player on the clock can't afford even the cheapest Pokémon left (pickProblem's budget rule). */
-function stuck(season: L.Season, settings: L.Settings, state: L.DraftState) {
-	if (!state.onClock) return false;
-	const uid = state.onClock.user_id;
-	const cheapest = L.cheapestAvailable(season.id);
-	const left = settings.budget - (state.spent.get(uid) || 0) - cheapest;
-	return left < 0 || left < Math.max(0, settings.rosterMin - (state.counts.get(uid) || 0) - 1) * cheapest;
-}
-
 function statusEmbed(league: L.League, season: L.Season, settings: L.Settings, state: L.DraftState, names: Map<number, Who>): Embed {
 	const n = state.players.length;
 	const name = (uid: number) => bold(names.get(uid));
@@ -111,11 +102,14 @@ function statusEmbed(league: L.League, season: L.Season, settings: L.Settings, s
 	} else if (state.onClock) {
 		const k = state.slot;
 		lines.push(`Round ${state.round + 1}, pick ${(k % n) + 1}: ${name(state.onClock.user_id)} is on the clock.`);
-		if (stuck(season, settings, state)) {
-			lines.push(`${name(state.onClock.user_id)} can't afford anything left in the pool. A commissioner can undo a pick or end the draft on the site.`);
-		}
+	} else if (state.stuck.length) {
+		lines.push('Nobody can pick. A commissioner can undo picks or end the draft with short rosters on the site.');
 	} else {
 		lines.push('Every player is done. Waiting for the commissioner to end the draft and make the schedule.');
+	}
+	// Same rule and wording as the draft page: these players' turns are skipped (draftState)
+	if (!complete && state.stuck.length) {
+		lines.push(`${state.stuck.map(p => name(p.user_id)).join(', ')} can't afford enough of the Pokémon left to reach ${settings.rosterMin}, so their turns are skipped.`);
 	}
 	const last = state.picks.at(-1);
 	if (!state.picks.length && !complete) {
@@ -142,7 +136,7 @@ function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftStat
 		fields: state.players.slice(0, 25).map((p, i) => {
 			let team = teamOf(names.get(p.user_id), p.showdown_name);
 			if (o.short) team = cut(team, o.short);
-			const marks = [p.finished ? 'done' : '', !complete && state.onClock?.user_id === p.user_id ? 'on the clock' : ''].filter(Boolean);
+			const marks = [p.finished ? 'done' : '', !complete && state.stuck.some(x => x.user_id === p.user_id) ? 'skipped' : '', !complete && state.onClock?.user_id === p.user_id ? 'on the clock' : ''].filter(Boolean);
 			const mine = state.picks.filter(x => x.user_id === p.user_id);
 			const list = mine.map(x => `${md(x.name)}${o.costs ? ` ${x.cost}` : ''}${tc && x.captain ? ' (TC)' : ''}`).join(', ');
 			return {

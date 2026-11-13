@@ -654,6 +654,33 @@ test('a board for the largest pool and a 16-player full draft stays under 6000 c
 	assert.equal(check('draft complete').length, 2);
 });
 
+test('the board names players whose turns are skipped because they are stuck', () => {
+	const users = ['StuckA', 'StuckB'].map((name, i) => Number(run(`INSERT INTO users (discord_id, display_name, showdown_name, showdown_id, created_at)
+		VALUES (?, ?, ?, ?, 0)`, `30000000000000000${i}`, name, name, name.toLowerCase()).lastInsertRowid));
+	const id = L.createLeague('Stuck League', users[0]);
+	run("INSERT INTO league_members (league_id, user_id, role, joined_at) VALUES (?, ?, 'member', 1)", id, users[1]);
+	const league = one('SELECT * FROM leagues WHERE id = ?', id);
+	const settings = { ...L.settingsOf(league), budget: 60, rosterMin: 2, rosterMax: 3 };
+	L.startDraft(L.currentSeason(id), users[0], users);
+	const s = () => L.currentSeason(id);
+	// Everything costs 50 except one Pokémon at 10: whoever doesn't get it can't afford a second pick
+	run('UPDATE pool SET cost = 50 WHERE season_id = ?', s().id);
+	const [cheap, a, b] = all('SELECT species_id FROM pool WHERE season_id = ? AND banned = 0 LIMIT 3', s().id).map(p => p.species_id);
+	run('UPDATE pool SET cost = 10 WHERE season_id = ? AND species_id = ?', s().id, cheap);
+	assert.equal(L.makePick(s(), settings, users[0], users[0], a, false), null);
+	assert.equal(L.makePick(s(), settings, users[1], users[1], cheap, false), null);
+	let text = JSON.stringify(R.board(league, s(), settings).embeds);
+	assert.match(text, /\*\*StuckB\*\* is on the clock/);
+	assert.match(text, /\*\*StuckA\*\* can't afford enough of the Pokémon left to reach 2, so their turns are skipped/);
+	assert.match(text, /StuckA · skipped/);
+	assert.doesNotMatch(R.clockPing(league, settings, L.draftState(s(), settings)).content, /StuckA/);
+	// StuckB spends the rest: nobody is on the clock, and the board doesn't claim everyone is done
+	assert.equal(L.makePick(s(), settings, users[1], users[1], b, false), null);
+	text = JSON.stringify(R.board(league, s(), settings).embeds);
+	assert.match(text, /Nobody can pick/);
+	assert.doesNotMatch(text, /Every player is done/);
+});
+
 test('with no token set, no route is mounted and nothing is sent', async () => {
 	const quiet = fakeDiscord();
 	const url = await quiet.listen();

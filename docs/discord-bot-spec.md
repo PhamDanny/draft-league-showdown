@@ -56,7 +56,7 @@ The draft channel holds exactly two bot messages: the **board**, edited in place
 
 One message, three embeds, re-rendered from `draftState()` on every change.
 
-1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "**Team Name** drafted **Garchomp** for 18 (Tera Captain)". If the player on the clock can't afford even the cheapest Pokémon left (the draft never skips anyone for this, so they would sit there), it says so and that a commissioner can undo or end the draft. Before the first pick: the draft order.
+1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "**Team Name** drafted **Garchomp** for 18 (Tera Captain)". Names any player whose turns are being skipped because they can't afford enough of what is left to reach the roster minimum (`DraftState.stuck`, the same rule and wording as the draft page); they are also marked "skipped" in the rosters. Before the first pick: the draft order.
 2. **Draft so far.** One field per player in draft order: team name, points left, picks so far in pick order with costs, captains marked. Players who are done are marked done.
 3. **Best available.** The undrafted, unbanned pool by price, most expensive first: `20: Dragapult, Gholdengo · 19: …`, for as many tiers as fit, then "*N* more available" with a link to the draft room, where the full pool is searchable. `/pokemon` answers for any single Pokémon.
 
