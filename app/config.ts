@@ -23,6 +23,8 @@ export const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
 export const DISCORD_PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY || '';
 // Only tests change this, to point the bot at a fake API
 export const DISCORD_API = (process.env.DISCORD_API || 'https://discord.com/api/v10').replace(/\/$/, '');
+// Showdown's CDN for sprites and sounds. Only tests change this, so they never reach the internet.
+export const ASSET_CDN = (process.env.ASSET_CDN || 'https://play.pokemonshowdown.com').replace(/\/$/, '');
 
 function readKey(name: string) {
 	const file = path.join(DATA_DIR, 'keys', name);

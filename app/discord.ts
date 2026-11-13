@@ -8,6 +8,7 @@ import { all, now, one, run } from './db.ts';
 import { toID } from './dex.ts';
 import * as L from './league.ts';
 import * as R from './discord-render.ts';
+import { emojisBusy, emojisIdle, requestEmojis } from './emoji.ts';
 import { notify } from './events.ts';
 import { syncShowdown } from './showdown.ts';
 
@@ -136,7 +137,7 @@ function start(leagueId: number) {
 }
 /** Resolves once no sync is pending or running (tests and shutdown). */
 export async function settled() {
-	while (timers.size || running.size) await Promise.all([...running.values(), sleep(DEBOUNCE_MS + 10)]);
+	while (timers.size || running.size || emojisBusy()) await Promise.all([...running.values(), emojisIdle(), sleep(DEBOUNCE_MS + 10)]);
 }
 
 /** Make Discord match the database for one league. Safe to run any time, any number of times. */
@@ -176,7 +177,9 @@ async function syncDraft(link: Link) {
 	const sameSeason = link.board_season_id === season.id;
 	let reposted = false;
 	if (season.status === 'drafting' || (season.status !== 'setup' && sameSeason && link.board_message_id)) {
-		const payload = R.board(league, season, settings);
+		const { wanted, ...payload } = R.board(league, season, settings);
+		// Missing icons upload in the background; the board is edited again (emojis in place of names) once they're in
+		if (wanted.length) requestEmojis(wanted, settings.mod, api, () => changed(link.league_id));
 		const hash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('base64url');
 		if (!sameSeason || !link.board_message_id || hash !== link.board_hash) {
 			let id = sameSeason ? link.board_message_id : null;
@@ -199,7 +202,7 @@ async function syncDraft(link: Link) {
 		await remove(channel, link.clock_message_id);
 		run(`UPDATE discord_links SET clock_message_id = NULL, clock_key = NULL WHERE ${still}`, link.league_id, channel);
 		if (key) {
-			const id = await post(channel, link.draft_channel_name, R.clockPing(league, settings, state!));
+			const id = await post(channel, link.draft_channel_name, R.clockPing(league, season.id, settings, state!));
 			const r = run(`UPDATE discord_links SET clock_message_id = ?, clock_key = ? WHERE ${still}`, id, key, link.league_id, channel);
 			if (!r.changes) await remove(channel, id);
 		}
@@ -507,28 +510,7 @@ const commands: { [name: string]: (ctx: Ctx, o: Opts) => object } = {
 	done(ctx, o) {
 		const r = resolveLeague(ctx, o.values.get('league'));
 		if ('error' in r) return reply(r.error);
-		if (!ctx.user || !L.membership(r.league.id, ctx.user.id)) return reply(signIn());
-		const season = L.currentSeason(r.league.id)!;
-		const settings = L.settingsOf(r.league);
-		if (season.status !== 'drafting') return reply('The draft is not running.');
-		const state = L.draftState(season, settings);
-		const me = state.players.find(p => p.user_id === ctx.user!.id);
-		if (!me) return reply("You're not in this draft.");
-		if (me.finished) return reply("You've already finished drafting.");
-		const count = state.counts.get(me.user_id) || 0;
-		// Same rule finishDrafting applies; checked here too so the confirm step isn't offered for nothing
-		if (count < settings.rosterMin) return reply(`You need ${settings.rosterMin} Pokémon first.`);
-		return reply('', {
-			embeds: [{
-				title: `Finish drafting with ${count} Pokémon?`,
-				description: `You'll keep ${settings.budget - (state.spent.get(me.user_id) || 0)} points unspent and won't get another turn this draft.`,
-				color: R.COLOR,
-			}],
-			components: [{ type: 1, components: [
-				{ type: 2, style: 4, label: 'Finish drafting', custom_id: `done:${season.id}:${me.user_id}` },
-				{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
-			] }],
-		});
+		return doneStep(ctx, r.league);
 	},
 
 	pings(ctx, o) {
@@ -600,8 +582,50 @@ function confirmStep(respond: typeof reply | typeof update, season: L.Season, se
 	const problem = L.pickProblem(season, settings, state, userId, entry.species_id, captain);
 	if (problem) return respond(problem);
 	// The overall pick number makes a stale confirmation fail instead of spending a later turn
-	const id = `draft:${season.id}:${state.picks.length}:${entry.species_id}:${captain ? 1 : 0}:${userId}`;
-	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id));
+	const id = (tc: boolean) => `draft:${season.id}:${state.picks.length}:${entry.species_id}:${tc ? 1 : 0}:${userId}`;
+	// A normal pick that could also be a Tera Captain gets a second button for that
+	const asCaptain = !captain && settings.teraMode === 'captains' &&
+		!L.pickProblem(season, settings, state, userId, entry.species_id, true);
+	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined));
+}
+
+/** The picker's dropdowns for the player on the clock, or why there's none. */
+function pickerStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
+	tier: number | null, page: number) {
+	if (season.status !== 'drafting') return respond('The draft is not running.');
+	const state = L.draftState(season, settings);
+	if (state.onClock?.user_id !== userId) return respond(respond === update ? 'That turn has passed.' : 'Not your pick.');
+	const available = all<{ species_id: string, name: string, cost: number }>(
+		'SELECT species_id, name, cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
+		.filter(p => !L.pickProblem(season, settings, state, userId, p.species_id, false));
+	const out = R.picker(season.id, settings, state, userId, available, tier, page);
+	return respond(out.content, { components: out.components });
+}
+
+/** /done and the ping's "Finish drafting": the confirm step, or why it can't be offered. */
+function doneStep(ctx: Ctx, league: L.League) {
+	if (!ctx.user || !L.membership(league.id, ctx.user.id)) return reply(signIn());
+	const season = L.currentSeason(league.id)!;
+	const settings = L.settingsOf(league);
+	if (season.status !== 'drafting') return reply('The draft is not running.');
+	const state = L.draftState(season, settings);
+	const me = state.players.find(p => p.user_id === ctx.user!.id);
+	if (!me) return reply("You're not in this draft.");
+	if (me.finished) return reply("You've already finished drafting.");
+	const count = state.counts.get(me.user_id) || 0;
+	// Same rule finishDrafting applies; checked here too so the confirm step isn't offered for nothing
+	if (count < settings.rosterMin) return reply(`You need ${settings.rosterMin} Pokémon first.`);
+	return reply('', {
+		embeds: [{
+			title: `Finish drafting with ${count} Pokémon?`,
+			description: `You'll keep ${settings.budget - (state.spent.get(me.user_id) || 0)} points unspent and won't get another turn this draft.`,
+			color: R.COLOR,
+		}],
+		components: [{ type: 1, components: [
+			{ type: 2, style: 4, label: 'Finish drafting', custom_id: `done:${season.id}:${me.user_id}` },
+			{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
+		] }],
+	});
 }
 
 /** The league a button's season belongs to, if this server is linked to it. */
@@ -615,12 +639,28 @@ function seasonHere(ctx: Ctx, seasonId: number) {
 function button(ctx: Ctx) {
 	const parts = String(ctx.i.data?.custom_id || '').split(':');
 	if (parts[0] === 'cancel') return update('Cancelled.');
+	// The ping's buttons are public: they answer with a new private message and never edit the ping
+	if (parts[0] === 'open' || parts[0] === 'finish') {
+		const found = seasonHere(ctx, Number(parts[1]));
+		if (!found || !found.current) return reply('That draft has ended.');
+		if (parts[0] === 'finish') return doneStep(ctx, found.league);
+		if (!ctx.user || !L.membership(found.league.id, ctx.user.id)) return reply(signIn());
+		return pickerStep(reply, found.season, found.settings, ctx.user.id, null, 0);
+	}
 	// Every other button is for one player; the last part of its id says who
 	const owner = Number(parts.at(-1));
 	if (!ctx.user || ctx.user.id !== owner) return reply('This is for another player.');
 	const found = seasonHere(ctx, Number(parts[1]));
 	if (!found || !found.current) return update('That draft has ended.');
 	const { season, league, settings } = found;
+	// The picker (private, so only its owner can press it)
+	if (parts[0] === 'tier') return pickerStep(update, season, settings, owner, Number(ctx.i.data?.values?.[0]), 0);
+	if (parts[0] === 'page') return pickerStep(update, season, settings, owner, Number(parts[2]), Number(parts[3]));
+	if (parts[0] === 'mon') {
+		const entry = poolEntry(season.id, ctx.i.data?.values?.[0]);
+		if (!entry) return update('Not in the draft pool.');
+		return confirmStep(update, season, settings, owner, entry, false);
+	}
 	if (parts[0] === 'pick') {
 		const entry = poolEntry(season.id, parts[2]);
 		if (!entry) return update('Not in the draft pool.');

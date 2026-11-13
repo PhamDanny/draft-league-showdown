@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { SERVER_DIR } from './config.ts';
+import { CLIENT_DIR, SERVER_DIR } from './config.ts';
 
 const require = createRequire(import.meta.url);
 const sim = () => require(path.join(SERVER_DIR, 'dist', 'sim'));
@@ -62,6 +62,33 @@ export function mon(idOrName: string, mod = 'gen9'): MonInfo {
 	}
 	return info;
 }
+
+// Showdown's menu icons: 40×30 cells, 12 per row, in /sprites/pokemonicons-sheet.png. Formes and extras
+// past the national dex sit at indexes the client lists in BattlePokemonIconIndexes; read it from the built client.
+let iconIndexes: { [id: string]: number } | null = null;
+function iconIndexTable() {
+	if (!iconIndexes) {
+		iconIndexes = {};
+		try {
+			const src = fs.readFileSync(path.join(CLIENT_DIR, 'js', 'battle-dex-data.js'), 'utf8');
+			const body = /BattlePokemonIconIndexes\s*=\s*\{([^}]*)\}/.exec(src)?.[1] || '';
+			for (const m of body.matchAll(/([a-z0-9]+)\s*:\s*(\d+)(?:\s*\+\s*(\d+))?/g)) iconIndexes[m[1]] = Number(m[2]) + Number(m[3] || 0);
+		} catch {}
+	}
+	return iconIndexes;
+}
+/** A species' cell in the icon sheet, as the client's getPokemonIconNum picks it; 0 (blank) if unknown. */
+export function iconNum(idOrName: string, mod = 'gen9') {
+	const s = dex(mod).species.get(idOrName);
+	const id = s.id || toID(idOrName);
+	const table = iconIndexTable();
+	if (table[id] != null) return table[id];
+	const num = s.num || 0;
+	return num < 0 || num > 1025 ? 0 : num;
+}
+export const ICON_W = 40;
+export const ICON_H = 30;
+export const ICONS_PER_ROW = 12;
 
 const itemCache = new Map<string, { [name: string]: number }>();
 /** Each item's cell in Showdown's item icon sheet (/sprites/itemicons-sheet.png), keyed by item name. */

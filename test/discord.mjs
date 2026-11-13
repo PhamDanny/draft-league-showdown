@@ -10,6 +10,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import pngjs from 'pngjs';
+
+const { PNG } = pngjs;
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -36,9 +39,17 @@ function fakeDiscord() {
 		if (!channels.has(ch)) channels.set(ch, []);
 		return channels.get(ch);
 	};
+	const emojis = [];
+	const sheetGets = [];
 	const server = http.createServer(async (req, res) => {
 		let raw = '';
 		for await (const c of req) raw += c;
+		// Also stands in for Showdown's CDN (ASSET_CDN), outside `calls`
+		if (req.method === 'GET' && req.url === '/sprites/pokemonicons-sheet.png') {
+			sheetGets.push(req.url);
+			res.writeHead(200, { 'content-type': 'image/png' });
+			return res.end(ICON_SHEET);
+		}
 		const call = { method: req.method, path: req.url, body: raw ? JSON.parse(raw) : null, auth: req.headers.authorization };
 		calls.push(call);
 		const send = (status, body) => {
@@ -53,6 +64,15 @@ function fakeDiscord() {
 		}
 		let m;
 		if (req.method === 'PUT' && /^\/applications\/\w+\/commands$/.test(req.url)) return send(200, call.body);
+		if ((m = /^\/applications\/(\w+)\/emojis$/.exec(req.url))) {
+			if (req.method === 'GET') return send(200, { items: emojis });
+			if (req.method === 'POST') {
+				if (emojis.some(e => e.name === call.body.name)) return send(400, { message: 'Invalid Form Body', code: 50035 });
+				const e = { id: String(800000000000000000n + BigInt(next++)), name: call.body.name };
+				emojis.push(e);
+				return send(201, e);
+			}
+		}
 		if ((m = /^\/guilds\/(\d+)$/.exec(req.url)) && req.method === 'GET') return send(200, { id: m[1], name: 'Test Server' });
 		if ((m = /^\/channels\/(\d+)\/messages$/.exec(req.url)) && req.method === 'POST') {
 			const msg = { id: String(next++), channel_id: m[1], ...call.body };
@@ -75,13 +95,23 @@ function fakeDiscord() {
 		send(404, { message: '404: Not Found', code: 0 });
 	});
 	return {
-		calls, channels,
+		calls, channels, emojis, sheetGets,
 		messages: ch => list(ch),
 		force: (method, pathRe, status, times = 1, body) => forced.push({ method, path: pathRe, status, times, body }),
 		listen: () => new Promise(r => server.listen(0, '127.0.0.1', () => r(`http://127.0.0.1:${server.address().port}`))),
 		close: () => server.close(),
 	};
 }
+
+// Showdown's icon sheet (40×30 cells, 12 per row) with a 20×20 opaque square in every cell
+const ICON_SHEET = (() => {
+	const img = new PNG({ width: 12 * 40, height: 150 * 30 });
+	img.data.fill(0);
+	for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) {
+		if (x % 40 >= 10 && x % 40 < 30 && y % 30 >= 5 && y % 30 < 25) img.data.set([0, 0, 255, 255], (y * img.width + x) * 4);
+	}
+	return PNG.sync.write(img);
+})();
 
 const fake = fakeDiscord();
 const FAKE_URL = await fake.listen();
@@ -92,7 +122,7 @@ const signing = crypto.generateKeyPairSync('ed25519');
 const PUBLIC_KEY = signing.publicKey.export({ format: 'der', type: 'spki' }).subarray(12).toString('hex');
 const DATA = dataDir('main');
 Object.assign(process.env, {
-	DATA_DIR: DATA, DISCORD_BOT_TOKEN: 'test-bot-token', DISCORD_PUBLIC_KEY: PUBLIC_KEY, DISCORD_API: FAKE_URL,
+	DATA_DIR: DATA, DISCORD_BOT_TOKEN: 'test-bot-token', DISCORD_PUBLIC_KEY: PUBLIC_KEY, DISCORD_API: FAKE_URL, ASSET_CDN: FAKE_URL,
 	DISCORD_CLIENT_ID: '4242', DEV_LOGIN: '1', PUBLIC_URL: 'http://league.test', ADMIN_DISCORD_IDS: '',
 });
 const { createSite } = await import('../app/site.ts');
@@ -181,6 +211,14 @@ async function press(user, customId, { channel = DRAFT } = {}) {
 	return r.body;
 }
 const buttons = reply => (reply.data.components || []).flatMap(row => row.components);
+/** Chooses `value` in a dropdown. */
+async function select(user, customId, value, { channel = DRAFT } = {}) {
+	const r = await interact({ ...base(user, channel, '0'), type: 3, data: { custom_id: customId, component_type: 3, values: [value] }, message: { id: '1' } });
+	assert.equal(r.status, 200);
+	return r.body;
+}
+const dropdown = (reply, prefix) => buttons(reply).find(c => c.type === 3 && c.custom_id.startsWith(prefix));
+const poolRows = () => all('SELECT * FROM pool WHERE season_id = ? ORDER BY cost DESC, name', season().id);
 
 const settled = () => D.settled();
 /** Draft channel messages, board first. */
@@ -224,6 +262,18 @@ const discordPick = async (who, species, captain) => {
 	assert.ok(confirm, `confirm step for ${species}: ${JSON.stringify(reply)}`);
 	const done = await press(who, confirm.custom_id);
 	assert.equal(done.type, 7);
+	assert.match(done.data.content, /^Drafted /);
+	await settled();
+};
+/** The ping's Draft a Pokémon button, then the tier and Pokémon dropdowns, then Confirm. */
+const pickerPick = async (who, species) => {
+	const open = await press(who, buttons({ data: draftMsgs()[1] }).find(b => b.label === 'Draft a Pokémon').custom_id);
+	assert.equal(open.type, 4);
+	const cost = poolRows().find(p => p.species_id === species).cost;
+	const tiered = await select(who, dropdown(open, 'tier:').custom_id, String(cost));
+	assert.ok(dropdown(tiered, 'mon:').options.some(o => o.value === species), `${species} in the ${cost} tier`);
+	const step = await select(who, dropdown(tiered, 'mon:').custom_id, species);
+	const done = await press(who, buttons(step).find(b => b.label === 'Confirm').custom_id);
 	assert.match(done.data.content, /^Drafted /);
 	await settled();
 };
@@ -281,8 +331,106 @@ test('starting the draft posts the board and pings the first player', async () =
 	await settled();
 	assert.equal(draftMsgs().length, 2);
 	assert.match(boardText(), /Draft order/);
-	assert.match(pingText(), new RegExp(`^<@${alice.discordId}>, you're up: round 1, pick 1\\. 99 points left, at least 2 more picks\\. Use \`/draft\`\\.$`));
+	const [first, how, captain, ...rest] = pingText().split('\n');
+	assert.equal(first, `<@${alice.discordId}>, you're up: round 1, pick 1. 99 points left, at least 2 more picks.`);
+	assert.match(how, /^\*\*How to pick:\*\* press \*\*Draft a Pokémon\*\* below .* or type `\/draft`/);
+	assert.match(captain, /^\*\*Tera Captain:\*\* press \*\*Confirm as Tera Captain\*\* .* You have 1 captain slot and 28 Tera points left\.$/);
+	assert.deepEqual(rest, []);
+	// No Finish drafting yet: Alice needs 2 more
+	assert.deepEqual(buttons({ data: draftMsgs()[1] }).map(b => b.label), ['Draft a Pokémon']);
 	assert.deepEqual(draftMsgs()[1].allowed_mentions, { users: [alice.discordId] });
+});
+
+test('best available shows icon emojis, uploaded once each, in place of names', async () => {
+	const s = L.currentSeason(leagueId);
+	const pool = all(`SELECT species_id, name, cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name`, s.id);
+	const best = draftMsgs()[0].embeds.find(e => e.title === 'Best available');
+	const lines = best.description.split('\n').filter(l => l.startsWith('**'));
+	assert.ok(lines.length >= 1);
+	// Every shown Pokémon is an emoji now: "**20** <:p_x:id> <:p_y:id>"
+	for (const l of lines) assert.match(l, /^\*\*\d+\*\*( <:p_[a-z0-9]+:\d+>)+$/, l);
+	const shown = lines.flatMap(l => [...l.matchAll(/<:p_([a-z0-9]+):(\d+)>/g)]);
+	assert.equal(shown[0][1], pool[0].species_id, 'most expensive first');
+	assert.ok(!best.description.includes(pool[0].name), 'no names');
+	// One upload per shown Pokémon: a 128×128 PNG data URI named p_<species id>
+	const posts = fake.calls.filter(c => c.method === 'POST' && c.path === '/applications/4242/emojis');
+	assert.deepEqual(posts.map(p => p.body.name).sort(), shown.map(m => `p_${m[1]}`).sort());
+	const png = PNG.sync.read(Buffer.from(posts[0].body.image.replace(/^data:image\/png;base64,/, ''), 'base64'));
+	assert.deepEqual([png.width, png.height], [128, 128]);
+	assert.equal(fake.sheetGets.length, 1, 'the icon sheet is fetched once, then cached');
+	// Ids are remembered: rendering the board again wants no uploads
+	assert.deepEqual(R.board(one('SELECT * FROM leagues WHERE id = ?', leagueId), s, L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId))).wanted, []);
+});
+
+let stalePicker;
+test('Draft a Pokémon: refused off-turn; the picker offers only affordable tiers and leads to the confirm step', async () => {
+	const open = buttons({ data: draftMsgs()[1] })[0].custom_id;
+	const before = { calls: fake.calls.length, ping: JSON.stringify(draftMsgs()[1]) };
+	const off = await press(bob, open);
+	assert.equal(off.type, 4, 'a new private message, never an edit of the ping');
+	assert.equal(off.data.flags, 64);
+	assert.equal(off.data.content, 'Not your pick.');
+
+	const picker = await press(alice, open);
+	assert.equal(picker.type, 4);
+	assert.equal(picker.data.flags, 64);
+	const tiers = dropdown(picker, 'tier:').options;
+	const s = season(), settings = L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId));
+	const state = L.draftState(s, settings);
+	const legal = poolRows().filter(p => !p.banned && !L.pickProblem(s, settings, state, alice.id, p.species_id, false));
+	assert.deepEqual(tiers.map(t => Number(t.value)), [...new Set(legal.map(p => p.cost))], 'every affordable tier, priciest first');
+	assert.ok(tiers.length <= 25);
+	assert.equal(tiers.find(t => t.default).value, tiers[0].value, 'opens on the priciest tier');
+	const top = dropdown(picker, 'mon:').options;
+	assert.ok(top.length && top.every(o => legal.some(p => p.species_id === o.value && p.cost === Number(tiers[0].value))));
+
+	// A captain-eligible Pokémon gets a second confirm button; Garchomp has no Tera price and doesn't
+	const tc = legal.find(p => p.tc_cost != null && !L.pickProblem(s, settings, state, alice.id, p.species_id, true));
+	const tiered = await select(alice, dropdown(picker, 'tier:').custom_id, String(tc.cost));
+	assert.equal(tiered.type, 7);
+	assert.equal(dropdown(tiered, 'tier:').options.find(t => t.default).value, String(tc.cost));
+	assert.ok(dropdown(tiered, 'mon:').options.every(o => o.label.endsWith(` · ${tc.cost}`)));
+	let step = await select(alice, dropdown(tiered, 'mon:').custom_id, tc.species_id);
+	assert.equal(step.type, 7);
+	assert.equal(step.data.embeds[0].title, `Draft ${tc.name} for ${tc.cost}?`);
+	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', `Confirm as Tera Captain (+${tc.tc_cost} Tera)`, 'Cancel']);
+	assert.equal(buttons(step)[1].custom_id, `draft:${s.id}:0:${tc.species_id}:1:${alice.id}`);
+	step = await select(alice, dropdown(tiered, 'mon:').custom_id, 'garchomp');
+	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Cancel']);
+	// Another player can't drive Alice's picker
+	assert.equal((await select(bob, dropdown(tiered, 'mon:').custom_id, 'garchomp')).data.content, 'This is for another player.');
+	stalePicker = dropdown(tiered, 'tier:').custom_id;
+
+	assert.equal(fake.calls.length, before.calls, 'nothing sent to the channel');
+	assert.equal(JSON.stringify(draftMsgs()[1]), before.ping);
+	assert.equal(pickCount(), 0);
+});
+
+test('the picker pages a tier over 25 and clamps a page that no longer exists', () => {
+	const settings = L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId));
+	const state = L.draftState(season(), settings);
+	const available = Array.from({ length: 30 }, (_, i) => ({ species_id: `mon${String(i).padStart(2, '0')}`, name: `Mon ${i}`, cost: 5 }))
+		.concat([{ species_id: 'cheap', name: 'Cheap', cost: 1 }]);
+	const view = (tier, page, emojis = new Map()) => R.picker(season().id, settings, state, alice.id, available, tier, page, emojis);
+	let out = view(5, 0);
+	const [tierRow, monRow, pageRow] = out.components;
+	assert.equal(tierRow.components[0].options.length, 2);
+	assert.equal(monRow.components[0].options.length, 25);
+	assert.match(monRow.components[0].placeholder, /page 1 of 2/);
+	assert.deepEqual(pageRow.components.map(b => [b.label, b.disabled]), [['Previous', true], ['Next', false]]);
+	out = view(5, 1);
+	assert.deepEqual(out.components[1].components[0].options.map(o => o.value), ['mon25', 'mon26', 'mon27', 'mon28', 'mon29']);
+	out = view(5, 9);
+	assert.match(out.components[1].components[0].placeholder, /page 2 of 2/, 'clamped to the last page');
+	// A tier that's gone falls to the next one down
+	out = view(3, 0);
+	assert.deepEqual(out.components[1].components[0].options.map(o => o.value), ['cheap']);
+	assert.equal(out.components.length, 2, 'no page buttons for a short tier');
+	// Emoji objects, not markup, and only when the emoji exists
+	out = view(1, 0, new Map([['cheap', '<:p_cheap:123>']]));
+	assert.deepEqual(out.components[1].components[0].options[0].emoji, { name: 'p_cheap', id: '123' });
+	assert.equal(view(5, 0).components[1].components[0].options[0].emoji, undefined);
+	assert.match(R.picker(season().id, settings, state, alice.id, [], null, 0).content, /nothing left/);
 });
 
 test('a team name of @everyone **x** is escaped and pings nobody', () => {
@@ -332,16 +480,29 @@ test('after each of several picks the channel holds the board and one ping for t
 	const plan = [[alice, 'garchomp'], [bob, 'greattusk'], [carol, 'gholdengo'], [dave, 'dragonite']];
 	for (const [who, species] of plan) {
 		assert.equal(onClock(), who.id);
-		if (who === bob || who === dave) await discordPick(who, species);
+		if (who === bob) await pickerPick(who, species);
+		else if (who === dave) await discordPick(who, species);
 		else await sitePick(who, species);
 		assert.equal(draftMsgs().length, 2, `two messages after ${species}`);
 		const last = L.picks(season().id).at(-1);
-		assert.match(boardText(), new RegExp(`drafted \\*\\*${last.name}\\*\\* for ${last.cost}`));
+		assert.match(boardText(), new RegExp(`Last pick: .+ drafted \\*\\*${last.name}\\*\\* for ${last.cost} points?`));
+		// Draft so far shows the pick as its emoji, not its name
+		const rosters = draftMsgs()[0].embeds.find(e => e.title === 'Draft so far');
+		const mine = rosters.fields.find(f => f.value.includes(`<:p_${last.species_id}:`));
+		assert.ok(mine, JSON.stringify(rosters.fields));
+		assert.match(mine.value, new RegExp(`<:p_${last.species_id}:\\d+> ${last.cost}`));
+		assert.ok(!JSON.stringify(rosters.fields).includes(last.name), 'no names in the rosters');
 		const next = players[onClock()];
 		assert.ok(pingText().startsWith(`<@${next.discordId}>, you're up`), `ping for ${next.name}: ${pingText()}`);
 		assert.deepEqual(draftMsgs()[1].allowed_mentions, { users: [next.discordId] });
 	}
 	assert.match(pingText(), /round 2, pick 1\./);
+	// Alice's picker and ping from round 1 are stale now
+	assert.equal(onClock(), dave.id);
+	const stale = await select(alice, stalePicker, '1');
+	assert.equal(stale.type, 7);
+	assert.equal(stale.data.content, 'That turn has passed.');
+	assert.equal((await press(alice, `open:${season().id}`)).data.content, 'Not your pick.');
 });
 
 test('a pick made on the site and one made with /draft leave the channel in the same state; undo re-pings', async () => {
@@ -439,6 +600,10 @@ test('/done finishes drafting with a confirm step', async () => {
 	assert.match(reply.data.embeds[0].title, /Finish drafting with 2 Pokémon\?/);
 	const finish = buttons(reply).find(b => b.label === 'Finish drafting');
 	assert.equal((await press(alice, finish.custom_id)).data.content, 'This is for another player.');
+	// The ping's Finish drafting button leads to the same step
+	const fromPing = await press(dave, `finish:${season().id}`);
+	assert.equal(fromPing.type, 4);
+	assert.deepEqual(fromPing.data.embeds, reply.data.embeds);
 	const done = await press(dave, finish.custom_id);
 	assert.match(done.data.content, /^Done drafting/);
 	await settled();
@@ -673,7 +838,7 @@ test('the board names players whose turns are skipped because they are stuck', (
 	assert.match(text, /\*\*StuckB\*\* is on the clock/);
 	assert.match(text, /\*\*StuckA\*\* can't afford enough of the Pokémon left to reach 2, so their turns are skipped/);
 	assert.match(text, /StuckA · skipped/);
-	assert.doesNotMatch(R.clockPing(league, settings, L.draftState(s(), settings)).content, /StuckA/);
+	assert.doesNotMatch(R.clockPing(league, s().id, settings, L.draftState(s(), settings)).content, /StuckA/);
 	// StuckB spends the rest: nobody is on the clock, and the board doesn't claim everyone is done
 	assert.equal(L.makePick(s(), settings, users[1], users[1], b, false), null);
 	text = JSON.stringify(R.board(league, s(), settings).embeds);

@@ -4,6 +4,7 @@ import { PUBLIC_URL } from './config.ts';
 import { all } from './db.ts';
 import { mon } from './dex.ts';
 import * as L from './league.ts';
+import { emojiMap, emojiName } from './emoji.ts';
 
 /** The site's accent (--accent-fill). */
 export const COLOR = 0xdc2438;
@@ -116,7 +117,7 @@ function statusEmbed(league: L.League, season: L.Season, settings: L.Settings, s
 		lines.push('', `Draft order: ${state.players.map((p, i) => `${i + 1}. ${name(p.user_id)}`).join(', ')}`);
 	} else if (last && !complete) {
 		const tc = settings.teraMode === 'captains' && last.captain ? ' (Tera Captain)' : '';
-		lines.push('', `${name(last.user_id)} drafted **${md(last.name)}** for ${last.cost}${tc}`);
+		lines.push('', `Last pick: ${name(last.user_id)} drafted **${md(last.name)}** for ${plural(last.cost, 'point')}${tc}`);
 	}
 	return {
 		title: complete ? `${league.name}: draft complete` : `${league.name}: season ${season.number} draft`,
@@ -126,8 +127,9 @@ function statusEmbed(league: L.League, season: L.Season, settings: L.Settings, s
 	};
 }
 
+/** With `emojis`, each pick is its icon emoji (its name until the emoji is uploaded), as in Best available. */
 function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftState, names: Map<number, Who>,
-	o: { costs: boolean, short: number }): Embed {
+	o: { costs: boolean, short: number, emojis: Map<string, string> | null }): Embed {
 	const tc = settings.teraMode === 'captains';
 	const complete = season.status !== 'drafting';
 	return {
@@ -138,7 +140,7 @@ function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftStat
 			if (o.short) team = cut(team, o.short);
 			const marks = [p.finished ? 'done' : '', !complete && state.stuck.some(x => x.user_id === p.user_id) ? 'skipped' : '', !complete && state.onClock?.user_id === p.user_id ? 'on the clock' : ''].filter(Boolean);
 			const mine = state.picks.filter(x => x.user_id === p.user_id);
-			const list = mine.map(x => `${md(x.name)}${o.costs ? ` ${x.cost}` : ''}${tc && x.captain ? ' (TC)' : ''}`).join(', ');
+			const list = mine.map(x => `${o.emojis?.get(x.species_id) ?? md(x.name)}${o.costs ? ` ${x.cost}` : ''}${tc && x.captain ? ' (TC)' : ''}`).join(', ');
 			return {
 				name: cut(`${i + 1}. ${md(team)}${marks.length ? ` · ${marks.join(', ')}` : ''}`, MAX_FIELD_NAME),
 				value: cut(`${settings.budget - (state.spent.get(p.user_id) || 0)} left${list ? `\n${list}` : ''}`, MAX_FIELD_VALUE),
@@ -148,70 +150,103 @@ function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftStat
 	};
 }
 
-/** Undrafted, unbanned Pokémon by price, as many tiers as fit in `room` characters (always the top tier). */
-function bestEmbed(league: L.League, season: L.Season, room: number): Embed {
-	const pool = all<{ name: string, cost: number }>(`SELECT name, cost FROM pool WHERE season_id = ? AND banned = 0
+/**
+ * Undrafted, unbanned Pokémon by price, as many tiers as fit in `room` characters (always the top tier).
+ * Each Pokémon is its icon emoji (app/emoji.ts); one whose emoji isn't uploaded yet shows its name meanwhile
+ * and is listed in `wanted`. Room is budgeted as if every emoji existed, so uploads don't change what's shown.
+ */
+function bestEmbed(league: L.League, season: L.Season, room: number, emojis: Map<string, string>): { embed: Embed, wanted: string[] } {
+	const pool = all<{ species_id: string, name: string, cost: number }>(`SELECT species_id, name, cost FROM pool WHERE season_id = ? AND banned = 0
 		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?) ORDER BY cost DESC, name`, season.id, season.id);
 	const title = 'Best available';
+	if (!pool.length) return { embed: { title, color: COLOR, description: 'Nothing left in the pool.' }, wanted: [] };
 	const tail = (left: number) => `\n*${left}* more available: ${PUBLIC_URL}/l/${league.id}/draft`;
 	const budget = Math.min(MAX_DESCRIPTION, room - title.length) - tail(pool.length).length;
-	const tiers: { cost: number, names: string[] }[] = [];
+	// `<:p_garchomp:` + an id of up to 20 digits + `>`
+	const room1 = (speciesId: string) => emojis.get(speciesId)?.length ?? emojiName(speciesId).length + 23;
+	const tiers: { cost: number, mons: typeof pool }[] = [];
 	for (const p of pool) {
-		if (tiers.at(-1)?.cost !== p.cost) tiers.push({ cost: p.cost, names: [] });
-		tiers.at(-1)!.names.push(md(p.name));
+		if (tiers.at(-1)?.cost !== p.cost) tiers.push({ cost: p.cost, mons: [] });
+		tiers.at(-1)!.mons.push(p);
 	}
-	const lines: string[] = [];
+	const head = (cost: number) => `**${cost}**`;
+	const size = (mons: typeof pool) => mons.reduce((n, m) => n + 1 + Math.max(room1(m.species_id), md(m.name).length), 0);
+	const show: { cost: number, mons: typeof pool }[] = [];
 	let used = 0;
-	let shown = 0;
 	for (const t of tiers) {
-		const line = `**${t.cost}**: ${t.names.join(', ')}`;
-		if (used + line.length + 1 <= budget) {
-			lines.push(line);
-			used += line.length + 1;
-			shown += t.names.length;
+		const len = head(t.cost).length + size(t.mons);
+		if (used + len + 1 <= budget) {
+			show.push(t);
+			used += len + 1;
 			continue;
 		}
-		if (!lines.length) {
-			// The top tier alone is too long: show as many of its names as fit
-			let partial = `**${t.cost}**:`;
-			for (const nm of t.names) {
-				if (partial.length + nm.length + 2 > budget) break;
-				partial += `${shown ? ',' : ''} ${nm}`;
-				shown++;
+		if (!show.length) {
+			// The top tier alone is too long: as many of its Pokémon as fit
+			const mons: typeof pool = [];
+			for (const m of t.mons) {
+				if (head(t.cost).length + size([...mons, m]) > budget) break;
+				mons.push(m);
 			}
-			lines.push(partial);
+			show.push({ cost: t.cost, mons });
 		}
 		break;
 	}
-	if (!pool.length) return { title, color: COLOR, description: 'Nothing left in the pool.' };
-	return { title, color: COLOR, description: lines.join('\n') + (pool.length > shown ? tail(pool.length - shown) : '') };
+	const shown = show.reduce((n, t) => n + t.mons.length, 0);
+	const lines = show.map(t => `${head(t.cost)} ${t.mons.map(m => emojis.get(m.species_id) ?? md(m.name)).join(' ')}`);
+	return {
+		embed: { title, color: COLOR, description: lines.join('\n') + (pool.length > shown ? tail(pool.length - shown) : '') },
+		wanted: show.flatMap(t => t.mons.map(m => m.species_id)).filter(id => !emojis.has(id)),
+	};
 }
 
-/** The draft channel's board: status, rosters and best available, inside Discord's 6000 characters. */
-export function board(league: L.League, season: L.Season, settings: L.Settings) {
+/**
+ * The draft channel's board: status, rosters and best available, inside Discord's 6000 characters.
+ * `wanted` (not sent) lists shown Pokémon with no emoji yet, for the caller to upload.
+ */
+export function board(league: L.League, season: L.Season, settings: L.Settings, emojis = emojiMap()) {
 	const state = L.draftState(season, settings);
 	const names = who(league.id);
 	const complete = season.status !== 'drafting';
-	// Rosters first; if they leave too little room, drop costs, then shorten team names
-	const tries = [{ costs: true, short: 0 }, { costs: false, short: 0 }, { costs: false, short: 16 }, { costs: false, short: 8 }];
+	// Rosters first, as emojis; if they leave too little room, drop costs, then use names, then shorten team names.
+	// Emoji fit is judged as if every pick had its emoji, so uploads finishing don't change which layout is used.
+	const sized = new Map(emojis);
+	for (const p of state.picks) if (!sized.has(p.species_id)) sized.set(p.species_id, `<:${emojiName(p.species_id)}:${'0'.repeat(19)}>`);
+	const tries = [
+		{ costs: true, short: 0, emojis: sized }, { costs: false, short: 0, emojis: sized },
+		{ costs: true, short: 0, emojis: null }, { costs: false, short: 0, emojis: null }, { costs: false, short: 16, emojis: null }, { costs: false, short: 8, emojis: null },
+	];
 	let embeds: Embed[] = [];
+	let used = tries[0];
 	for (const o of tries) {
+		used = o;
 		embeds = [statusEmbed(league, season, settings, state, names), rostersEmbed(season, settings, state, names, o)];
-		if (embedChars(embeds) <= MAX_TOTAL - (complete ? 0 : 400)) break;
+		// Best available needs ~35 characters per emoji: keep room for about 20
+		if (embedChars(embeds) <= MAX_TOTAL - (complete ? 0 : 800)) break;
 	}
+	// Sized with stand-ins; render the emoji layout with the real ones (a missing emoji shows its name meanwhile)
+	if (used.emojis) embeds[1] = rostersEmbed(season, settings, state, names, { ...used, emojis });
+	const rosterWanted = used.emojis ? [...new Set(state.picks.map(p => p.species_id))].filter(id => !emojis.has(id)) : [];
 	// Last resort for a huge league: trim the longest roster lines until it fits
 	const fields = embeds[1].fields!;
-	while (fields.length && embedChars(embeds) > MAX_TOTAL - (complete ? 0 : 200)) {
+	while (fields.length && embedChars(embeds) > MAX_TOTAL - (complete ? 0 : 400)) {
 		const longest = fields.reduce((a, f) => (f.value.length > a.value.length ? f : a));
 		longest.value = cut(longest.value, Math.max(12, longest.value.length - 40));
 		if (longest.value.length <= 12) break;
 	}
-	if (!complete) embeds.push(bestEmbed(league, season, MAX_TOTAL - embedChars(embeds)));
-	return { embeds, allowed_mentions: { parse: [] } };
+	let wanted = rosterWanted;
+	if (!complete) {
+		// Room left as if the roster emojis were all in, the same reason as above
+		const real = embedChars(embeds);
+		const sizedChars = used.emojis ? embedChars([embeds[0], rostersEmbed(season, settings, state, names, used)]) : real;
+		const best = bestEmbed(league, season, MAX_TOTAL - Math.max(real, sizedChars), emojis);
+		embeds.push(best.embed);
+		wanted = [...wanted, ...best.wanted];
+	}
+	return { embeds, allowed_mentions: { parse: [] }, wanted };
 }
 
 /** "@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks. Use /draft." */
-export function clockPing(league: L.League, settings: L.Settings, state: L.DraftState) {
+export function clockPing(league: L.League, seasonId: number, settings: L.Settings, state: L.DraftState) {
 	const p = state.onClock!;
 	const w = who(league.id).get(p.user_id);
 	const ids: string[] = [];
@@ -219,14 +254,30 @@ export function clockPing(league: L.League, settings: L.Settings, state: L.Draft
 	const need = Math.max(0, settings.rosterMin - count);
 	const left = settings.budget - (state.spent.get(p.user_id) || 0);
 	const more = need ? `at least ${plural(need, 'more pick')}` : `up to ${plural(settings.rosterMax - count, 'more pick')} (or \`/done\`)`;
-	const content = `${mention(w, ids)}, you're up: round ${state.round + 1}, pick ${(state.slot % state.players.length) + 1}. ` +
-		`${left} points left, ${more}. Use \`/draft\`.`;
-	return { content, allowed_mentions: only(ids) };
+	const lines = [
+		`${mention(w, ids)}, you're up: round ${state.round + 1}, pick ${(state.slot % state.players.length) + 1}. ${left} points left, ${more}.`,
+		'**How to pick:** press **Draft a Pokémon** below and choose from dropdowns of what you can still afford, ' +
+		'or type `/draft` and start typing a name. You get a confirm button before the pick is final, and only you see it.',
+	];
+	if (settings.teraMode === 'captains') {
+		const slots = settings.maxCaptains - (state.captains.get(p.user_id) || 0);
+		const tera = settings.tcBudget - (state.tcSpent.get(p.user_id) || 0);
+		lines.push(slots > 0
+			? `**Tera Captain:** press **Confirm as Tera Captain** on the confirm step (or set \`/draft\`'s \`captain\` option to True) ` +
+				`to draft it as a Tera Captain, which can Terastallize in battle. ` +
+				`It costs its normal points plus its Tera points, paid from your separate Tera budget, and only Pokémon with a Tera price qualify. ` +
+				`You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
+			: `**Tera Captain:** you've used all ${plural(settings.maxCaptains, 'captain slot')}, so draft it as a normal pick.`);
+	}
+	// Anyone can press these; the press is checked against who is on the clock then, not when this was posted
+	const buttons = [{ type: 2, style: 1, label: 'Draft a Pokémon', custom_id: `open:${seasonId}` }];
+	if (!need) buttons.push({ type: 2, style: 2, label: 'Finish drafting', custom_id: `finish:${seasonId}` });
+	return { content: lines.join('\n'), allowed_mentions: only(ids), components: [{ type: 1, components: buttons }] };
 }
 
 /** The ephemeral "Draft Garchomp for 18?" step. */
 export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: number,
-	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, customId: string) {
+	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, customId: string, captainId?: string) {
 	const count = (state.counts.get(userId) || 0) + 1;
 	const left = settings.budget - (state.spent.get(userId) || 0) - entry.cost;
 	const need = Math.max(0, settings.rosterMin - count);
@@ -241,8 +292,66 @@ export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: n
 		}],
 		components: [{ type: 1, components: [
 			{ type: 2, style: 3, label: 'Confirm', custom_id: customId },
+			...(captainId ? [{ type: 2, style: 1, label: `Confirm as Tera Captain (+${entry.tc_cost} Tera)`, custom_id: captainId }] : []),
 			{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
 		] }],
+	};
+}
+
+export const PICKER_PAGE = 25; // a dropdown's most options
+
+/** `<:p_garchomp:123>` as a component's emoji object. */
+function emojiObject(markup: string | undefined) {
+	const m = markup ? /^<:(\w+):(\d+)>$/.exec(markup) : null;
+	return m ? { name: m[1], id: m[2] } : undefined;
+}
+
+/**
+ * The ephemeral picker behind the ping's "Draft a Pokémon": a price-tier dropdown and that tier's Pokémon.
+ * `available` is what the caller can legally take, priciest first. All state is in the custom ids.
+ */
+export function picker(seasonId: number, settings: L.Settings, state: L.DraftState, userId: number,
+	available: { species_id: string, name: string, cost: number }[], tier: number | null, page: number, emojis = emojiMap()) {
+	const tiers = [...new Set(available.map(p => p.cost))];
+	if (!tiers.length) return { content: "There's nothing left in the pool you can draft.", components: [] };
+	// No tier yet: the priciest. A tier that's gone since: the next one down (or the cheapest)
+	const want = tier;
+	const at = tiers.findIndex(t => want == null || t <= want);
+	const chosen = tiers[at < 0 ? tiers.length - 1 : at];
+	const inTier = available.filter(p => p.cost === chosen);
+	const pages = Math.ceil(inTier.length / PICKER_PAGE);
+	page = Math.min(Math.max(0, page), pages - 1); // the tier may have shrunk since the last press
+	const shown = inTier.slice(page * PICKER_PAGE, (page + 1) * PICKER_PAGE);
+	// More than 25 tiers: a window of 25 around the chosen one
+	const i = tiers.indexOf(chosen);
+	const start = Math.max(0, Math.min(i - 12, tiers.length - PICKER_PAGE));
+	const left = settings.budget - (state.spent.get(userId) || 0);
+	const rows: object[] = [
+		{ type: 1, components: [{
+			type: 3, custom_id: `tier:${seasonId}:${userId}`, placeholder: 'Price tier',
+			options: tiers.slice(start, start + PICKER_PAGE).map(t => ({
+				label: plural(t, 'point'), value: String(t), default: t === chosen,
+				description: plural(available.filter(p => p.cost === t).length, 'Pokémon'),
+			})),
+		}] },
+		{ type: 1, components: [{
+			type: 3, custom_id: `mon:${seasonId}:${userId}`,
+			placeholder: pages > 1 ? `Choose a Pokémon (page ${page + 1} of ${pages})` : 'Choose a Pokémon',
+			options: shown.map(p => {
+				const emoji = emojiObject(emojis.get(p.species_id));
+				return { label: `${p.name} · ${p.cost}`.slice(0, 100), value: p.species_id, ...(emoji ? { emoji } : {}) };
+			}),
+		}] },
+	];
+	if (pages > 1) {
+		rows.push({ type: 1, components: [
+			{ type: 2, style: 2, label: 'Previous', custom_id: `page:${seasonId}:${chosen}:${page - 1}:${userId}`, disabled: page === 0 },
+			{ type: 2, style: 2, label: 'Next', custom_id: `page:${seasonId}:${chosen}:${page + 1}:${userId}`, disabled: page === pages - 1 },
+		] });
+	}
+	return {
+		content: `You have ${plural(left, 'point')} left. Choose a price tier, then a Pokémon. You confirm before it's final.`,
+		components: rows,
 	};
 }
 

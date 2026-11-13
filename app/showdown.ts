@@ -8,6 +8,7 @@ import express from 'express';
 import httpProxy from 'http-proxy';
 import type { Server } from 'node:http';
 import { CLIENT_DIR, DATA_DIR, PORT, SERVER_DIR, SHOWDOWN_PORT, keys } from './config.ts';
+import { cachePath, showdownAsset } from './assets.ts';
 import { all } from './db.ts';
 import { toID } from './dex.ts';
 import { userFromCookieHeader, type User } from './auth.ts';
@@ -15,7 +16,6 @@ import * as L from './league.ts';
 import { notify } from './events.ts';
 
 const DATA_FILE = path.join(DATA_DIR, 'showdown.json');
-const SPRITE_CACHE = path.join(DATA_DIR, 'cache');
 
 // ---------- process ----------
 
@@ -202,18 +202,11 @@ async function cachedAsset(req: Request, res: Response) {
 	if (rel.includes('..')) return res.status(400).end();
 	const local = path.join(CLIENT_DIR, rel);
 	if (fs.existsSync(local) && fs.statSync(local).isFile()) return res.sendFile(local);
-	const cached = path.join(SPRITE_CACHE, rel);
-	if (fs.existsSync(cached)) return res.sendFile(cached, { maxAge: '30d' });
-	try {
-		const upstream = await fetch(`https://play.pokemonshowdown.com/${rel.split(path.sep).join('/')}`);
-		if (!upstream.ok) return res.status(upstream.status).end();
-		const buf = Buffer.from(await upstream.arrayBuffer());
-		fs.mkdirSync(path.dirname(cached), { recursive: true });
-		fs.writeFileSync(cached, buf);
-		res.type(path.extname(rel)).set('cache-control', 'public, max-age=2592000').send(buf);
-	} catch {
-		res.status(502).end();
-	}
+	const cached = cachePath(rel);
+	if (cached && fs.existsSync(cached)) return res.sendFile(cached, { maxAge: '30d' });
+	const r = await showdownAsset(rel);
+	if (!r.data) return res.status(r.status).end();
+	res.type(path.extname(rel)).set('cache-control', 'public, max-age=2592000').send(r.data);
 }
 
 export function showdownRoutes(app: Express, requireUser: express.RequestHandler) {

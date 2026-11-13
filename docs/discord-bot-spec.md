@@ -2,7 +2,7 @@
 
 A bot that lives in the league's Discord server. It does three things:
 
-1. **Runs a draft channel**: one live board message, a ping for whoever is up, and `/draft` to pick without leaving Discord.
+1. **Runs a draft channel**: one live board message, a ping for whoever is up with a **Draft a Pokémon** button, and `/draft` to pick without leaving Discord.
 2. **Posts one recap a week**: standings, links to the week's games, next week's matchups.
 3. **Answers lookups**: standings, schedule, rosters, Pokémon prices, rules.
 
@@ -23,7 +23,7 @@ The Discord API details in 3.5 were checked against Discord's developer docs (no
 - **Team privacy is not negotiable.** The bot never reads `battles.sealed`, `full_log`, `input_log` or `teams`, and never posts a set, a team of six, or a replay log. The weekly recap gives scores and links; teams and replays are read on the site, where league membership is checked. A Discord channel can be seen by people outside the league, so the bot posts only what is already public inside it: draft picks, rosters, schedule, scores, standings.
 - **The bot is optional.** With `DISCORD_BOT_TOKEN` unset, nothing in this spec runs and the site behaves as it does today. `npm test` passes without any Discord configuration.
 - **A Discord outage never breaks the site.** No page request waits on Discord.
-- **No new dependencies**, as in the other specs. No `discord.js`: the bot is `fetch` calls plus one signed webhook route (section 3).
+- **One small dependency**: `pngjs` (pure JS), to cut Pokémon icons into emoji images. No `discord.js`: the bot is `fetch` calls plus one signed webhook route (section 3).
 - **League logic stays in `app/league.ts`.** `/draft` calls `pickProblem` and `makePick`, the same as the draft page. The bot module has no SQL that changes league state.
 - **Nothing user-controlled can ping.** Every message is sent with `allowed_mentions` listing exactly the user ids the bot means to ping (or none). Display names, team names and league names go through a `md()` helper that escapes Discord markdown.
 - Follow the existing style (tabs, small modules, comments that say why). One commit per phase. Do not push.
@@ -56,11 +56,13 @@ The draft channel holds exactly two bot messages: the **board**, edited in place
 
 One message, three embeds, re-rendered from `draftState()` on every change.
 
-1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "**Team Name** drafted **Garchomp** for 18 (Tera Captain)". Names any player whose turns are being skipped because they can't afford enough of what is left to reach the roster minimum (`DraftState.stuck`, the same rule and wording as the draft page); they are also marked "skipped" in the rosters. Before the first pick: the draft order.
-2. **Draft so far.** One field per player in draft order: team name, points left, picks so far in pick order with costs, captains marked. Players who are done are marked done.
-3. **Best available.** The undrafted, unbanned pool by price, most expensive first: `20: Dragapult, Gholdengo · 19: …`, for as many tiers as fit, then "*N* more available" with a link to the draft room, where the full pool is searchable. `/pokemon` answers for any single Pokémon.
+1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "Last pick: **Team Name** drafted **Garchomp** for 18 points (Tera Captain)". Names any player whose turns are being skipped because they can't afford enough of what is left to reach the roster minimum (`DraftState.stuck`, the same rule and wording as the draft page); they are also marked "skipped" in the rosters. Before the first pick: the draft order.
+2. **Draft so far** (**Final rosters** once complete). One field per player in draft order: team name, points left, picks so far in pick order as icon emojis (below) with costs, captains marked. Players who are done are marked done. If the emojis leave too little room (a large league late in the draft), costs go first, then the picks fall back to names.
+3. **Best available.** The undrafted, unbanned pool by price, most expensive first, one line per price with each Pokémon as its icon emoji and no name: `**20** <:p_dragapult:…> <:p_gholdengo:…>`, for as many tiers as fit, then "*N* more available" with a link to the draft room, where the full pool is searchable. Hovering an emoji shows its name (`p_<species id>`). `/pokemon` answers for any single Pokémon.
 
-**Fitting in 6000 characters.** Render status and rosters first, then give Best Available whatever is left (at least the top tier). If rosters alone are too long (large league late in the draft), drop the costs from roster lines, then shorten team names.
+   **Icon emojis** (`app/emoji.ts`). Each is an *application emoji*, owned by the bot's Discord application and usable in any server it is in, so nothing is uploaded per server. The image is the Pokémon's cell in Showdown's menu icon sheet (`sprites/pokemonicons-sheet.png`, 40×30 cells, indexes as the client's `getPokemonIconNum`, read from the built client's `BattlePokemonIconIndexes`), cropped to what is drawn and scaled up by a whole number into 128×128 so the pixel art stays sharp. Uploads are lazy: rendering the board lists the shown Pokémon (picks and best available) that have no emoji yet; those upload one at a time in the background while the board shows their names, and the board is edited again when they're in. Ids are stored per application in `discord_emojis`, and on the first upload after a start the bot lists the application's emojis and adopts any `p_*` ones it already owns (a fresh database, or a second site on the same application). A refused upload (out of the 2000 slots, a clash, a 400) is logged, the names stay, and no upload is tried again for 10 minutes.
+
+**Fitting in 6000 characters.** Render status and rosters first (rosters as emojis with costs, then emojis without costs, then names with and without costs, then shorter team names), keeping at least 800 characters (about 20 emojis at ~35 characters each) for Best Available, then give it whatever is left (at least the top tier). Room is counted as if every shown Pokémon already had its emoji, so the uploads finishing doesn't change which ones are shown.
 
 When the draft is completed the board is edited one last time ("Draft complete", final rosters, no Best Available) and stays as the record. A new season's draft posts a new board.
 
@@ -68,7 +70,9 @@ If the board message has been deleted, the next update posts a fresh one.
 
 ### 2.2 On-the-clock ping
 
-"@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks. Use `/draft`." Posted when `onClock` changes; the previous ping is deleted in the same step. A commissioner undo puts the earlier player back on the clock and pings them again. When the draft completes, the last ping is deleted.
+"@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks." Two more lines explain how to pick: press **Draft a Pokémon** (2.4), or type `/draft` (the `pokemon` option autocompletes to what the player can afford), with an only-you-see-it confirm step before the pick is final either way; and in a Tera Captains league how to draft a Tera Captain (the **Confirm as Tera Captain** button, or `/draft`'s `captain` option) (Terastallizes in battle, costs its normal points plus Tera points from the separate Tera budget, only Pokémon with a Tera price) with the player's captain slots and Tera points left, or that all their slots are used. Posted when `onClock` changes; the previous ping is deleted in the same step. A commissioner undo puts the earlier player back on the clock and pings them again. When the draft completes, the last ping is deleted.
+
+The ping carries a **Draft a Pokémon** button and, once the player has the roster minimum, **Finish drafting** (the same confirm step as `/done`). Anyone can press them, so each press is checked against who is on the clock at that moment, not when the ping was posted: anyone else gets a private "Not your pick." Both answer with a new private message and never edit the ping.
 
 The mention is dropped (the message is still posted) for a member with `/pings off`, and for dev-login users.
 
@@ -78,14 +82,22 @@ Works for the player on the clock. The reply is **ephemeral**: only the caller s
 
 1. **Parse.** The `pokemon` option has autocomplete over what the caller can afford right now (names that pass `pickProblem`), so the usual path is choosing from the list. Typed free text is matched to the pool by `toID`.
 2. **If it fails**, the reply says why in the site's own words (`pickProblem`'s message: not your turn, already drafted, too expensive, banned, not in the pool) and, for a name that matched nothing, offers the closest pool names as buttons. Pressing one continues at step 3. The caller can also just run `/draft` again.
-3. **Confirm.** The reply shows the sprite (large, as the embed image), name, cost, Tera Captain cost if `captain` is set, and what the pick leaves: "Draft **Garchomp** for 18? You'll have 44 left for at least 4 more picks." with **Confirm** and **Cancel** buttons.
+3. **Confirm.** The reply shows the sprite (large, as the embed image), name, cost, Tera Captain cost if `captain` is set, and what the pick leaves: "Draft **Garchomp** for 18? You'll have 44 left for at least 4 more picks." with **Confirm** and **Cancel** buttons. For a normal pick that could also be a Tera Captain right now (it has a Tera price, and the player has a captain slot and the Tera points), a **Confirm as Tera Captain (+N Tera)** button sits between them.
 4. **On Confirm** the pick is re-validated from scratch and made with `makePick`. The reply collapses to "Drafted Garchomp." The board updates and the next player is pinged (through `notify`, same as a pick made on the site). **Cancel** collapses it to "Cancelled."
 
-The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}:{userId}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the trailing site user id lets the handler check the presser is the player the pick is for. Every button except Cancel ends with the user id.
+The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}:{userId}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the trailing site user id lets the handler check the presser is the player the pick is for. Every button except Cancel and the ping's two ends with the user id.
 
 `captain` is refused with a plain message in leagues where `teraMode` is not `captains`.
 
 `/done` finishes drafting (`finishDrafting`) with the same confirm step.
+
+### 2.4 The picker (Draft a Pokémon)
+
+Pressing the ping's button opens a private message with two dropdowns, already filled in: the **price tier** (every tier with something the player can legally take, priciest first, the current one selected) and that tier's **Pokémon** ("Garchomp · 18", with its icon emoji when one has been uploaded; the picker never queues uploads). Choosing a tier redraws both; choosing a Pokémon replaces the picker with the same confirm step as `/draft` (2.3 step 3). A tier with more than 25 Pokémon gets **Previous** / **Next** buttons; more than 25 tiers shows the 25 around the selected one.
+
+All picker state is in the `custom_id`s (`tier:{seasonId}:{userId}`, `mon:{seasonId}:{userId}`, `page:{seasonId}:{tier}:{page}:{userId}`); nothing is stored. Every step re-reads the draft: once the player is no longer on the clock, any press answers "That turn has passed." A tier that has emptied since falls to the next one down, and a page past the end is clamped. The ping's own buttons are `open:{seasonId}` and `finish:{seasonId}`, the only ones without a user id.
+
+`/draft` stays as the shortcut for someone who knows the name.
 
 Picking from the site keeps working and produces the same board update and ping. Commissioners pick for other players on the site only.
 
@@ -173,6 +185,7 @@ Checked against Discord's developer docs while building. The result follows each
 - Signature scheme and headers as in 3.3; Discord probes the endpoint when its URL is saved. **Confirmed.** `X-Signature-Ed25519` over `X-Signature-Timestamp` + raw body; reply `401` when it fails; a PING (`type 1`) must get `200` with `{ "type": 1 }` and a JSON content type. Saving the URL fails unless both work, and Discord keeps running routine checks afterwards and removes the URL if the endpoint fails them.
 - Limits: 3-second response; 25 autocomplete choices; `custom_id` 100 characters; 6000 characters across a message's embeds, 25 fields per embed, 1024 per field value. **Confirmed**, plus: the 6000 counts titles, descriptions, field names and values, footer text and author names; a description holds 4096 and a title or field name 256; message content holds 2000; a message has up to 10 embeds, and a row up to 5 buttons.
 - An ephemeral reply can carry an embed image and buttons, and a button press can replace it (response type 7). **Partly confirmed.** Type 7 (UPDATE_MESSAGE) is valid for component interactions and edits the message the button is on; the ephemeral flag (64) is allowed on a reply with embeds and components, and no restriction on combining them is listed. Not tried against real Discord.
+- Application emojis (checked when the board moved to icon emojis). **Confirmed:** `GET`/`POST /applications/{id}/emojis` (the list is wrapped in `items`), `name` plus `image` as a data URI (PNG, JPEG or GIF), "the 128x128 emoji image", at most 256 KiB, up to 2000 per application, and no Use External Emojis permission needed. **Not documented:** name rules (the bot uses `p_<species id>`, cut to 32, the limit for guild emojis), whether names must be unique in an application, a number for the emoji rate limit (the docs only warn that emoji routes don't follow the usual rate limit headers and may return 429s), and whether custom emojis render in embed descriptions (bots commonly rely on it, but the docs don't say). Not tried against real Discord.
 - Rate-limit headers and the `429` body (`retry_after`). **Confirmed.** `X-RateLimit-Limit`, `-Remaining`, `-Reset`, `-Reset-After` and `-Bucket`, plus `-Global` and `-Scope` on a 429; the body has `retry_after` in seconds (a float) and `global`, and `Retry-After` is sent too. Bots get 50 requests a second overall; interaction responses don't count toward it. Also relevant: 10,000 invalid requests (401, 403, 429) in 10 minutes gets the IP banned for a while, one more reason the bot stops sending to a channel after a 403 or 404 instead of retrying.
 
 ## 4. Keeping Discord in sync
@@ -233,6 +246,7 @@ New `test/discord.mjs`, run by `npm test` with no real Discord:
   - A pick made on the site and a pick made with `/draft` leave the channel in the same state.
   - `/draft` off-turn, for a drafted Pokémon, and for an unaffordable one each return the site's message and change nothing; a misspelt name offers close matches.
   - Confirm with a stale `overall`, and Confirm pressed by another user, are refused.
+  - The ping's Draft a Pokémon refuses anyone off the clock privately and leaves the ping alone; the picker offers exactly the affordable tiers, leads to the confirm step (with Confirm as Tera Captain only when eligible), and a pick made through it lands like any other; its dropdowns go stale once the turn passes; a tier over 25 pages and a vanished page is clamped.
   - Undo re-pings the earlier player; completing the draft removes the ping and posts week 1's matchups once.
   - A board for the largest pool and a 16-player full draft stays under 6000 characters.
   - Finishing a week's last series posts one recap with every series link; restarting the app does not post it again; a best-of-3 at 1–0 posts nothing.
@@ -253,7 +267,7 @@ Each has a default that the spec above already assumes.
 | Decision | Default | Alternative |
 |---|---|---|
 | Transport | HTTP interactions, no gateway, no dependency. Needs the site on public HTTPS for commands | `discord.js` with a gateway connection: works with no public URL, shows the bot online, adds a dependency |
-| Remaining pool on the board | Best available by price for as many tiers as fit, plus a link to the full pool | A second pinned message per price band (several messages, more edits per pick) |
+| Remaining pool on the board | Best available by price as icon emojis (no names) for as many tiers as fit, plus a link to the full pool | A second pinned message per price band (several messages, more edits per pick) |
 | Week 1 | Matchups posted when the schedule is made | No post until week 1 is finished |
 | Recap mentions | Next week's players are mentioned | No mentions in recaps |
 | Who can use lookups | Anyone in the linked server | League members only |

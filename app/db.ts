@@ -145,6 +145,14 @@ CREATE TABLE IF NOT EXISTS discord_links (
 	linked_by INTEGER REFERENCES users(id),
 	linked_at INTEGER NOT NULL
 );
+-- Pokémon icons the bot uploaded as application emojis (app/emoji.ts); ids belong to one Discord application
+CREATE TABLE IF NOT EXISTS discord_emojis (
+	app_id TEXT NOT NULL,
+	species_id TEXT NOT NULL,
+	emoji_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	PRIMARY KEY (app_id, species_id)
+);
 CREATE TABLE IF NOT EXISTS audit (
 	id INTEGER PRIMARY KEY,
 	league_id INTEGER REFERENCES leagues(id) ON DELETE CASCADE,
