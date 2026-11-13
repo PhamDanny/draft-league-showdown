@@ -1,0 +1,263 @@
+# Discord bot spec
+
+A bot that lives in the league's Discord server. It does three things:
+
+1. **Runs a draft channel**: one live board message, a ping for whoever is up, and `/draft` to pick without leaving Discord.
+2. **Posts one recap a week**: standings, links to the week's games, next week's matchups.
+3. **Answers lookups**: standings, schedule, rosters, Pokémon prices, rules.
+
+Everything else stays on the site: battles, matchmaking, remakes, and every commissioner tool. There is nothing time-based (no deadlines, reminders or draft clock); the league agrees match times privately.
+
+The site already has what makes this cheap: every user signs in with Discord, so `users.discord_id` gives a mention for every player and identifies whoever runs a command. No account linking is needed.
+
+## What was checked while writing this
+
+- Read against the code at `ce33bee`: `app/league.ts`, `app/db.ts`, `app/auth.ts`, `app/showdown.ts`, `app/events.ts`, and the routes in `app/pages.ts` and `app/builder.ts`.
+- `notify(leagueId)` in `app/events.ts` is already called after every change the bot cares about: pick, finish, draft start, undo, schedule, result override, battle start and end, remake. The bot hangs off it (section 4).
+- **The remaining pool does not fit in a Discord message.** Pools are 367 to 1160 Pokémon; one message holds 6000 characters across all its embeds. Section 2.1 says what the board shows instead.
+
+Not checked: the Discord API details are written from memory of Discord's documentation, not tested. Confirm each item in 3.5 against https://discord.com/developers/docs before building.
+
+## Ground rules
+
+- **Team privacy is not negotiable.** The bot never reads `battles.sealed`, `full_log`, `input_log` or `teams`, and never posts a set, a team of six, or a replay log. The weekly recap gives scores and links; teams and replays are read on the site, where league membership is checked. A Discord channel can be seen by people outside the league, so the bot posts only what is already public inside it: draft picks, rosters, schedule, scores, standings.
+- **The bot is optional.** With `DISCORD_BOT_TOKEN` unset, nothing in this spec runs and the site behaves as it does today. `npm test` passes without any Discord configuration.
+- **A Discord outage never breaks the site.** No page request waits on Discord.
+- **No new dependencies**, as in the other specs. No `discord.js`: the bot is `fetch` calls plus one signed webhook route (section 3).
+- **League logic stays in `app/league.ts`.** `/draft` calls `pickProblem` and `makePick`, the same as the draft page. The bot module has no SQL that changes league state.
+- **Nothing user-controlled can ping.** Every message is sent with `allowed_mentions` listing exactly the user ids the bot means to ping (or none). Display names, team names and league names go through a `md()` helper that escapes Discord markdown.
+- Follow the existing style (tabs, small modules, comments that say why). One commit per phase. Do not push.
+
+---
+
+## 1. Setup
+
+Run by a league commissioner who also has Manage Server in Discord. This is the only commissioner integration.
+
+| Command | What it does |
+|---|---|
+| `/league link <league>` | Ties this server to a league and makes the current channel its **announcements channel**. Autocomplete lists leagues the caller is commissioner of |
+| `/league draft-channel` | Makes the current channel the league's **draft channel** and posts the board there |
+| `/league unlink` | Removes the board and ping messages and stops everything for this league in this server |
+
+Linking needs no code to copy: the interaction is signed by Discord, so the bot knows who ran it, and the site knows that user is a commissioner.
+
+The draft channel should be its own channel where members cannot send messages, so it only ever holds the bot's two messages. Slash commands still need to work there (see 3.5); if Discord does not allow that, members run `/draft` from any other channel and the result is the same.
+
+The league's admin page gets a small Discord panel: the add-bot link and "then run `/league link` in your server" when unlinked; server and channel names, Unlink, and the last send error (bot removed, channel deleted) when linked.
+
+## 2. What the bot posts and answers
+
+Sections 2.1 to 2.3 are the draft channel; 2.4 is the announcements channel; 2.5 works anywhere.
+
+The draft channel holds exactly two bot messages: the **board**, edited in place, and below it the **on-the-clock ping**, replaced each turn. Edits do not notify anyone, which is why the ping is a separate message.
+
+### 2.1 The board
+
+One message, three embeds, re-rendered from `draftState()` on every change.
+
+1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "**Team Name** drafted **Garchomp** for 18 (Tera Captain)". Also names any player skipped as stuck. Before the first pick: the draft order.
+2. **Draft so far.** One field per player in draft order: team name, points left, picks so far in pick order with costs, captains marked. Players who are done are marked done.
+3. **Best available.** The undrafted, unbanned pool by price, most expensive first: `20: Dragapult, Gholdengo · 19: …`, for as many tiers as fit, then "*N* more available" with a link to the draft room, where the full pool is searchable. `/pokemon` answers for any single Pokémon.
+
+**Fitting in 6000 characters.** Render status and rosters first, then give Best Available whatever is left (at least the top tier). If rosters alone are too long (large league late in the draft), drop the costs from roster lines, then shorten team names.
+
+When the draft is completed the board is edited one last time ("Draft complete", final rosters, no Best Available) and stays as the record. A new season's draft posts a new board.
+
+If the board message has been deleted, the next update posts a fresh one.
+
+### 2.2 On-the-clock ping
+
+"@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks. Use `/draft`." Posted when `onClock` changes; the previous ping is deleted in the same step. A commissioner undo puts the earlier player back on the clock and pings them again. When the draft completes, the last ping is deleted.
+
+The mention is dropped (the message is still posted) for a member with `/pings off`, and for dev-login users.
+
+### 2.3 `/draft <pokemon> [captain]`
+
+Works for the player on the clock. The reply is **ephemeral**: only the caller sees it, and neither the command nor the reply is a channel message, so there is nothing to clean up.
+
+1. **Parse.** The `pokemon` option has autocomplete over what the caller can afford right now (names that pass `pickProblem`), so the usual path is choosing from the list. Typed free text is matched to the pool by `toID`.
+2. **If it fails**, the reply says why in the site's own words (`pickProblem`'s message: not your turn, already drafted, too expensive, banned, not in the pool) and, for a name that matched nothing, offers the closest pool names as buttons. Pressing one continues at step 3. The caller can also just run `/draft` again.
+3. **Confirm.** The reply shows the sprite (large, as the embed image), name, cost, Tera Captain cost if `captain` is set, and what the pick leaves: "Draft **Garchomp** for 18? You'll have 44 left for at least 4 more picks." with **Confirm** and **Cancel** buttons.
+4. **On Confirm** the pick is re-validated from scratch and made with `makePick`. The reply collapses to "Drafted Garchomp." The board updates and the next player is pinged (through `notify`, same as a pick made on the site). **Cancel** collapses it to "Cancelled."
+
+The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the handler checks the presser is the player the pick is for.
+
+`captain` is refused with a plain message in leagues where `teraMode` is not `captains`.
+
+`/done` finishes drafting (`finishDrafting`) with the same confirm step.
+
+Picking from the site keeps working and produces the same board update and ping. Commissioners pick for other players on the site only.
+
+### 2.4 Weekly recap
+
+One message in the announcements channel when every series of a week is final. Nothing is posted per game or per series.
+
+- **Results:** each series of the week as "**A** 2–1 **B**", each a link to its series page, where the teams and replays are now open.
+- **Standings:** the table, same order and tiebreaks as the site, in a code block so columns line up.
+- **Next week:** the matchups, mentioning the players (subject to `/pings`). After the final week this section is "Regular season complete" instead.
+
+Two edge cases:
+
+- **Week 1** has no previous week. When the commissioner completes the draft and the schedule is made, the bot posts week 1's matchups on their own.
+- **A recap is posted once.** If a commissioner changes a result afterwards, the recap is not edited; the next one has the corrected standings.
+
+### 2.5 Lookup commands
+
+For anyone in the linked server. Replies are ephemeral unless the caller passes `share:true`.
+
+| Command | Reply |
+|---|---|
+| `/standings` | The standings table |
+| `/schedule [week]` | That week's matchups with scores and series links; defaults to the current week |
+| `/roster [player]` | A player's drafted Pokémon with costs, captains marked, points left. Defaults to the caller |
+| `/pokemon <name>` | Cost and Tera cost in this league's pool, and who drafted it, or that it is available or banned. Autocomplete over the whole pool |
+| `/rules` | Format, budget, roster size, best-of, Tera rules, link to the Rules page |
+| `/pings on\|off` | Whether the bot mentions the caller in this league (members only) |
+
+---
+
+## 3. How the bot talks to Discord
+
+### 3.1 No gateway connection
+
+A typical bot holds a websocket to Discord's gateway. This one does not, because it never reads messages:
+
+- **Outgoing:** REST calls with the bot token (post, edit and delete its own messages).
+- **Incoming:** slash commands, autocomplete and button presses arrive as HTTPS POSTs to an **interactions endpoint** on the site, signed by Discord.
+
+Consequences: no dependency, no reconnect logic. The bot shows as offline in the member list, which is cosmetic. The site must be reachable from the internet over HTTPS for commands to work (the board and recap work regardless). For local development, use a tunnel such as `cloudflared`, or the fake API in section 6.
+
+This is also why picks are a slash command rather than a typed message: reading and deleting members' messages would need the gateway, the privileged Message Content intent and the Manage Messages permission, and would still flash each message in the channel before removing it.
+
+### 3.2 Configuration
+
+Added to `.env.example` and `app/config.ts`:
+
+```
+# Bot tab of the same Discord application used for sign-in. Leave empty to run without the bot.
+DISCORD_BOT_TOKEN=
+# General Information tab, "Public Key". Needed for slash commands.
+DISCORD_PUBLIC_KEY=
+```
+
+`DISCORD_CLIENT_ID` (already present) is the application id. A `DISCORD_API` override (default `https://discord.com/api/v10`) exists only so tests can point at a fake.
+
+README gets a short "Discord bot" section: create the bot user, copy the two values, set the application's Interactions Endpoint URL to `PUBLIC_URL/discord/interactions`, and add the bot with the link the admin page shows (scopes `bot applications.commands`; permissions View Channel, Send Messages, Embed Links).
+
+### 3.3 Interactions endpoint
+
+`POST /discord/interactions`, registered in `app/main.ts` before the body parsers, with `express.raw({ type: 'application/json' })` so the exact bytes can be verified.
+
+1. Verify the Ed25519 signature: header `X-Signature-Ed25519` over `X-Signature-Timestamp` + raw body, against `DISCORD_PUBLIC_KEY`, using `node:crypto` (wrap the 32-byte key in an SPKI prefix to import it). Bad or missing signature: `401`.
+2. `type 1` (ping): reply `{ type: 1 }`.
+3. `type 2` (command), `type 4` (autocomplete), `type 3` (button): dispatch by name or `custom_id`.
+
+Every handler is synchronous SQLite work and answers in the HTTP response, well inside Discord's 3-second limit.
+
+**Who is calling.** `member.user.id` is looked up in `users.discord_id`. Lookups work for anyone in a linked server. `/draft`, `/done` and `/pings` require a `league_members` row; a caller with no site account is told to sign in at `PUBLIC_URL` and join the league first.
+
+**Which league.** A server can be linked to more than one league. Resolution order: the command's optional `league` option (autocomplete), then the league whose draft or announcements channel the command was run in, then the server's only league. Otherwise the reply asks for the option.
+
+### 3.4 Commands are registered at boot
+
+On startup, if the token is set, one `PUT /applications/{id}/commands` with the full global command list. It is idempotent, so there is no deploy step.
+
+### 3.5 To confirm against Discord's docs before building
+
+- A bot can post, edit and delete its own messages over REST without ever connecting to the gateway, and deleting its own messages needs no extra permission.
+- Members can run slash commands in a channel where they cannot send messages.
+- Signature scheme and headers as in 3.3; Discord probes the endpoint when its URL is saved.
+- Limits: 3-second response; 25 autocomplete choices; `custom_id` 100 characters; 6000 characters across a message's embeds, 25 fields per embed, 1024 per field value.
+- An ephemeral reply can carry an embed image and buttons, and a button press can replace it (response type 7).
+- Rate-limit headers and the `429` body (`retry_after`).
+
+## 4. Keeping Discord in sync
+
+No event queue. The bot stores what it last showed and reconciles against the database:
+
+- `app/events.ts` `notify(leagueId)` also calls `discord.changed(leagueId)`, which schedules `sync(leagueId)` after a short debounce. `sync` also runs for every linked league at startup.
+- `sync(leagueId)`, one at a time per league:
+  1. **Board:** if a draft is under way or just completed, render the board. If it differs from the last render (compare a hash), edit the message, or post it if there is none or the edit returns `404`.
+  2. **Ping:** compute `{seasonId}:{overall}` for `onClock`. If it differs from the stored key, delete the old ping message, post the new one, store its id and key. No one on the clock: delete and clear.
+  3. **Recap:** find the highest week whose series are all final. If it is greater than the stored `recap_week` for this season, post recaps for each missing week in order and store the week. `recap_week` starts at `NULL`; posting week 1's matchups sets it to `0`.
+- Because `sync` compares state rather than replaying events, it is safe to run at any time, twice in a row, or after a crash. Several quick picks collapse into one board edit.
+- **Failures:** on `429` wait `retry_after`. On other errors retry with backoff. A `403` or `404` on the channel itself records the error on the link (shown on the admin page) and stops retrying until the commissioner re-runs setup.
+
+Rendering lives in `app/discord.ts` with the REST client and command handlers; if it grows past a few hundred lines, split rendering into `app/discord-render.ts`.
+
+## 5. Data
+
+```sql
+CREATE TABLE IF NOT EXISTS discord_links (
+	league_id INTEGER PRIMARY KEY REFERENCES leagues(id) ON DELETE CASCADE,
+	guild_id TEXT NOT NULL,
+	channel_id TEXT NOT NULL,        -- announcements
+	draft_channel_id TEXT,           -- NULL: no draft channel yet
+	board_season_id INTEGER,         -- the season the board message belongs to
+	board_message_id TEXT,
+	board_hash TEXT,
+	clock_message_id TEXT,
+	clock_key TEXT,                  -- '{seasonId}:{overall}' of the ping on screen
+	recap_season_id INTEGER,
+	recap_week INTEGER,              -- last week recapped; 0 = week 1 matchups posted
+	error TEXT,                      -- last fatal send error
+	linked_by INTEGER REFERENCES users(id),
+	linked_at INTEGER NOT NULL
+);
+```
+
+Plus `addColumn('league_members', 'discord_pings', 'INTEGER NOT NULL DEFAULT 1')`.
+
+## 6. Message format
+
+- Embeds, coloured with the site's accent.
+- Sprites from `https://play.pokemonshowdown.com/sprites/gen5/{spriteid}.png`, using the same sprite id as `app/dex.ts` (`s.spriteid || key`). The site's own `/sprites/` route is not used because `PUBLIC_URL` may be `localhost`.
+- Players are written as **Team Name** (display name) in text, and as `<@discord_id>` only in the on-the-clock ping and the recap's next-week matchups.
+
+## 7. Tests
+
+New `test/discord.mjs`, run by `npm test` with no real Discord:
+
+- A fake Discord API (a local `http` server set as `DISCORD_API`) records calls, keeps the channel's message list, and can be told to answer `429`, `403` or `404`.
+- Interactions are signed with a test Ed25519 key pair generated in the test.
+- Cases:
+  - Bad signature is `401`; ping answers; `/league link` by a non-commissioner is refused.
+  - After each of several picks the draft channel holds exactly two messages, the board shows the latest pick, and the ping mentions the right player.
+  - A pick made on the site and a pick made with `/draft` leave the channel in the same state.
+  - `/draft` off-turn, for a drafted Pokémon, and for an unaffordable one each return the site's message and change nothing; a misspelt name offers close matches.
+  - Confirm with a stale `overall`, and Confirm pressed by another user, are refused.
+  - Undo re-pings the earlier player; completing the draft removes the ping and posts week 1's matchups once.
+  - A board for the largest pool and a 16-player full draft stays under 6000 characters.
+  - Finishing a week's last series posts one recap with every series link; restarting the app does not post it again; a best-of-3 at 1–0 posts nothing.
+  - A deleted board message is re-posted; a `429` is retried; a `403` on the channel sets `error`.
+  - A team name of `@everyone **x**` is escaped and pings nobody.
+  - With no token set, no route is mounted and nothing is sent.
+- A privacy test: finish a week, then assert no request body sent to the fake API contains a move or item from any team, or a species outside the public rosters.
+
+## 8. Phases
+
+1. **Draft channel.** Config, `discord_links`, REST client, interactions endpoint with signature check, setup commands, `sync` with board and ping, `/draft`, `/done`, `/pings`, the admin panel, README.
+2. **Season.** Weekly recap, week 1 matchups, lookup commands.
+
+## 9. Open decisions
+
+Each has a default that the spec above already assumes.
+
+| Decision | Default | Alternative |
+|---|---|---|
+| Transport | HTTP interactions, no gateway, no dependency. Needs the site on public HTTPS for commands | `discord.js` with a gateway connection: works with no public URL, shows the bot online, adds a dependency |
+| Remaining pool on the board | Best available by price for as many tiers as fit, plus a link to the full pool | A second pinned message per price band (several messages, more edits per pick) |
+| Week 1 | Matchups posted when the schedule is made | No post until week 1 is finished |
+| Recap mentions | Next week's players are mentioned | No mentions in recaps |
+| Who can use lookups | Anyone in the linked server | League members only |
+
+## 10. Not planned
+
+Recorded so they are not re-brainstormed.
+
+- Anything in-battle or pre-battle: matchmaking, remake requests, live series updates. Handled on the site.
+- Commissioner tools beyond setup: admin log, result-override announcements, picking for another player.
+- Anything time-based: deadlines, reminders, match-time proposals, draft timer, idle nudges.
+- Trade and free agency feed, and playoff posts. The site has only the settings for these, no implementation. Worth revisiting when they exist.
+- Pick queue, pick'ems, role sync, weekly stats and awards, direct messages.
