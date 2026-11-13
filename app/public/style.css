@@ -585,16 +585,22 @@ label.chk{gap:6px;font-size:14px}
 
 /* --- polish pass --- */
 .grid.top{align-items:start}
-/* Draft: budget / captains / picks always sit in one row */
+/* Draft: points / Tera / captains / picks left sit in one row (four go two by two on a phone) */
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:16px}
+.tiles.four{grid-template-columns:repeat(4,minmax(0,1fr))}
 .tiles h3{margin:0}
 .tiles .num{font-size:16px}
 /* Draft and Captain buttons keep one width whatever the price, so they line up down the pool */
 .pool-list .btn.sm{min-width:86px;justify-content:space-between;font-variant-numeric:tabular-nums}
+.pool-list .btn.sm.tera{min-width:132px}
+/* A Pokémon that can never be a captain: the Captain button's width, muted */
+.pool-list .btn.no-tc,.pool-list .btn.no-tc:hover{border-color:transparent;background:none;color:var(--muted);font-weight:400;cursor:default;justify-content:center}
 .pool-list .row{gap:8px}
+.tc-note{font-size:13px;margin:0 0 10px}
+.board .h small.tc-left{color:var(--tera)}
 .bt-short{margin-top:6px;font-size:13px;color:var(--warn-fg)}
 .bt-side.ready .pill{background:var(--good-soft);color:var(--good)}
-@media (max-width:760px){.pool-list .btn.sm{min-width:40px;justify-content:center}.tiles{gap:6px}}
+@media (max-width:760px){.pool-list .btn.sm{min-width:40px;justify-content:center}.pool-list .btn.sm.tera{min-width:58px}.tiles{gap:6px}.tiles.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* Damage calc: this set against theirs, both directions at once */
 .fold-t{font-weight:500}

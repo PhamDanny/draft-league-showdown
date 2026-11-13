@@ -279,7 +279,7 @@ export const COMMANDS = [
 	{
 		name: 'draft', description: 'Draft a Pokémon when you are on the clock', ...guildOnly, options: [
 			{ type: STRING, name: 'pokemon', description: 'The Pokémon to draft', required: true, autocomplete: true },
-			{ type: BOOLEAN, name: 'captain', description: 'Draft it as a Tera Captain' },
+			{ type: BOOLEAN, name: 'captain', description: 'Draft as a Tera Captain (can Terastallize, costs its Tera points too). Can\'t be added later.' },
 			leagueOption,
 		],
 	},
@@ -584,9 +584,10 @@ function confirmStep(respond: typeof reply | typeof update, season: L.Season, se
 	// The overall pick number makes a stale confirmation fail instead of spending a later turn
 	const id = (tc: boolean) => `draft:${season.id}:${state.picks.length}:${entry.species_id}:${tc ? 1 : 0}:${userId}`;
 	// A normal pick that could also be a Tera Captain gets a second button for that
-	const asCaptain = !captain && settings.teraMode === 'captains' &&
-		!L.pickProblem(season, settings, state, userId, entry.species_id, true);
-	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined));
+	// and one that can't says why, in pickProblem's words
+	const tcProblem = !captain && settings.teraMode === 'captains' ? L.pickProblem(season, settings, state, userId, entry.species_id, true) : null;
+	const asCaptain = !captain && settings.teraMode === 'captains' && !tcProblem;
+	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined, tcProblem ?? undefined));
 }
 
 /** The picker's dropdowns for the player on the clock, or why there's none. */
@@ -595,8 +596,8 @@ function pickerStep(respond: typeof reply | typeof update, season: L.Season, set
 	if (season.status !== 'drafting') return respond('The draft is not running.');
 	const state = L.draftState(season, settings);
 	if (state.onClock?.user_id !== userId) return respond(respond === update ? 'That turn has passed.' : 'Not your pick.');
-	const available = all<{ species_id: string, name: string, cost: number }>(
-		'SELECT species_id, name, cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
+	const available = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
+		'SELECT species_id, name, cost, tc_cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
 		.filter(p => !L.pickProblem(season, settings, state, userId, p.species_id, false));
 	const out = R.picker(season.id, settings, state, userId, available, tier, page);
 	return respond(out.content, { components: out.components });
@@ -714,7 +715,7 @@ function autocomplete(ctx: Ctx, o: Opts) {
 			if (out.length >= 25) break;
 			if (typed && !p.species_id.includes(typed) && !toID(p.name).includes(typed)) continue;
 			if (L.pickProblem(season, settings, state, ctx.user.id, p.species_id, captain)) continue;
-			out.push({ name: `${p.name} · ${p.cost}${captain ? ` · ${p.tc_cost} Tera` : ''}`, value: p.species_id });
+			out.push({ name: `${p.name} · ${p.cost}${captain ? ` +${p.tc_cost} Tera` : ''}`, value: p.species_id });
 		}
 		return choices(out);
 	}

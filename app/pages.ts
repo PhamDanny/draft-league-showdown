@@ -69,7 +69,7 @@ if (document.getElementById('pool-afford')) window.filterPool();
 // its own form, so an update arriving mid-decision neither closes it nor detaches the form it submits.
 const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel bt-dialog">
 	<form method="post" action="/l/${leagueId}/draft/pick">
-		<h2 id="pick-q" style="margin-top:0"></h2><p id="pick-left" class="muted"></p>
+		<h2 id="pick-q" style="margin-top:0"></h2><p id="pick-left" class="muted"></p><p id="pick-note" class="muted" hidden>This drafts it as a normal pick. It can't become a Tera Captain later.</p>
 		<input type="hidden" name="species"><input type="hidden" name="captain"><input type="hidden" name="for">
 		<div class="row" style="justify-content:flex-end"><button class="btn" type="button" value="cancel" autofocus>Cancel</button><button class="btn primary" type="submit">Draft</button></div>
 	</form>
@@ -84,13 +84,15 @@ const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel
 		if (!src) return;
 		e.preventDefault();
 		const root = document.getElementById('draft-root');
-		const { name, cost, captain, tc } = src.dataset;
+		const { name, cost, captain, tc, couldCaptain } = src.dataset;
 		const who = root?.dataset.for || '';
 		const left = Number(root?.dataset.left) - Number(cost);
 		const price = cost + ' points' + (captain ? ' and ' + tc + ' Tera points' : '');
 		dlg.querySelector('#pick-q').textContent = 'Draft ' + name + (captain ? ' as a Tera Captain' : '') + ' for ' + (who || price) + '?';
 		dlg.querySelector('#pick-left').textContent = (who ? price + '. ' + who + ' would have ' : 'You would have ') + left + ' points' +
 			(captain ? ' and ' + (Number(root?.dataset.tcLeft) - Number(tc)) + ' Tera points' : '') + ' left.';
+		// Reset on every open: the dialog outlives the row that opened it
+		dlg.querySelector('#pick-note').hidden = !couldCaptain;
 		f.species.value = src.species.value;
 		f.captain.value = captain ? '1' : '';
 		f.for.value = root?.dataset.forId || '';
@@ -476,7 +478,7 @@ export function pageRoutes(app: Express) {
 			title: n.get(uid)!, tab: 'teams',
 			body: `${rec ? `<p class="eyebrow">${rec.sw}–${rec.sl} · ${st.indexOf(rec) + 1}${['st', 'nd', 'rd'][st.indexOf(rec)] || 'th'}</p>` : ''}<h1>${esc(n.get(uid))}</h1>
 			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
-				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && settings.teraMode === 'captains' ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}${x.captain && settings.teraMode === 'captains' && x.tc_cost != null ? ` · ${x.tc_cost} T` : ''}</td></tr>`).join('')}
+				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && settings.teraMode === 'captains' ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}${x.captain && settings.teraMode === 'captains' && x.tc_cost != null ? ` +${x.tc_cost} Tera` : ''}</td></tr>`).join('')}
 			</tbody></table></div></section>
 			${ms.length ? `<section class="panel"><h2>Series</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
@@ -502,15 +504,23 @@ export function pageRoutes(app: Express) {
 		const rounds = Math.max(0, ...state.picks.map(p => p.round + 1), state.onClock ? state.round + 1 : 0);
 		const shownRounds = Math.max(rounds, Math.min(settings.rosterMax, 4));
 		const tc = settings.teraMode === 'captains';
+		// Board header, captains leagues: Tera points and captain slots left under the points left (a line each, to fit a 96px column)
+		const teraLeft = (uid: number) => {
+			const t = settings.tcBudget - (state.tcSpent.get(uid) || 0), c = settings.maxCaptains - (state.captains.get(uid) || 0);
+			const title = `${t} Tera points and ${c} captain slot${c === 1 ? '' : 's'} left`;
+			return `<small class="num tc-left" title="${title}">${t} Tera left</small><small class="num tc-left" title="${title}">${c} TC left</small>`;
+		};
 		const pickBySlot = new Map<string, L.Pick>();
 		for (const p of state.picks) pickBySlot.set(`${p.round}:${p.user_id}`, p);
 		const board = `<section class="panel"><div class="table-wrap"><div class="board" style="--n:${n}"><div class="h"></div>
-			${state.players.map(p => `<div class="h ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}"><span>${esc(p.showdown_name)}</span><small class="num">${settings.budget - (state.spent.get(p.user_id) || 0)} left</small></div>`).join('')}
+			${state.players.map(p => `<div class="h ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}"><span>${esc(p.showdown_name)}</span><small class="num">${settings.budget - (state.spent.get(p.user_id) || 0)} left</small>${tc ? teraLeft(p.user_id) : ''}</div>`).join('')}
 			${Array.from({ length: shownRounds }, (_, r) => {
 		const arrow = settings.draftType === 'snake' && r % 2 ? '←' : '→';
 		return `<div class="h rd">${r + 1} ${arrow}</div>${state.players.map(p => {
 			const pick = pickBySlot.get(`${r}:${p.user_id}`);
-			if (pick) return `<div class="cell ${tc && pick.captain ? 'tc' : ''}">${sprite(pick.species_id)}<b title="${esc(pick.name)}">${esc(pick.name)}</b><span class="c num">${tc && pick.captain ? 'TC ' : ''}${pick.cost}${tc && pick.captain && pick.tc_cost != null ? ` · ${pick.tc_cost} T` : ''}</span></div>`;
+			if (pick) return `<div class="cell ${tc && pick.captain ? 'tc' : ''}">${sprite(pick.species_id)}<b title="${esc(pick.name)}">${esc(pick.name)}</b>${tc && pick.captain ?
+				`<span class="c num" title="Tera Captain: ${pick.cost} points${pick.tc_cost != null ? ` + ${pick.tc_cost} Tera points` : ''}">TC ${pick.cost}${pick.tc_cost != null ? ` +${pick.tc_cost} Tera` : ''}</span>` :
+				`<span class="c num">${pick.cost}</span>`}</div>`;
 			if (state.onClock?.user_id === p.user_id && state.round === r) return `<div class="cell now"><b>${esc(p.showdown_name)}</b>…</div>`;
 			return '<div class="cell empty"></div>';
 		}).join('')}`;
@@ -536,12 +546,16 @@ export function pageRoutes(app: Express) {
 		const poolRows = pool.filter(p => !taken.has(p.species_id)).map(p => {
 			const m = mon(p.species_id, settings.mod);
 			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
+			// Why the Captain button is off, in the order a player would check
+			const tcWhy = !tcOk && tc && p.tc_cost != null ? (!actingFor ? 'Not your turn' : caps >= settings.maxCaptains ? 'No captain slots left' :
+				p.tc_cost > tcLeft ? `Not enough Tera points (${tcLeft} left)` : `Not enough points for ${p.name}`) : '';
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}" data-afford="${budgetFor && !affordableFor(budgetFor, p.cost) ? '0' : '1'}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
-				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"><input type="hidden" name="species" value="${esc(p.species_id)}">
+				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"${tcOk ? ' data-could-captain="1"' : ''}><input type="hidden" name="species" value="${esc(p.species_id)}">
 					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points"><span class="hide-sm">Draft · </span>${p.cost}</button></form>
 				${tc ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}" data-tc="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
-					<button class="btn sm tera" type="submit" ${tcOk ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points and ${p.tc_cost} Tera points"><span class="hide-sm">Captain · </span>${p.tc_cost} T</button></form>` : '<span class="btn sm tera" style="visibility:hidden" aria-hidden="true"><span class="hide-sm">Captain · </span>00 T</span>') : ''}
+					<button class="btn sm tera" type="submit" ${tcOk ? '' : `disabled title="${esc(tcWhy)}"`} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points plus ${p.tc_cost} Tera points${tcWhy ? `. ${esc(tcWhy)}` : ''}"><span class="hide-sm">Captain · </span><span class="hide-sm">+${p.tc_cost} Tera</span><span class="show-sm">+${p.tc_cost} T</span></button></form>` :
+		`<span class="btn sm tera no-tc" title="${esc(p.name)} can't be a Tera Captain" aria-label="${esc(p.name)} can't be a Tera Captain"><span class="hide-sm">No captain</span><span class="show-sm">No TC</span></span>`) : ''}
 			</div>`;
 		}).join('');
 		const myCount = state.counts.get(me) || 0;
@@ -563,13 +577,14 @@ export function pageRoutes(app: Express) {
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					${budgetFor ? `<label class="row" style="gap:6px;margin:0 0 10px;font-size:13px"><input type="checkbox" id="pool-afford"> Hide Pokémon ${actingFor && !myTurn ? esc(state.onClock!.showdown_name) + ' can\'t' : 'I can\'t'} afford</label>` : ''}
+					${tc ? `<p class="muted tc-note">Tera Captains can Terastallize in battle. A captain costs its normal points plus its Tera points, from a separate Tera budget. You choose when you draft; it can't be added later.</p>` : ''}
 					<div class="pool-list">${poolRows}</div></section>
 				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: tc && !!p.captain })).join('') || '<span class="muted">No picks yet.</span>'}</div>
-					<div class="tiles">
-						<div><h3 style="margin:0">Budget</h3><div class="num" style="font-size:16px">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
-						${tc ? `<div><h3 style="margin:0">Captains</h3><div class="num" style="font-size:16px">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>
-							<div><h3 style="margin:0">Tera budget</h3><div class="num" style="font-size:16px">${settings.tcBudget - (state.tcSpent.get(me) || 0)} / ${settings.tcBudget}</div></div>` : ''}
-						<div><h3 style="margin:0">Picks</h3><div class="num" style="font-size:16px">${myCount} / ${settings.rosterMax}</div></div>
+					<div class="tiles${tc ? ' four' : ''}">
+						<div><h3 style="margin:0">Points left</h3><div class="num" style="font-size:16px">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
+						${tc ? `<div><h3 style="margin:0">Tera points left</h3><div class="num" style="font-size:16px">${settings.tcBudget - (state.tcSpent.get(me) || 0)} / ${settings.tcBudget}</div></div>
+							<div><h3 style="margin:0">Captain slots left</h3><div class="num" style="font-size:16px">${settings.maxCaptains - (state.captains.get(me) || 0)} / ${settings.maxCaptains}</div></div>` : ''}
+						<div><h3 style="margin:0">Picks left</h3><div class="num" style="font-size:16px">${settings.rosterMax - myCount} / ${settings.rosterMax}</div></div>
 					</div>
 					${myCount >= settings.rosterMin && !myFinished && myCount < settings.rosterMax ? `<form method="post" action="/l/${league.id}/draft/finish" style="margin-top:16px"><button class="btn" type="submit">Done drafting</button></form>` : ''}
 				</section>` : '<div></div>'}

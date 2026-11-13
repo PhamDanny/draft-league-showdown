@@ -129,8 +129,9 @@ function statusEmbed(league: L.League, season: L.Season, settings: L.Settings, s
 
 /** With `emojis`, each pick is its icon emoji (its name until the emoji is uploaded), as in Best available. */
 function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftState, names: Map<number, Who>,
-	o: { costs: boolean, short: number, emojis: Map<string, string> | null }): Embed {
+	o: { costs: boolean, short: number, emojis: Map<string, string> | null, tera?: boolean }): Embed {
 	const tc = settings.teraMode === 'captains';
+	const teraLeft = (uid: number) => (tc && o.tera !== false ? ` · ${settings.tcBudget - (state.tcSpent.get(uid) || 0)} Tera` : '');
 	const complete = season.status !== 'drafting';
 	return {
 		title: complete ? 'Final rosters' : 'Draft so far',
@@ -143,7 +144,7 @@ function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftStat
 			const list = mine.map(x => `${o.emojis?.get(x.species_id) ?? md(x.name)}${o.costs ? ` ${x.cost}` : ''}${tc && x.captain ? ' (TC)' : ''}`).join(', ');
 			return {
 				name: cut(`${i + 1}. ${md(team)}${marks.length ? ` · ${marks.join(', ')}` : ''}`, MAX_FIELD_NAME),
-				value: cut(`${settings.budget - (state.spent.get(p.user_id) || 0)} left${list ? `\n${list}` : ''}`, MAX_FIELD_VALUE),
+				value: cut(`${settings.budget - (state.spent.get(p.user_id) || 0)} left${teraLeft(p.user_id)}${list ? `\n${list}` : ''}`, MAX_FIELD_VALUE),
 				inline: true,
 			};
 		}),
@@ -208,12 +209,13 @@ export function board(league: L.League, season: L.Season, settings: L.Settings, 
 	const names = who(league.id);
 	const complete = season.status !== 'drafting';
 	// Rosters first, as emojis; if they leave too little room, drop costs, then use names, then shorten team names.
+	// The last layout also drops Tera points left, so the trim below never cuts a "62 left · 14 Tera" line mid-number.
 	// Emoji fit is judged as if every pick had its emoji, so uploads finishing don't change which layout is used.
 	const sized = new Map(emojis);
 	for (const p of state.picks) if (!sized.has(p.species_id)) sized.set(p.species_id, `<:${emojiName(p.species_id)}:${'0'.repeat(19)}>`);
 	const tries = [
 		{ costs: true, short: 0, emojis: sized }, { costs: false, short: 0, emojis: sized },
-		{ costs: true, short: 0, emojis: null }, { costs: false, short: 0, emojis: null }, { costs: false, short: 16, emojis: null }, { costs: false, short: 8, emojis: null },
+		{ costs: true, short: 0, emojis: null }, { costs: false, short: 0, emojis: null }, { costs: false, short: 16, emojis: null }, { costs: false, short: 8, emojis: null, tera: false },
 	];
 	let embeds: Embed[] = [];
 	let used = tries[0];
@@ -263,10 +265,8 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 		const slots = settings.maxCaptains - (state.captains.get(p.user_id) || 0);
 		const tera = settings.tcBudget - (state.tcSpent.get(p.user_id) || 0);
 		lines.push(slots > 0
-			? `**Tera Captain:** press **Confirm as Tera Captain** on the confirm step (or set \`/draft\`'s \`captain\` option to True) ` +
-				`to draft it as a Tera Captain, which can Terastallize in battle. ` +
-				`It costs its normal points plus its Tera points, paid from your separate Tera budget, and only Pokémon with a Tera price qualify. ` +
-				`You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
+			? `**Tera Captain:** only captains can Terastallize in battle. A captain costs its normal points plus its Tera points from a separate budget, ` +
+				`and you choose it on the confirm step; it can't be added later. You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
 			: `**Tera Captain:** you've used all ${plural(settings.maxCaptains, 'captain slot')}, so draft it as a normal pick.`);
 	}
 	// Anyone can press these; the press is checked against who is on the clock then, not when this was posted
@@ -277,21 +277,28 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 
 /** The ephemeral "Draft Garchomp for 18?" step. */
 export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: number,
-	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, customId: string, captainId?: string) {
+	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, customId: string, captainId?: string,
+	noCaptain?: string) {
 	const count = (state.counts.get(userId) || 0) + 1;
 	const left = settings.budget - (state.spent.get(userId) || 0) - entry.cost;
 	const need = Math.max(0, settings.rosterMin - count);
 	const tera = captain ? ` and ${entry.tc_cost} Tera points` : '';
-	const teraLeft = captain ? ` (${settings.tcBudget - (state.tcSpent.get(userId) || 0) - (entry.tc_cost || 0)} Tera points)` : '';
+	const tcAfter = settings.tcBudget - (state.tcSpent.get(userId) || 0) - (entry.tc_cost || 0);
+	const teraLeft = captain ? ` (${tcAfter} Tera points)` : '';
+	const more = need ? ` for at least ${plural(need, 'more pick')}` : '';
+	// A normal pick that could be a captain spells out both outcomes; one that can't says why (pickProblem's words)
+	const description = captainId ? `Normal pick: ${plural(entry.cost, 'point')}, ${left} left${more}.\n` +
+		`As a Tera Captain: ${plural(entry.cost, 'point')} + ${entry.tc_cost} Tera, ${tcAfter} Tera left. Captains can Terastallize; this can't be added later.` :
+		`You'll have ${left} left${teraLeft}${more}.${noCaptain ? `\nNormal pick only: ${noCaptain}` : ''}`;
 	return {
 		embeds: [{
 			title: `Draft ${entry.name}${captain ? ' as a Tera Captain' : ''} for ${entry.cost}${tera}?`,
-			description: `You'll have ${left} left${teraLeft}${need ? ` for at least ${plural(need, 'more pick')}` : ''}.`,
+			description,
 			color: COLOR,
 			image: { url: spriteUrl(entry.species_id, settings.mod) },
 		}],
 		components: [{ type: 1, components: [
-			{ type: 2, style: 3, label: 'Confirm', custom_id: customId },
+			{ type: 2, style: 3, label: captainId ? 'Confirm normal pick' : 'Confirm', custom_id: customId },
 			...(captainId ? [{ type: 2, style: 1, label: `Confirm as Tera Captain (+${entry.tc_cost} Tera)`, custom_id: captainId }] : []),
 			{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
 		] }],
@@ -311,7 +318,7 @@ function emojiObject(markup: string | undefined) {
  * `available` is what the caller can legally take, priciest first. All state is in the custom ids.
  */
 export function picker(seasonId: number, settings: L.Settings, state: L.DraftState, userId: number,
-	available: { species_id: string, name: string, cost: number }[], tier: number | null, page: number, emojis = emojiMap()) {
+	available: { species_id: string, name: string, cost: number, tc_cost?: number | null }[], tier: number | null, page: number, emojis = emojiMap()) {
 	const tiers = [...new Set(available.map(p => p.cost))];
 	if (!tiers.length) return { content: "There's nothing left in the pool you can draft.", components: [] };
 	// No tier yet: the priciest. A tier that's gone since: the next one down (or the cheapest)
@@ -326,6 +333,12 @@ export function picker(seasonId: number, settings: L.Settings, state: L.DraftSta
 	const i = tiers.indexOf(chosen);
 	const start = Math.max(0, Math.min(i - 12, tiers.length - PICKER_PAGE));
 	const left = settings.budget - (state.spent.get(userId) || 0);
+	// Captains leagues: each Pokémon's Tera price under its name, while this player still has a captain slot
+	const tc = settings.teraMode === 'captains';
+	const slots = settings.maxCaptains - (state.captains.get(userId) || 0);
+	const tera = settings.tcBudget - (state.tcSpent.get(userId) || 0);
+	const teraNote = (p: typeof available[number]) => (!tc || slots <= 0 ? null : p.tc_cost == null ? "Can't be a Tera Captain" :
+		`Captain: +${p.tc_cost} Tera${p.tc_cost > tera ? `, more than your ${tera} left` : ''}`);
 	const rows: object[] = [
 		{ type: 1, components: [{
 			type: 3, custom_id: `tier:${seasonId}:${userId}`, placeholder: 'Price tier',
@@ -339,7 +352,8 @@ export function picker(seasonId: number, settings: L.Settings, state: L.DraftSta
 			placeholder: pages > 1 ? `Choose a Pokémon (page ${page + 1} of ${pages})` : 'Choose a Pokémon',
 			options: shown.map(p => {
 				const emoji = emojiObject(emojis.get(p.species_id));
-				return { label: `${p.name} · ${p.cost}`.slice(0, 100), value: p.species_id, ...(emoji ? { emoji } : {}) };
+				const description = teraNote(p);
+				return { label: `${p.name} · ${p.cost}`.slice(0, 100), value: p.species_id, ...(description ? { description } : {}), ...(emoji ? { emoji } : {}) };
 			}),
 		}] },
 	];
@@ -350,7 +364,8 @@ export function picker(seasonId: number, settings: L.Settings, state: L.DraftSta
 		] });
 	}
 	return {
-		content: `You have ${plural(left, 'point')} left. Choose a price tier, then a Pokémon. You confirm before it's final.`,
+		content: `You have ${tc ? `${plural(left, 'point')}, ${plural(tera, 'Tera point')} and ${plural(slots, 'captain slot')}` : plural(left, 'point')} left. ` +
+			"Choose a price tier, then a Pokémon. You confirm before it's final.",
 		components: rows,
 	};
 }
@@ -430,7 +445,7 @@ export function rosterEmbed(league: L.League, season: L.Season, settings: L.Sett
 		title: teamOf(who(league.id).get(userId)),
 		url: `${PUBLIC_URL}/l/${league.id}/team/${userId}`,
 		color: COLOR,
-		description: cut(r.map(x => `**${md(x.name)}** · ${x.cost}${tc && x.captain ? ` · Tera Captain${x.tc_cost != null ? ` (${x.tc_cost} Tera)` : ''}` : ''}`).join('\n') || 'No picks yet.', MAX_DESCRIPTION),
+		description: cut(r.map(x => `**${md(x.name)}** · ${x.cost}${tc && x.captain ? ` · Tera Captain${x.tc_cost != null ? ` (+${x.tc_cost} Tera)` : ''}` : ''}`).join('\n') || 'No picks yet.', MAX_DESCRIPTION),
 		footer: { text: `${settings.budget - spent} of ${settings.budget} points left · ${r.length} Pokémon` },
 		...(r[0] ? { thumbnail: { url: spriteUrl(r[0].species_id, settings.mod) } } : {}),
 	};
@@ -440,7 +455,7 @@ export function pokemonEmbed(league: L.League, season: L.Season, settings: L.Set
 	entry: { species_id: string, name: string, cost: number, tc_cost: number | null, banned: number }): Embed {
 	const pick = L.picks(season.id).find(p => p.species_id === entry.species_id);
 	const lines = [`${entry.cost} points`];
-	if (settings.teraMode === 'captains') lines.push(entry.tc_cost == null ? "Can't be a Tera Captain" : `Tera Captain: ${entry.tc_cost} Tera points`);
+	if (settings.teraMode === 'captains') lines.push(entry.tc_cost == null ? "Can't be a Tera Captain" : `Tera Captain: +${entry.tc_cost} Tera points on top of its price`);
 	if (entry.banned) lines.push('Banned in this league');
 	else if (pick) lines.push(`Drafted by ${bold(who(league.id).get(pick.user_id))} in round ${pick.round + 1}${settings.teraMode === 'captains' && pick.captain ? ' as a Tera Captain' : ''}`);
 	else lines.push('Available');
