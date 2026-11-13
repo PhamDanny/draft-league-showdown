@@ -16,7 +16,7 @@ The site already has what makes this cheap: every user signs in with Discord, so
 - `notify(leagueId)` in `app/events.ts` is already called after every change the bot cares about: pick, finish, draft start, undo, schedule, result override, battle start and end, remake. The bot hangs off it (section 4).
 - **The remaining pool does not fit in a Discord message.** Pools are 367 to 1160 Pokémon; one message holds 6000 characters across all its embeds. Section 2.1 says what the board shows instead.
 
-Not checked: the Discord API details are written from memory of Discord's documentation, not tested. Confirm each item in 3.5 against https://discord.com/developers/docs before building.
+The Discord API details in 3.5 were checked against Discord's developer docs (now served from docs.discord.com) while building; what was confirmed, corrected or left open is recorded there. Nothing has been run against a real Discord server yet: the tests use a fake API (section 7).
 
 ## Ground rules
 
@@ -56,7 +56,7 @@ The draft channel holds exactly two bot messages: the **board**, edited in place
 
 One message, three embeds, re-rendered from `draftState()` on every change.
 
-1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "**Team Name** drafted **Garchomp** for 18 (Tera Captain)". Also names any player skipped as stuck. Before the first pick: the draft order.
+1. **Status.** Round and pick number, who is on the clock, and the most recent pick with its sprite as the thumbnail: "**Team Name** drafted **Garchomp** for 18 (Tera Captain)". If the player on the clock can't afford even the cheapest Pokémon left (the draft never skips anyone for this, so they would sit there), it says so and that a commissioner can undo or end the draft. Before the first pick: the draft order.
 2. **Draft so far.** One field per player in draft order: team name, points left, picks so far in pick order with costs, captains marked. Players who are done are marked done.
 3. **Best available.** The undrafted, unbanned pool by price, most expensive first: `20: Dragapult, Gholdengo · 19: …`, for as many tiers as fit, then "*N* more available" with a link to the draft room, where the full pool is searchable. `/pokemon` answers for any single Pokémon.
 
@@ -81,7 +81,7 @@ Works for the player on the clock. The reply is **ephemeral**: only the caller s
 3. **Confirm.** The reply shows the sprite (large, as the embed image), name, cost, Tera Captain cost if `captain` is set, and what the pick leaves: "Draft **Garchomp** for 18? You'll have 44 left for at least 4 more picks." with **Confirm** and **Cancel** buttons.
 4. **On Confirm** the pick is re-validated from scratch and made with `makePick`. The reply collapses to "Drafted Garchomp." The board updates and the next player is pinged (through `notify`, same as a pick made on the site). **Cancel** collapses it to "Cancelled."
 
-The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the handler checks the presser is the player the pick is for.
+The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}:{userId}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the trailing site user id lets the handler check the presser is the player the pick is for. Every button except Cancel ends with the user id.
 
 `captain` is refused with a plain message in leagues where `teraMode` is not `captains`.
 
@@ -95,12 +95,13 @@ One message in the announcements channel when every series of a week is final. N
 
 - **Results:** each series of the week as "**A** 2–1 **B**", each a link to its series page, where the teams and replays are now open.
 - **Standings:** the table, same order and tiebreaks as the site, in a code block so columns line up.
-- **Next week:** the matchups, mentioning the players (subject to `/pings`). After the final week this section is "Regular season complete" instead.
+- **Next week:** the matchups, mentioning the players (subject to `/pings`). After the final week this section is "Regular season complete" instead. This section is the message's text, above the embeds: a mention inside an embed renders but never notifies anyone.
 
 Two edge cases:
 
 - **Week 1** has no previous week. When the commissioner completes the draft and the schedule is made, the bot posts week 1's matchups on their own.
 - **A recap is posted once.** If a commissioner changes a result afterwards, the recap is not edited; the next one has the corrected standings.
+- **Linking mid-season** starts recaps from the next unfinished week; weeks already played are not posted after the fact.
 
 ### 2.5 Lookup commands
 
@@ -165,12 +166,14 @@ On startup, if the token is set, one `PUT /applications/{id}/commands` with the 
 
 ### 3.5 To confirm against Discord's docs before building
 
-- A bot can post, edit and delete its own messages over REST without ever connecting to the gateway, and deleting its own messages needs no extra permission.
-- Members can run slash commands in a channel where they cannot send messages.
-- Signature scheme and headers as in 3.3; Discord probes the endpoint when its URL is saved.
-- Limits: 3-second response; 25 autocomplete choices; `custom_id` 100 characters; 6000 characters across a message's embeds, 25 fields per embed, 1024 per field value.
-- An ephemeral reply can carry an embed image and buttons, and a button press can replace it (response type 7).
-- Rate-limit headers and the `429` body (`retry_after`).
+Checked against Discord's developer docs while building. The result follows each item.
+
+- A bot can post, edit and delete its own messages over REST without ever connecting to the gateway, and deleting its own messages needs no extra permission. **Confirmed from the docs, with a caveat.** Create, Edit and Delete Message list no gateway requirement, and the gateway docs say REST operations can be done over HTTP and that HTTP and gateway restrictions are independent. Delete needs Manage Messages only for other users' messages; the author can edit their own. Creating a message needs Send Messages in the channel. Older docs once said a bot must identify with the gateway once before it could send; the current docs don't say that, and it has not been tried against real Discord.
+- Members can run slash commands in a channel where they cannot send messages. **Unverified.** The docs don't say either way: Use Application Commands is its own permission and command access can be set per channel, but nothing states whether lacking Send Messages blocks commands. The fallback in section 1 (run `/draft` from another channel; the result is the same) stands until it is tried.
+- Signature scheme and headers as in 3.3; Discord probes the endpoint when its URL is saved. **Confirmed.** `X-Signature-Ed25519` over `X-Signature-Timestamp` + raw body; reply `401` when it fails; a PING (`type 1`) must get `200` with `{ "type": 1 }` and a JSON content type. Saving the URL fails unless both work, and Discord keeps running routine checks afterwards and removes the URL if the endpoint fails them.
+- Limits: 3-second response; 25 autocomplete choices; `custom_id` 100 characters; 6000 characters across a message's embeds, 25 fields per embed, 1024 per field value. **Confirmed**, plus: the 6000 counts titles, descriptions, field names and values, footer text and author names; a description holds 4096 and a title or field name 256; message content holds 2000; a message has up to 10 embeds, and a row up to 5 buttons.
+- An ephemeral reply can carry an embed image and buttons, and a button press can replace it (response type 7). **Partly confirmed.** Type 7 (UPDATE_MESSAGE) is valid for component interactions and edits the message the button is on; the ephemeral flag (64) is allowed on a reply with embeds and components, and no restriction on combining them is listed. Not tried against real Discord.
+- Rate-limit headers and the `429` body (`retry_after`). **Confirmed.** `X-RateLimit-Limit`, `-Remaining`, `-Reset`, `-Reset-After` and `-Bucket`, plus `-Global` and `-Scope` on a 429; the body has `retry_after` in seconds (a float) and `global`, and `Retry-After` is sent too. Bots get 50 requests a second overall; interaction responses don't count toward it. Also relevant: 10,000 invalid requests (401, 403, 429) in 10 minutes gets the IP banned for a while, one more reason the bot stops sending to a channel after a 403 or 404 instead of retrying.
 
 ## 4. Keeping Discord in sync
 
@@ -179,8 +182,8 @@ No event queue. The bot stores what it last showed and reconciles against the da
 - `app/events.ts` `notify(leagueId)` also calls `discord.changed(leagueId)`, which schedules `sync(leagueId)` after a short debounce. `sync` also runs for every linked league at startup.
 - `sync(leagueId)`, one at a time per league:
   1. **Board:** if a draft is under way or just completed, render the board. If it differs from the last render (compare a hash), edit the message, or post it if there is none or the edit returns `404`.
-  2. **Ping:** compute `{seasonId}:{overall}` for `onClock`. If it differs from the stored key, delete the old ping message, post the new one, store its id and key. No one on the clock: delete and clear.
-  3. **Recap:** find the highest week whose series are all final. If it is greater than the stored `recap_week` for this season, post recaps for each missing week in order and store the week. `recap_week` starts at `NULL`; posting week 1's matchups sets it to `0`.
+  2. **Ping:** compute `{seasonId}:{slot}` for `onClock`, where `slot` is the season's current pick slot (`draftState().slot`). If it differs from the stored key, delete the old ping message, post the new one, store its id and key. No one on the clock: delete and clear. The key is the slot rather than the overall pick number because `/done` moves the clock without a pick. If the board had to be posted fresh, the ping is re-posted too so it stays below the board.
+  3. **Recap:** find the highest week such that it and every week before it have all their series final. If it is greater than the stored `recap_week` for this season, post recaps for each missing week in order and store the week. `recap_week` starts at `NULL`; posting week 1's matchups sets it to `0`.
 - Because `sync` compares state rather than replaying events, it is safe to run at any time, twice in a row, or after a crash. Several quick picks collapse into one board edit.
 - **Failures:** on `429` wait `retry_after`. On other errors retry with backoff. A `403` or `404` on the channel itself records the error on the link (shown on the admin page) and stops retrying until the commissioner re-runs setup.
 
@@ -192,13 +195,16 @@ Rendering lives in `app/discord.ts` with the REST client and command handlers; i
 CREATE TABLE IF NOT EXISTS discord_links (
 	league_id INTEGER PRIMARY KEY REFERENCES leagues(id) ON DELETE CASCADE,
 	guild_id TEXT NOT NULL,
+	guild_name TEXT,                 -- names for the admin page, which never waits on Discord
 	channel_id TEXT NOT NULL,        -- announcements
+	channel_name TEXT,
 	draft_channel_id TEXT,           -- NULL: no draft channel yet
+	draft_channel_name TEXT,
 	board_season_id INTEGER,         -- the season the board message belongs to
 	board_message_id TEXT,
 	board_hash TEXT,
 	clock_message_id TEXT,
-	clock_key TEXT,                  -- '{seasonId}:{overall}' of the ping on screen
+	clock_key TEXT,                  -- '{seasonId}:{slot}' of the ping on screen
 	recap_season_id INTEGER,
 	recap_week INTEGER,              -- last week recapped; 0 = week 1 matchups posted
 	error TEXT,                      -- last fatal send error
