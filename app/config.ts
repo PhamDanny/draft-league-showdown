@@ -18,6 +18,11 @@ export const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || '';
 export const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || '';
 export const ADMIN_DISCORD_IDS = (process.env.ADMIN_DISCORD_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 export const DEV_LOGIN = process.env.DEV_LOGIN === '1' || process.env.DEV_LOGIN === 'true';
+// Discord bot (docs/discord-bot-spec.md). With no token the bot is off entirely.
+export const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
+export const DISCORD_PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY || '';
+// Only tests change this, to point the bot at a fake API
+export const DISCORD_API = (process.env.DISCORD_API || 'https://discord.com/api/v10').replace(/\/$/, '');
 
 function readKey(name: string) {
 	const file = path.join(DATA_DIR, 'keys', name);

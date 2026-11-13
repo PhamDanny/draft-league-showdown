@@ -7,6 +7,7 @@ import * as L from './league.ts';
 import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
 import { builderRoutes, gameOf } from './builder.ts';
+import * as discord from './discord.ts';
 import { esc, monChip, monLabel, page, setList, sprite } from './views/layout.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
@@ -680,6 +681,7 @@ export function pageRoutes(app: Express) {
 					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`End the draft and generate the schedule? Picks can't be changed afterwards.${shortNote}`)}><button class="btn primary" type="submit">End draft and make schedule</button></form></div>` : ''}
 				${season.status === 'regular' ? `<p class="muted" style="margin:0">Regular season. Best of ${settings.bestOf}.</p>` : ''}
 			</section>
+			${discord.enabled ? discordPanel(league.id) : ''}
 		</div>`, `<script>
 document.getElementById('copy-invite').addEventListener('click', async e => {
 	const b = e.currentTarget, inp = document.getElementById('invite');
@@ -688,6 +690,34 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 	setTimeout(() => { b.textContent = 'Copy'; }, 1500);
 });
 </script>`);
+	});
+
+	/** The Discord bot's state for this league; shown only when the site runs the bot. */
+	function discordPanel(leagueId: number) {
+		const link = discord.linkFor(leagueId);
+		if (!link) {
+			return `<section class="panel"><h2>Discord</h2>
+				<p style="margin-top:0">Post the draft board, on-the-clock pings and weekly recaps in your league's Discord server.</p>
+				<p class="muted">Add the bot to your server, then run <code>/league link</code> there in the channel for announcements (you need Manage Server in Discord).</p>
+				<a class="btn" href="${esc(discord.inviteUrl())}" target="_blank" rel="noopener">Add the bot to Discord</a></section>`;
+		}
+		const channel = (id: string | null, name: string | null) => id ?
+			`<a href="https://discord.com/channels/${esc(link.guild_id)}/${esc(id)}" target="_blank" rel="noopener">#${esc(name || id)}</a>` : '<span class="muted">not set</span>';
+		return `<section class="panel"><h2>Discord</h2>
+			${link.error ? `<div class="flash bad">${esc(link.error)} Fix it in Discord, then run <code>/league draft-channel</code> or <code>/league link</code> again.</div>` : ''}
+			<div class="list">
+				<div class="row"><span class="muted">Server</span><span class="spacer"></span><b>${esc(link.guild_name || link.guild_id)}</b></div>
+				<div class="row"><span class="muted">Announcements</span><span class="spacer"></span>${channel(link.channel_id, link.channel_name)}</div>
+				<div class="row"><span class="muted">Draft channel</span><span class="spacer"></span>${channel(link.draft_channel_id, link.draft_channel_name)}</div>
+			</div>
+			${link.draft_channel_id ? '' : '<p class="muted">Run <code>/league draft-channel</code> in the channel that should hold the draft board.</p>'}
+			<form method="post" action="/l/${leagueId}/admin/discord/unlink" style="margin-top:12px" ${confirmAttr('Unlink Discord? The bot removes the board and ping and stops posting for this league.')}>
+				<button class="btn" type="submit">Unlink</button></form></section>`;
+	}
+	lg.post('/admin/discord/unlink', commissioner, form, (req, res) => {
+		const { league } = req as LReq;
+		if (discord.unlink(league.id)) audit(league.id, req.user!.id, 'discord.unlink');
+		res.redirect(`/l/${league.id}/admin?msg=${encodeURIComponent('Unlinked from Discord.')}`);
 	});
 
 	lg.get('/admin/settings', commissioner, (req, res) => {
@@ -753,7 +783,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		'member.join': 'joined the league', 'member.remove': 'removed a member', 'member.promote': 'made a member commissioner',
 		'draft.start': 'started the draft', 'draft.pick': 'made a draft pick', 'draft.undo': 'undid the last pick', 'draft.finish': 'finished drafting',
 		'season.schedule': 'ended the draft and made the schedule', 'pool.edit': 'edited the pool', 'result.override': 'overrode a series result',
-		'remake.request': 'asked for a remake', 'remake.accept': 'accepted a remake', 'remake.decline': 'declined a remake', 'remake.cancel': 'withdrew a remake request',
+		'discord.unlink': 'unlinked Discord', 'remake.request': 'asked for a remake', 'remake.accept': 'accepted a remake', 'remake.decline': 'declined a remake', 'remake.cancel': 'withdrew a remake request',
 	};
 	lg.get('/admin/log', commissioner, (req, res) => {
 		const { league } = req as LReq;
@@ -818,6 +848,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		run('UPDATE leagues SET name = ?, format_name = ?, settings = ? WHERE id = ?', name, L.formatNameFor(name, next, league.id), JSON.stringify(next), league.id);
 		audit(league.id, req.user!.id, 'settings.update', JSON.stringify(next));
 		syncShowdown();
+		notify(league.id);
 		res.redirect(`/l/${league.id}/admin/settings?msg=${encodeURIComponent('Saved.')}`);
 	});
 
@@ -922,6 +953,7 @@ document.addEventListener('change', async e => {
 		const r = run(`UPDATE pool SET ${field} = ? WHERE season_id = ? AND species_id = ?`, value, season.id, id);
 		if (!r.changes) return res.status(404).end();
 		audit(league.id, req.user!.id, 'pool.edit', `${id} ${field}=${value}`);
+		notify(league.id); // prices and bans change the Discord board's best available
 		res.json({ ok: true });
 	});
 

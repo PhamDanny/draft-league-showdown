@@ -23,6 +23,19 @@ Setup copies `.env.example` to `.env`. Fill in:
 - `ADMIN_DISCORD_IDS`: your Discord user id. Admins can create leagues. If empty, the first person to sign in is admin.
 - `DEV_LOGIN=1` adds a test sign-in that lets you be any made-up player, for trying drafts and battles alone. Turn it off before friends use the site.
 
+## Discord bot
+
+Optional. With `DISCORD_BOT_TOKEN` empty, none of this runs.
+
+The bot posts a live draft board and an on-the-clock ping in a draft channel, lets players pick with `/draft` and `/done`, posts one recap per finished week in an announcements channel, and answers `/standings`, `/schedule`, `/roster`, `/pokemon`, `/rules` and `/pings`. It never connects to Discord's gateway: it sends with the bot token over REST and receives slash commands at `/discord/interactions`, so it shows as offline in the member list. Battles, remakes and commissioner tools stay on the site. See `docs/discord-bot-spec.md`.
+
+1. In the same Discord application used for sign-in, open **Bot**, reset the token and put it in `.env` as `DISCORD_BOT_TOKEN`.
+2. From **General Information**, copy **Public Key** into `DISCORD_PUBLIC_KEY`, restart the site, and set **Interactions Endpoint URL** to `PUBLIC_URL` + `/discord/interactions`. Discord checks the URL when you save it, so the site must be running and reachable over HTTPS (for local testing use a tunnel such as `cloudflared`). The board and recaps work without it; slash commands don't.
+3. A league commissioner opens the league's **Admin** page and uses **Add the bot to Discord** (scopes `bot applications.commands`; permissions View Channel, Send Messages, Embed Links).
+4. In the server, the commissioner (who also needs Manage Server there) runs `/league link` in the announcements channel, then `/league draft-channel` in the channel for the board. A draft channel works best where members can't send messages.
+
+Slash commands are registered on every start. If the bot is removed or a channel is deleted, the error shows on the Admin page; fix it and run the setup command again.
+
 ## How it fits together
 
 ```
@@ -31,6 +44,7 @@ browser ──► league site (app/, port 8000)
              ├─ /l/:id/battle/:match: challenge page with Showdown's battle screen embedded
              ├─ /play.html: the Showdown client (vendor/pokemon-showdown-client, patched), used only for that embed
              ├─ /~~draftleague/action.php: Showdown login, signed for the signed-in user
+             ├─ /discord/interactions: slash commands and buttons from the Discord bot (only with a bot token)
              └─ /showdown websocket ──► Showdown server (vendor/pokemon-showdown, 127.0.0.1:8001)
                                          ├─ one format per league (config/custom-formats.ts)
                                          └─ battle start/end hooks (server/chat-plugins/draft-league.ts)

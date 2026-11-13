@@ -125,6 +125,26 @@ CREATE TABLE IF NOT EXISTS discarded_rooms (
 	roomid TEXT PRIMARY KEY,
 	at INTEGER NOT NULL
 );
+-- A league's Discord server, its channels, and what the bot last showed there (app/discord.ts)
+CREATE TABLE IF NOT EXISTS discord_links (
+	league_id INTEGER PRIMARY KEY REFERENCES leagues(id) ON DELETE CASCADE,
+	guild_id TEXT NOT NULL,
+	guild_name TEXT,
+	channel_id TEXT NOT NULL,        -- announcements
+	channel_name TEXT,
+	draft_channel_id TEXT,           -- NULL: no draft channel yet
+	draft_channel_name TEXT,
+	board_season_id INTEGER,         -- the season the board message belongs to
+	board_message_id TEXT,
+	board_hash TEXT,
+	clock_message_id TEXT,
+	clock_key TEXT,                  -- '{seasonId}:{pick slot}' of the ping on screen
+	recap_season_id INTEGER,
+	recap_week INTEGER,              -- last week recapped; 0 = week 1 matchups posted
+	error TEXT,                      -- last fatal send error
+	linked_by INTEGER REFERENCES users(id),
+	linked_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
 	id INTEGER PRIMARY KEY,
 	league_id INTEGER REFERENCES leagues(id) ON DELETE CASCADE,
@@ -144,6 +164,8 @@ function addColumn(table: string, column: string, type: string) {
 addColumn('picks', 'tc_cost', 'INTEGER');
 // JSON array of species ids one pool entry covers (e.g. DPP's Rotom appliance formes), or NULL
 addColumn('pool', 'covers', 'TEXT');
+// 0: the Discord bot writes this member's name instead of mentioning them (/pings off)
+addColumn('league_members', 'discord_pings', 'INTEGER NOT NULL DEFAULT 1');
 
 export function now() {
 	return Math.floor(Date.now() / 1000);

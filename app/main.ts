@@ -1,35 +1,9 @@
-import http from 'node:http';
-import path from 'node:path';
-import express from 'express';
-import { DEV_LOGIN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, PORT, PUBLIC_URL, keys } from './config.ts';
-import './db.ts';
-import { attachUser, authRoutes, requireUser } from './auth.ts';
-import { attachShowdownProxy, showdownRoutes, startShowdown, stopShowdown, syncShowdown } from './showdown.ts';
-import { pageRoutes } from './pages.ts';
+import { DEV_LOGIN, DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, PORT, PUBLIC_URL } from './config.ts';
+import { createSite } from './site.ts';
+import { startShowdown, stopShowdown, syncShowdown } from './showdown.ts';
+import { startDiscord } from './discord.ts';
 
-keys.internal; // fail fast if setup hasn't run
-
-const app = express();
-app.set('trust proxy', 'loopback');
-app.disable('x-powered-by');
-const server = http.createServer(app);
-
-attachShowdownProxy(server, app);
-app.use('/static', express.static(path.join(import.meta.dirname, 'public'), { maxAge: 0 })); // revalidate (ETag) so a new version shows on a normal refresh
-// Smogon's damage calculator, run in the browser so teams never leave it
-const CALC = path.join(import.meta.dirname, '..', 'node_modules', '@smogon', 'calc', 'dist');
-app.get('/static/calc/data.js', (_req, res) => res.sendFile(path.join(CALC, 'data', 'production.min.js'), { maxAge: '1d' }));
-app.get('/static/calc/calc.js', (_req, res) => res.sendFile(path.join(CALC, 'production.min.js'), { maxAge: '1d' }));
-app.use(express.urlencoded({ extended: false, limit: '1mb' }));
-app.use(attachUser);
-authRoutes(app);
-showdownRoutes(app, requireUser);
-pageRoutes(app);
-
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-	console.error(err);
-	res.status(500).send('Something went wrong.');
-});
+const { server } = createSite();
 
 syncShowdown();
 startShowdown();
@@ -37,6 +11,10 @@ server.listen(PORT, () => {
 	console.log(`Draft League running at ${PUBLIC_URL}`);
 	if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) console.log('Discord sign-in is off: set DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET in .env.');
 	if (DEV_LOGIN) console.log('DEV_LOGIN is on: anyone who can reach this site can sign in as anyone.');
+	if (DISCORD_BOT_TOKEN) {
+		console.log('Discord bot is on.');
+		startDiscord().catch(e => console.error('Discord bot failed to start:', e));
+	}
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
