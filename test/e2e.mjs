@@ -82,10 +82,10 @@ assert(msgOf(r) === 'Not in the draft pool.', 'banned Pokémon rejected on the p
 let poolPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
 assert(poolPage.includes('Tera Captains can Terastallize in battle. A captain costs its normal points plus its Tera points'), 'pool explains Tera Captains');
 assert(/data-name="Weavile" data-cost="12" data-could-captain="1">/.test(poolPage), 'normal Weavile pick notes it could have been a captain');
-assert(poolPage.includes('<span class="hide-sm">Captain · </span><span class="hide-sm">+12 Tera</span><span class="show-sm">+12 T</span>'), 'Captain button reads as an extra +12 Tera');
+assert(poolPage.includes('>+&nbsp;12 Tera pts</button>') && poolPage.includes('<span class="ph-tera">As Tera Captain</span>'), 'Captain button shows its Tera points under its heading');
 assert(/data-name="Garchomp" data-cost="\d+">/.test(poolPage) && poolPage.includes('title="Garchomp can\'t be a Tera Captain"'), 'Garchomp marked as never a captain');
-assert(/Captain slots left<\/h3><div class="num"[^>]*>1 \/ 1</.test(poolPage) && /Picks left<\/h3><div class="num"[^>]*>6 \/ 6</.test(poolPage), 'tiles count what is left');
-assert(poolPage.includes('<div class="tiles four">'), 'four tiles in a captains league');
+assert(/Tera Captains selected<\/h3><div class="num"[^>]*>0 \/ 1</.test(poolPage) && /Pokémon selected<\/h3><div class="num">0 \/ 6</.test(poolPage), 'tiles count captains and Pokémon selected');
+assert(poolPage.includes('Tera points left</h3>'), 'Tera points tile shows while captains are left');
 poolPage = await (await bob.req('GET', leagueUrl + '/draft')).text();
 assert(/disabled title="Not your turn" aria-label="Draft Weavile as a Tera Captain for 12 points plus 12 Tera points\. Not your turn"/.test(poolPage), 'off-turn Captain button says why');
 for (const p of order) {
@@ -96,11 +96,14 @@ for (const p of order) {
 const draftPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
 assert(draftPage.includes('Done'), 'draft shows done');
 // Alice: 71 points (Weavile 12 of it) and 12 Tera points; Bob: 69 points and 5 Tera points
-assert(draftPage.includes('<small class="num">49 left</small>') && draftPage.includes('<small class="num">51 left</small>'), 'points budget charged the normal price for captains');
-assert(/Tera points left<\/h3><div class="num"[^>]*>16 \/ 28</.test(draftPage), 'captain Tera price charged to the Tera budget');
-assert(/Tera points left<\/h3><div class="num"[^>]*>23 \/ 28</.test(await (await bob.req('GET', leagueUrl + '/draft')).text()), "Bob's Tera budget");
-assert(draftPage.includes('>TC 12 +12 Tera<') && draftPage.includes('>TC 5 +5 Tera<'), 'draft board shows captains\' points and Tera price');
-assert(draftPage.includes('>16 Tera left</small><small class="num tc-left" title="16 Tera points and 0 captain slots left">0 TC left</small>') && draftPage.includes('>23 Tera left</small>'),'board headers show Tera points and captain slots left');
+assert(draftPage.includes('<small><span>49 points</span></small>') && draftPage.includes('<small><span>51 points</span></small>'), 'points budget charged the normal price for captains');
+// Both have drafted their one captain, so their Tera points stop showing, in the tiles and on the board
+assert(!draftPage.includes('Tera points left</h3>'), 'Tera points tile hidden once all captains are drafted');
+assert(!draftPage.includes(' Tera points</small>'), 'board headers drop Tera points once all captains are drafted');
+assert((draftPage.match(/>1\/1 Tera Captains selected</g) || []).length === 2, 'board headers count captains drafted');
+assert(draftPage.includes('<span class="pill tc">Tera Captain</span><span class="c">12 points</span><span class="c">12 Tera points</span>') &&
+	draftPage.includes('<span class="pill tc">Tera Captain</span><span class="c">5 points</span><span class="c">5 Tera points</span>'), 'draft board shows captains\' points and Tera price');
+assert((draftPage.match(/<div class="h rd">/g) || []).length === 6, 'board shows every round');
 await alice.req('POST', leagueUrl + '/admin/schedule', {});
 const sched = await (await alice.req('GET', leagueUrl + '/schedule')).text();
 const seriesId = /\/series\/(\d+)/.exec(sched)[1];

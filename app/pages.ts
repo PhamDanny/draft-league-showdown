@@ -501,26 +501,30 @@ export function pageRoutes(app: Express) {
 		}
 		const state = L.draftState(season, settings);
 		const n = state.players.length;
-		const rounds = Math.max(0, ...state.picks.map(p => p.round + 1), state.onClock ? state.round + 1 : 0);
-		const shownRounds = Math.max(rounds, Math.min(settings.rosterMax, 4));
+		// Every round shows from the start, so the board gives a sense of how long the draft is
+		const shownRounds = Math.max(settings.rosterMax, ...state.picks.map(p => p.round + 1));
 		const tc = settings.teraMode === 'captains';
-		// Board header, captains leagues: Tera points and captain slots left under the points left (a line each, to fit a 96px column)
-		const teraLeft = (uid: number) => {
-			const t = settings.tcBudget - (state.tcSpent.get(uid) || 0), c = settings.maxCaptains - (state.captains.get(uid) || 0);
-			const title = `${t} Tera points and ${c} captain slot${c === 1 ? '' : 's'} left`;
-			return `<small class="num tc-left" title="${title}">${t} Tera left</small><small class="num tc-left" title="${title}">${c} TC left</small>`;
+		// Once a player has all their captains, their Tera points can't be spent, so they stop showing
+		const capsDone = (uid: number) => (state.captains.get(uid) || 0) >= settings.maxCaptains;
+		const playerHead = (p: L.DraftPlayer) => {
+			const pts = settings.budget - (state.spent.get(p.user_id) || 0);
+			// Each figure stays on one line; a narrow column wraps between them
+			const tera = tc && !capsDone(p.user_id) ? ` <span class="sep">|</span> <span>${settings.tcBudget - (state.tcSpent.get(p.user_id) || 0)} Tera points</span>` : '';
+			const caps = tc ? `<small class="tc-left">${state.captains.get(p.user_id) || 0}/${settings.maxCaptains} Tera Captains selected</small>` : '';
+			return `<div class="h ph ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}">
+				<span class="avatar">${p.avatar ? `<img src="${esc(p.avatar)}" alt="">` : esc(p.showdown_name.slice(0, 1).toUpperCase())}</span>
+				<span class="nm">${esc(p.showdown_name)}</span><small><span>${pts} points</span>${tera}</small>${caps}</div>`;
 		};
 		const pickBySlot = new Map<string, L.Pick>();
 		for (const p of state.picks) pickBySlot.set(`${p.round}:${p.user_id}`, p);
 		const board = `<section class="panel"><div class="table-wrap"><div class="board" style="--n:${n}"><div class="h"></div>
-			${state.players.map(p => `<div class="h ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}"><span>${esc(p.showdown_name)}</span><small class="num">${settings.budget - (state.spent.get(p.user_id) || 0)} left</small>${tc ? teraLeft(p.user_id) : ''}</div>`).join('')}
+			${state.players.map(playerHead).join('')}
 			${Array.from({ length: shownRounds }, (_, r) => {
 		const arrow = settings.draftType === 'snake' && r % 2 ? '←' : '→';
 		return `<div class="h rd">${r + 1} ${arrow}</div>${state.players.map(p => {
 			const pick = pickBySlot.get(`${r}:${p.user_id}`);
-			if (pick) return `<div class="cell ${tc && pick.captain ? 'tc' : ''}">${sprite(pick.species_id)}<b title="${esc(pick.name)}">${esc(pick.name)}</b>${tc && pick.captain ?
-				`<span class="c num" title="Tera Captain: ${pick.cost} points${pick.tc_cost != null ? ` + ${pick.tc_cost} Tera points` : ''}">TC ${pick.cost}${pick.tc_cost != null ? ` +${pick.tc_cost} Tera` : ''}</span>` :
-				`<span class="c num">${pick.cost}</span>`}</div>`;
+			const captain = tc && !!pick?.captain;
+			if (pick) return `<div class="cell pk"><div class="t"><b title="${esc(pick.name)}">${esc(pick.name)}</b>${captain ? '<span class="pill tc">Tera Captain</span>' : ''}<span class="c">${pick.cost} points</span>${captain && pick.tc_cost != null ? `<span class="c">${pick.tc_cost} Tera points</span>` : ''}</div>${sprite(pick.species_id)}</div>`;
 			if (state.onClock?.user_id === p.user_id && state.round === r) return `<div class="cell now"><b>${esc(p.showdown_name)}</b>…</div>`;
 			return '<div class="cell empty"></div>';
 		}).join('')}`;
@@ -543,6 +547,8 @@ export function pageRoutes(app: Express) {
 		const canAfford = (cost: number) => !!actingFor && affordableFor(actingFor, cost);
 		// Whose budget the "hide unaffordable" filter uses: whoever you're picking for, else your own team
 		const budgetFor = actingFor ?? (state.players.some(p => p.user_id === me) ? me : null);
+		// Captain buttons and the Tera note go once whoever's view this is has all their captains
+		const showTera = tc && !(budgetFor && capsDone(budgetFor));
 		const poolRows = pool.filter(p => !taken.has(p.species_id)).map(p => {
 			const m = mon(p.species_id, settings.mod);
 			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
@@ -552,10 +558,10 @@ export function pageRoutes(app: Express) {
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}" data-afford="${budgetFor && !affordableFor(budgetFor, p.cost) ? '0' : '1'}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
 				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"${tcOk ? ' data-could-captain="1"' : ''}><input type="hidden" name="species" value="${esc(p.species_id)}">
-					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points"><span class="hide-sm">Draft · </span>${p.cost}</button></form>
-				${tc ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}" data-tc="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
-					<button class="btn sm tera" type="submit" ${tcOk ? '' : `disabled title="${esc(tcWhy)}"`} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points plus ${p.tc_cost} Tera points${tcWhy ? `. ${esc(tcWhy)}` : ''}"><span class="hide-sm">Captain · </span><span class="hide-sm">+${p.tc_cost} Tera</span><span class="show-sm">+${p.tc_cost} T</span></button></form>` :
-		`<span class="btn sm tera no-tc" title="${esc(p.name)} can't be a Tera Captain" aria-label="${esc(p.name)} can't be a Tera Captain"><span class="hide-sm">Tera banned</span><span class="show-sm">Tera banned</span></span>`) : ''}
+					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points">${p.cost} pts</button></form>
+				${showTera ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}" data-tc="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
+					<button class="btn sm tera" type="submit" ${tcOk ? '' : `disabled title="${esc(tcWhy)}"`} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points plus ${p.tc_cost} Tera points${tcWhy ? `. ${esc(tcWhy)}` : ''}">+&nbsp;${p.tc_cost} Tera pts</button></form>` :
+		`<span class="btn sm tera no-tc" title="${esc(p.name)} can't be a Tera Captain" aria-label="${esc(p.name)} can't be a Tera Captain">Tera banned</span>`) : ''}
 			</div>`;
 		}).join('');
 		const myCount = state.counts.get(me) || 0;
@@ -571,24 +577,25 @@ export function pageRoutes(app: Express) {
 				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
 			${req.query.msg ? `<div class="flash bad">${esc(req.query.msg)}</div>` : ''}
 			${season.status === 'drafting' && state.stuck.length ? `<div class="flash bad">${esc(state.stuck.map(p => p.showdown_name).join(', '))} can't afford enough of the Pokémon left to reach ${settings.rosterMin}, so their turns are skipped.${isComm ? ' You can undo picks from Admin, or end the draft with a short roster.' : ''}</div>` : ''}
-			${board}
-			${season.status === 'drafting' ? `<div class="split" style="margin-top:16px">
+			${season.status === 'drafting' ? `<div class="draft-layout">${board}<div class="draft-side">
 				<section class="panel"><div class="row panel-head"><h2>Pool</h2><span class="spacer"></span>
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					${budgetFor ? `<label class="row" style="gap:6px;margin:0 0 10px;font-size:13px"><input type="checkbox" id="pool-afford"> Hide Pokémon ${actingFor && !myTurn ? esc(state.onClock!.showdown_name) + ' can\'t' : 'I can\'t'} afford</label>` : ''}
-					${tc ? `<p class="muted tc-note">Tera Captains can Terastallize in battle. A captain costs its normal points plus its Tera points, from a separate Tera budget. You choose when you draft; it can't be added later.</p>` : ''}
-					<div class="pool-list">${poolRows}</div></section>
-				${amPlayer ? `<section class="panel"><h2>My team</h2><div class="bench">${mine.map(p => monChip(p.species_id, { name: p.name, captain: tc && !!p.captain })).join('') || '<span class="muted">No picks yet.</span>'}</div>
-					<div class="tiles${tc ? ' four' : ''}">
-						<div><h3 style="margin:0">Points left</h3><div class="num" style="font-size:16px">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
-						${tc ? `<div><h3 style="margin:0">Tera points left</h3><div class="num" style="font-size:16px">${settings.tcBudget - (state.tcSpent.get(me) || 0)} / ${settings.tcBudget}</div></div>
-							<div><h3 style="margin:0">Captain slots left</h3><div class="num" style="font-size:16px">${settings.maxCaptains - (state.captains.get(me) || 0)} / ${settings.maxCaptains}</div></div>` : ''}
-						<div><h3 style="margin:0">Picks left</h3><div class="num" style="font-size:16px">${settings.rosterMax - myCount} / ${settings.rosterMax}</div></div>
+					${showTera ? `<p class="muted tc-note">Tera Captains can Terastallize in battle. A captain costs its normal points plus its Tera points, from a separate Tera budget.</p>` : ''}
+					<div class="pool-list"><div class="row pool-head"><span class="spacer"></span><span class="ph-draft">Draft</span>${showTera ? '<span class="ph-tera">As Tera Captain</span>' : ''}</div>${poolRows}</div></section>
+				${amPlayer ? `<section class="panel"><h2>My team</h2>
+					<div class="tiles two">
+						<div><h3>Points left</h3><div class="num">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
+						${tc && !capsDone(me) ? `<div><h3>Tera points left</h3><div class="num">${settings.tcBudget - (state.tcSpent.get(me) || 0)} / ${settings.tcBudget}</div></div>` : ''}
+						<div><h3>Pokémon selected</h3><div class="num">${myCount} / ${settings.rosterMax}</div></div>
+						${tc ? `<div><h3>Tera Captains selected</h3><div class="num">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>` : ''}
 					</div>
+					<div class="my-picks">${mine.map(p => `<div class="row">${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span>${tc && p.captain ? '<span class="pill tc">Tera Captain</span>' : ''}<span class="spacer"></span>
+						<span class="types">${mon(p.species_id, settings.mod).types.map(t => `<span class="type t-${t.toLowerCase()}">${esc(t)}</span>`).join('')}</span></div>`).join('') || '<p class="muted" style="margin:0">No picks yet.</p>'}</div>
 					${myCount >= settings.rosterMin && !myFinished && myCount < settings.rosterMax ? `<form method="post" action="/l/${league.id}/draft/finish" style="margin-top:16px"><button class="btn" type="submit">Done drafting</button></form>` : ''}
-				</section>` : '<div></div>'}
-			</div>` : ''}
+				</section>` : ''}
+			</div></div>` : board}
 		</div>`;
 		if (req.get('x-partial')) {
 			res.send(`<div>${body}</div>`);

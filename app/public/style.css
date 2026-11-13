@@ -106,7 +106,6 @@ td.r,th.r{text-align:right}
 .board .h.rd{align-self:center;text-align:right;padding:0 6px 0 0}
 .cell{background:var(--surface-2);border-radius:6px;padding:5px 7px;font-size:11px;min-height:46px;line-height:1.3;min-width:0}
 .cell b{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cell.tc{background:var(--tera-soft)}.cell.tc .c{color:var(--tera);font-weight:600}
 .cell.now{outline:2px dashed var(--accent);background:var(--accent-soft)}
 .cell.empty{opacity:.45}
 .bars{display:flex;flex-direction:column;gap:6px}
@@ -154,7 +153,8 @@ label.f select:disabled,label.f input:disabled{opacity:.55;cursor:not-allowed}
 .editor-head{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
 .bigsprite{width:96px;height:96px;border-radius:16px;display:grid;place-items:center;color:#fff;font-family:var(--display);font-size:30px;font-weight:700;flex:none}
 .types{display:flex;gap:4px}
-.type{font-size:10.5px;font-weight:700;color:#fff;border-radius:4px;padding:1px 6px;text-transform:uppercase;letter-spacing:.04em}
+/* One width for every type, so pairs of types line up in lists */
+.type{display:inline-block;box-sizing:border-box;width:68px;text-align:center;font-size:10.5px;font-weight:700;color:#fff;border-radius:4px;padding:1px 4px;text-transform:uppercase;letter-spacing:.04em}
 .moves{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .stats{display:grid;grid-template-columns:44px 36px minmax(60px,1fr) minmax(80px,1.4fr) 48px 44px;gap:6px 10px;align-items:center;font-size:13px}
 .stats .hd{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
@@ -233,12 +233,14 @@ img.spr.lg{width:72px;height:72px}
 .signin .ball{width:48px;height:48px;margin:0 auto 16px}
 .btn.discord,.btn.discord:hover{background:#5865f2;border-color:#5865f2;color:#fff;width:100%;padding:10px}
 .btn.discord:hover{filter:brightness(1.08)}
-.pool-list{max-height:560px;overflow-y:auto}
+/* Overlay scrollbars ignore the gutter, so the padding keeps them off the buttons */
+.pool-list{max-height:560px;overflow-y:auto;padding-right:12px;scrollbar-gutter:stable}
 .pool-list .row{padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap}
 .pool-list .row:last-child{border-bottom:0}
 .pool-list .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn[disabled]{opacity:.4;cursor:not-allowed}
-.board{grid-template-columns:52px repeat(var(--n),minmax(96px,1fr));min-width:calc(52px + var(--n) * 100px)}
+/* Fixed-width columns: a small league leaves the right side empty rather than stretching sprites away from names */
+.board{grid-template-columns:52px repeat(var(--n),168px);min-width:0;justify-content:start}
 .inline{display:inline}
 form.inline{display:inline}
 .set{white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:var(--surface-2);border-radius:8px;padding:8px 10px;margin:6px 0 0}
@@ -333,7 +335,7 @@ form.inline{display:inline}
 .tera-pick button{border:2px solid transparent;background:none;border-radius:7px;padding:2px;cursor:pointer}
 .tera-pick button.on{border-color:var(--tera)}
 .tera-pick button:disabled{cursor:default}
-.tera-pick .type{display:inline-block;font-size:12px;padding:3px 9px}
+.tera-pick .type{display:inline-block;width:80px;font-size:12px;padding:3px 4px}
 .t-stellar{background:linear-gradient(90deg,#ea5f1e,#cf9f00,#44a22c,#3b7cf0,#5a3cf0)}
 .stats .sl{font-weight:600}
 .sl.plus{color:var(--accent)}.sl.minus{color:var(--sel)}
@@ -591,16 +593,42 @@ label.chk{gap:6px;font-size:14px}
 .tiles h3{margin:0}
 .tiles .num{font-size:16px}
 /* Draft and Captain buttons keep one width whatever the price, so they line up down the pool */
-.pool-list .btn.sm{min-width:86px;justify-content:space-between;font-variant-numeric:tabular-nums}
-.pool-list .btn.sm.tera{min-width:132px}
+.pool-list .btn.sm{min-width:72px;gap:0;font-variant-numeric:tabular-nums}
+.pool-list .btn.sm.tera{min-width:112px}
+/* A captain pays both prices, so hovering its button lights up the row's Draft button too */
+.pool-list .row:has(.btn.tera:not([disabled]):hover) .btn.sm:not(.tera){background:var(--tera-soft);border-color:var(--tera);color:var(--tera)}
+/* Column headings over the Draft and Tera Captain buttons; they stay put while the pool scrolls */
+.pool-list .row.pool-head{position:sticky;top:0;z-index:1;background:var(--surface);padding:0 0 6px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.pool-head .ph-draft{width:72px;text-align:center}.pool-head .ph-tera{width:112px;text-align:center}
 /* A Pokémon that can never be a captain: the Captain button's width, muted */
 .pool-list .btn.no-tc,.pool-list .btn.no-tc:hover{border-color:transparent;background:none;color:var(--muted);font-weight:400;cursor:default;justify-content:center}
 .pool-list .row{gap:8px}
 .tc-note{font-size:13px;margin:0 0 10px}
 .board .h small.tc-left{color:var(--tera)}
+.board .h.ph{display:grid;grid-template-columns:28px minmax(0,1fr);gap:2px 8px;align-items:center;align-self:stretch;padding:8px;text-transform:none;letter-spacing:0;font-size:12px;white-space:normal}
+.board .h.ph .avatar,.board .h.ph .avatar img{width:28px;height:28px}
+.board .h.ph .avatar{display:grid;margin-bottom:4px}
+.board .h.ph .nm{color:var(--fg);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:4px}
+.board .h.ph small{grid-column:1/-1;font-size:11px;line-height:1.35}
+.board .h.ph small > span{white-space:nowrap}
+.board .h.ph .sep{opacity:.5}
+.board .cell{align-self:stretch}
+/* Pick cells: name and prices on the left, sprite centred vertically on the right */
+.cell.pk{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:4px}
+.cell.pk img.spr{float:none;margin:-4px -4px -4px 0}
+/* Draft page: the board, then Pool and My team in a column beside it (stacked below on narrow screens) */
+.draft-layout{display:grid;grid-template-columns:minmax(0,1fr) 480px;gap:16px;align-items:start}
+.draft-side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.tiles.two{grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 16px}
+.my-picks .row{gap:8px;padding:5px 0;border-bottom:1px solid var(--line);flex-wrap:nowrap}
+.my-picks .row:last-child{border-bottom:0}
+.my-picks .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:1100px){.draft-layout{grid-template-columns:minmax(0,1fr)}}
+.cell .pill.tc{font-size:9px;padding:1px 6px;margin:1px 0 2px}
+.cell .c{display:block;color:var(--muted)}
 .bt-short{margin-top:6px;font-size:13px;color:var(--warn-fg)}
 .bt-side.ready .pill{background:var(--good-soft);color:var(--good)}
-@media (max-width:760px){.pool-list .btn.sm{min-width:40px;justify-content:center}.pool-list .btn.sm.tera{min-width:58px}.tiles{gap:6px}.tiles.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.pool-list .btn.sm{min-width:60px}.tiles{gap:6px}.tiles.four{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* Damage calc: this set against theirs, both directions at once */
 .fold-t{font-weight:500}

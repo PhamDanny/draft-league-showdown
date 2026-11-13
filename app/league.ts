@@ -346,7 +346,7 @@ export function joinLeague(code: string, userId: number): number | null {
 
 // ---------- draft ----------
 
-export interface DraftPlayer { user_id: number; draft_pos: number; finished: number; showdown_name: string }
+export interface DraftPlayer { user_id: number; draft_pos: number; finished: number; showdown_name: string; avatar: string | null }
 export interface Pick {
 	id: number; overall: number; slot: number; round: number; user_id: number; species_id: string; cost: number; captain: number; name: string;
 	/** Tera points spent on a captain pick; NULL for picks made before Tera budgets. */
@@ -354,7 +354,7 @@ export interface Pick {
 }
 
 export function draftPlayers(seasonId: number) {
-	return all<DraftPlayer>(`SELECT season_players.*, users.showdown_name FROM season_players
+	return all<DraftPlayer>(`SELECT season_players.*, users.showdown_name, users.avatar FROM season_players
 		JOIN users ON users.id = season_players.user_id WHERE season_id = ? ORDER BY draft_pos`, seasonId);
 }
 export function picks(seasonId: number) {
