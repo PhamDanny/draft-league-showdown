@@ -159,9 +159,9 @@ function rostersEmbed(season: L.Season, settings: L.Settings, state: L.DraftStat
 function bestEmbed(league: L.League, season: L.Season, room: number, emojis: Map<string, string>): { embed: Embed, wanted: string[] } {
 	const pool = all<{ species_id: string, name: string, cost: number }>(`SELECT species_id, name, cost FROM pool WHERE season_id = ? AND banned = 0
 		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?) ORDER BY cost DESC, name`, season.id, season.id);
-	const title = 'Best available';
+	const title = 'Remaining Draft Pool';
 	if (!pool.length) return { embed: { title, color: COLOR, description: 'Nothing left in the pool.' }, wanted: [] };
-	const tail = (left: number) => `\n*${left}* more available: ${PUBLIC_URL}/l/${league.id}/draft`;
+	const tail = (left: number) => `\nSee ${left} more on the website: ${PUBLIC_URL}/l/${league.id}/draft`;
 	const budget = Math.min(MAX_DESCRIPTION, room - title.length) - tail(pool.length).length;
 	// `<:p_garchomp:` + an id of up to 20 digits + `>`
 	const room1 = (speciesId: string) => emojis.get(speciesId)?.length ?? emojiName(speciesId).length + 23;
@@ -258,16 +258,15 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 	const more = need ? `at least ${plural(need, 'more pick')}` : `up to ${plural(settings.rosterMax - count, 'more pick')} (or \`/done\`)`;
 	const lines = [
 		`${mention(w, ids)}, you're up: round ${state.round + 1}, pick ${(state.slot % state.players.length) + 1}. ${left} points left, ${more}.`,
-		'**How to pick:** press **Draft a Pokémon** below and choose from dropdowns of what you can still afford, ' +
-		'or type `/draft` and start typing a name. You get a confirm button before the pick is final, and only you see it.',
+		`**How to pick:** You can draft directly through Discord by pressing **Draft a Pokémon** below, or draft on the website here: ${PUBLIC_URL}/l/${league.id}/draft`
 	];
 	if (settings.teraMode === 'captains') {
 		const slots = settings.maxCaptains - (state.captains.get(p.user_id) || 0);
 		const tera = settings.tcBudget - (state.tcSpent.get(p.user_id) || 0);
 		lines.push(slots > 0
-			? `**Tera Captain:** only captains can Terastallize in battle. A captain costs its normal points plus its Tera points from a separate budget, ` +
-				`and you choose it on the confirm step; it can't be added later. You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
-			: `**Tera Captain:** you've used all ${plural(settings.maxCaptains, 'captain slot')}, so draft it as a normal pick.`);
+			? `**Tera Captain:** Only Tera captains can Terastallize in battle. Drafting a Pokémon as a Tera captain costs its normal points plus Tera points ` +
+				`from a seperate budget. You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
+			: `**Tera Captain:** you've used all ${plural(settings.maxCaptains, 'captain slot')}.`);
 	}
 	// Anyone can press these; the press is checked against who is on the clock then, not when this was posted
 	const buttons = [{ type: 2, style: 1, label: 'Draft a Pokémon', custom_id: `open:${seasonId}` }];
@@ -289,7 +288,7 @@ export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: n
 	// A normal pick that could be a captain spells out both outcomes; one that can't says why (pickProblem's words)
 	const description = captainId ? `Normal pick: ${plural(entry.cost, 'point')}, ${left} left${more}.\n` +
 		`As a Tera Captain: ${plural(entry.cost, 'point')} + ${entry.tc_cost} Tera, ${tcAfter} Tera left. Captains can Terastallize; this can't be added later.` :
-		`You'll have ${left} left${teraLeft}${more}.${noCaptain ? `\nNormal pick only: ${noCaptain}` : ''}`;
+		`You'll have ${left} left${teraLeft}${more}.${noCaptain ? `\n${noCaptain}` : ''}`;
 	return {
 		embeds: [{
 			title: `Draft ${entry.name}${captain ? ' as a Tera Captain' : ''} for ${entry.cost}${tera}?`,

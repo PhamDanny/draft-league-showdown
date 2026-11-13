@@ -547,7 +547,7 @@ export function pageRoutes(app: Express) {
 			const m = mon(p.species_id, settings.mod);
 			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
 			// Why the Captain button is off, in the order a player would check
-			const tcWhy = !tcOk && tc && p.tc_cost != null ? (!actingFor ? 'Not your turn' : caps >= settings.maxCaptains ? 'No captain slots left' :
+			const tcWhy = !tcOk && tc && p.tc_cost != null ? (!actingFor ? 'Not your turn' : caps >= settings.maxCaptains ? 'No Tera captain slots left' :
 				p.tc_cost > tcLeft ? `Not enough Tera points (${tcLeft} left)` : `Not enough points for ${p.name}`) : '';
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}" data-afford="${budgetFor && !affordableFor(budgetFor, p.cost) ? '0' : '1'}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
@@ -555,7 +555,7 @@ export function pageRoutes(app: Express) {
 					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points"><span class="hide-sm">Draft · </span>${p.cost}</button></form>
 				${tc ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}" data-tc="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
 					<button class="btn sm tera" type="submit" ${tcOk ? '' : `disabled title="${esc(tcWhy)}"`} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points plus ${p.tc_cost} Tera points${tcWhy ? `. ${esc(tcWhy)}` : ''}"><span class="hide-sm">Captain · </span><span class="hide-sm">+${p.tc_cost} Tera</span><span class="show-sm">+${p.tc_cost} T</span></button></form>` :
-		`<span class="btn sm tera no-tc" title="${esc(p.name)} can't be a Tera Captain" aria-label="${esc(p.name)} can't be a Tera Captain"><span class="hide-sm">No captain</span><span class="show-sm">No TC</span></span>`) : ''}
+		`<span class="btn sm tera no-tc" title="${esc(p.name)} can't be a Tera Captain" aria-label="${esc(p.name)} can't be a Tera Captain"><span class="hide-sm">Tera banned</span><span class="show-sm">Tera banned</span></span>`) : ''}
 			</div>`;
 		}).join('');
 		const myCount = state.counts.get(me) || 0;
