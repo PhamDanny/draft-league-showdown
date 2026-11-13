@@ -1,6 +1,6 @@
 import type { User } from '../auth.ts';
 import type { League } from '../league.ts';
-import { mon } from '../dex.ts';
+import { dex, mon } from '../dex.ts';
 
 export function esc(value: unknown): string {
 	return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -9,6 +9,14 @@ export function esc(value: unknown): string {
 export function sprite(speciesId: string, cls = '') {
 	const m = mon(speciesId);
 	return `<img class="spr ${cls}" src="${esc(m.sprite)}" alt="" loading="lazy">`;
+}
+/** An item's icon from Showdown's item sheet (24px cells, 16 per row); empty when there's no item. */
+export function itemIcon(name: string | undefined, mod = 'gen9') {
+	if (!name) return '';
+	const item = dex(mod).items.get(name);
+	if (!item.exists) return '';
+	const n = item.spritenum || 0;
+	return `<span class="itemicon" style="background-position:-${(n % 16) * 24}px -${Math.floor(n / 16) * 24}px" title="${esc(item.name)}" aria-hidden="true"></span>`;
 }
 export function monLabel(speciesId: string, opts: { small?: boolean, captain?: boolean } = {}) {
 	const m = mon(speciesId);
@@ -127,7 +135,7 @@ export function setList(sets: { set: any, text: string }[], empty = '', title = 
 	if (!sets.length) return head(false) + (empty ? `<p class="muted" style="margin:0">${esc(empty)}</p>` : '');
 	return `<div class="setlist">${head(true)}
 		${sets.map(({ set, text }) => `<details class="setd"><summary>${sprite(set.species, 'sm')}<b>${esc(set.species)}</b>
-			<span class="muted setd-meta">${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span>
+			<span class="muted setd-meta">${itemIcon(set.item)}<span>${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span></span>
 			${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</summary>
 			<div class="set">${esc(text)}</div></details>`).join('')}
 	</div>`;

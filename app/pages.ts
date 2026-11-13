@@ -2,7 +2,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import { all, audit, one, run } from './db.ts';
 import { DEV_LOGIN, DISCORD_CLIENT_ID, PUBLIC_URL } from './config.ts';
 import { devUsers, requireUser, setShowdownName } from './auth.ts';
-import { exportSet, mon, pickSpecies, toID, TYPES } from './dex.ts';
+import { exportSet, itemSprites, mon, pickSpecies, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
@@ -423,6 +423,7 @@ export function pageRoutes(app: Express) {
 			players: { p1: n.get(b.p1), p2: n.get(b.p2) }, winner: n.get(b.winner) || null, turns: b.turns,
 			games, fullLog: b.full_log || '', publicLog: b.public_log || '', teams,
 			sprites: Object.fromEntries(['p1', 'p2'].flatMap(side => (teams?.[side]?.team || []).map((set: any) => [toID(set.species), mon(toID(set.species)).sprite]))),
+			itemSprites: itemSprites(settings.mod),
 			exports: Object.fromEntries(['p1', 'p2'].map(side => [side, (teams?.[side]?.team || []).map((set: any) => exportSet(set))])),
 		};
 		render(req, res, {

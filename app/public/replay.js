@@ -6,6 +6,10 @@
 	const root = document.getElementById('replay');
 	const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 	const toID = t => String(t ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+	const itemIcon = name => {
+		const n = name && R.itemSprites?.[name];
+		return n == null ? '' : `<span class="itemicon" style="background-position:-${(n % 16) * 24}px -${Math.floor(n / 16) * 24}px" aria-hidden="true"></span>`;
+	};
 	const G = window.calc?.Generations ? calc.Generations.get(R.gen || 9) : null;
 
 	let mode = 'full';
@@ -235,8 +239,8 @@
 				add(`${esc(e)} ${cmd === '-sidestart' ? 'set on' : 'ended on'} ${esc(sides[s].name)}'s side.`, 'muted');
 				break;
 			}
-			case '-item': { const m = monOf(args[1]); if (m) m.item = args[2]; add(`${name(args[1])} has ${esc(args[2])}${kw.from ? ` (${esc(effectName(kw.from))})` : ''}.`, 'muted'); break; }
-			case '-enditem': { const m = monOf(args[1]); if (m) m.item = ''; add(`${name(args[1])} ${kw.eat ? 'ate' : 'lost'} its ${esc(args[2])}${kw.from ? ` (${esc(effectName(kw.from))})` : ''}.`, 'muted'); break; }
+			case '-item': { const m = monOf(args[1]); if (m) m.item = args[2]; add(`${name(args[1])} has ${itemIcon(args[2])}${esc(args[2])}${kw.from ? ` (${esc(effectName(kw.from))})` : ''}.`, 'muted'); break; }
+			case '-enditem': { const m = monOf(args[1]); if (m) m.item = ''; add(`${name(args[1])} ${kw.eat ? 'ate' : 'lost'} its ${itemIcon(args[2])}${esc(args[2])}${kw.from ? ` (${esc(effectName(kw.from))})` : ''}.`, 'muted'); break; }
 			case '-ability': { const m = monOf(args[1]); if (m && !kw.from) m.ability = args[2]; add(`[${name(args[1])}'s ${esc(args[2])}]`, 'muted'); break; }
 			case '-start': {
 				const m = monOf(args[1]);
@@ -420,7 +424,7 @@
 		return `<div class="grid g2" style="margin-top:16px">${['p1', 'p2'].map(side => `<section class="panel">
 			<div class="setlist"><div class="row panel-head"><h2>${esc(R.players[side])}</h2><span class="spacer"></span><button class="btn sm" type="button" data-sets-toggle>Expand all</button></div>
 			${(R.teams[side]?.team || []).map((set, i) => `<details class="setd"><summary>${sprite(set.species)}<b>${esc(set.species)}</b>
-				<span class="muted setd-meta">${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span>
+				<span class="muted setd-meta">${itemIcon(set.item)}<span>${[set.item, set.ability].filter(Boolean).map(esc).join(' · ')}</span></span>
 				${set.teraType ? `<span class="pill tc">Tera ${esc(set.teraType)}</span>` : ''}</summary>
 				<div class="set">${esc(R.exports[side][i])}</div></details>`).join('')}</div></section>`).join('')}</div>`;
 	}

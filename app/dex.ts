@@ -63,6 +63,18 @@ export function mon(idOrName: string, mod = 'gen9'): MonInfo {
 	return info;
 }
 
+const itemCache = new Map<string, { [name: string]: number }>();
+/** Each item's cell in Showdown's item icon sheet (/sprites/itemicons-sheet.png), keyed by item name. */
+export function itemSprites(mod = 'gen9') {
+	let map = itemCache.get(mod);
+	if (!map) {
+		map = {};
+		for (const i of dex(mod).items.all()) if (i.spritenum) map[i.name] = i.spritenum;
+		itemCache.set(mod, map);
+	}
+	return map;
+}
+
 export const TYPES = ['Normal', 'Fire', 'Water', 'Electric', 'Grass', 'Ice', 'Fighting', 'Poison', 'Ground',
 	'Flying', 'Psychic', 'Bug', 'Rock', 'Ghost', 'Dragon', 'Dark', 'Steel', 'Fairy'];
 

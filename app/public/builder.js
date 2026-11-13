@@ -27,6 +27,7 @@
 	let data = load();
 	let C = null; // calc state, per week
 	let pick = '', q = '', hi = 0, rows = []; // browse list: which field, filter text, highlighted row, current rows
+	let moveSort = { key: 'name', dir: 1 }; // move list order, set by clicking a column header
 
 	function load() {
 		const d = Sets.load(B.leagueId, B.seasonId, week ? week.week : 0);
@@ -56,6 +57,7 @@
 	};
 	const img = (id, cls = '') => `<img class="spr ${cls}" src="${esc(D.species[id]?.sprite || '')}" alt="">`;
 	const nameOf = id => D.species[id]?.name || id;
+	const itemIcon = name => Sets.itemIcon(D, name);
 	const typeTag = t => `<span class="type t-${toID(t)}">${esc(t)}</span>`;
 	const catTag = c => `<span class="cat cat-${toID(c)}">${c === 'Physical' ? 'Phys' : c === 'Special' ? 'Spec' : 'Status'}</span>`;
 	const moveName = id => D.moves[id]?.name || id;
@@ -114,7 +116,7 @@
 		const el = document.getElementById('tb-team');
 		el.innerHTML = team().map((s, i) => s ? `
 			<button type="button" class="tslot ${i === slot ? 'on' : ''}" data-slot="${i}">${img(s.species)}
-				<span class="tmeta"><b>${esc(s.nickname || nameOf(s.species))}</b><small>${esc(s.item || 'No item')}</small></span>
+				<span class="tmeta"><b>${esc(s.nickname || nameOf(s.species))}</b><small>${itemIcon(s.item)}<span>${esc(s.item || 'No item')}</span></small></span>
 				${s.teraType && teraAllowed(s.species) ? `<span class="pill tc">${esc(s.teraType)}</span>` : ''}</button>` : `
 			<button type="button" class="tslot empty ${i === slot ? 'on' : ''}" data-slot="${i}" ${readOnly() ? 'disabled' : ''}>
 				<span class="plus" aria-hidden="true">+</span><span class="tmeta"><b>Add Pokémon</b></span></button>`).join('');
@@ -154,8 +156,12 @@
 		const st = Sets.stats(D, set);
 		const tera = teraAllowed(set.species);
 		const roText = v => `<span class="sd-ro">${v ? esc(v) : '—'}</span>`;
-		const pickIn = (f, label) => ro ? `<div class="sd-f"><span>${label}</span>${roText(fieldValue(set, f))}</div>` :
-			`<label class="sd-f"><span>${label}</span><input data-pick="${f}" value="${esc(fieldValue(set, f))}" autocomplete="off"></label>`;
+		const pickIn = (f, label) => {
+			const icon = f === 'item' ? itemIcon(set.item) : '';
+			const field = ro ? roText(fieldValue(set, f)) : `<input data-pick="${f}" value="${esc(fieldValue(set, f))}" autocomplete="off">`;
+			const body = icon ? `<span class="sd-iconf">${icon}${field}</span>` : field;
+			return ro ? `<div class="sd-f"><span>${label}</span>${body}</div>` : `<label class="sd-f"><span>${label}</span>${body}</label>`;
+		};
 		el.innerHTML = `
 			<div class="sd-card">
 				${ro ? (set.nickname ? `<div class="sd-head"><span class="sd-nick">Nickname ${roText(set.nickname)}</span></div>` : '') : `<div class="sd-head">
@@ -226,7 +232,7 @@
 	}
 	function itemRows(set) {
 		const ql = toID(q);
-		const row = name => ({ value: name, cur: set.item === name, html: `<span class="br-name">${esc(name)}</span><span class="br-desc">${esc(D.itemDesc[name] || '')}</span>` });
+		const row = name => ({ value: name, cur: set.item === name, html: `<span class="br-name">${itemIcon(name)}${esc(name)}</span><span class="br-desc">${esc(D.itemDesc[name] || '')}</span>` });
 		if (ql) return D.items.filter(n => toID(n).includes(ql)).map(row);
 		return [{ head: 'Popular items' }, ...POPULAR.map(row), { head: 'All items' }, ...D.items.filter(n => !POPULAR.includes(n)).map(row)];
 	}
@@ -236,6 +242,24 @@
 			value: a, cur: set.ability === a, html: `<span class="br-name">${esc(a)}</span><span class="br-desc">${esc(D.abilityDesc[a] || '')}</span>`,
 		}));
 	}
+	// Sortable move columns. Numbers start high-to-low; "—" power sorts as 0 and moves that never miss as 101%.
+	const MOVE_SORT = {
+		name: { label: 'Move', val: m => m.name },
+		type: { label: 'Type', val: m => m.type },
+		cat: { label: 'Cat', val: m => ({ Physical: 0, Special: 1, Status: 2 })[m.cat] ?? 3, num: true },
+		bp: { label: 'Pow', val: m => (m.bp > 1 ? m.bp : 0), num: true, desc: true },
+		acc: { label: 'Acc', val: m => m.acc || 101, num: true, desc: true },
+		pp: { label: 'PP', val: m => m.pp, num: true, desc: true },
+	};
+	function moveHead() {
+		const th = key => {
+			const c = MOVE_SORT[key];
+			const on = moveSort.key === key;
+			return `<button type="button" class="br-sort ${on ? 'on' : ''} ${c.desc ? 'br-num' : ''}" data-sort="${key}"
+				aria-sort="${on ? (moveSort.dir > 0 ? 'ascending' : 'descending') : 'none'}" title="Sort by ${c.label}">${c.label}<i aria-hidden="true">${on ? (moveSort.dir > 0 ? '▲' : '▼') : ''}</i></button>`;
+		};
+		return `${['name', 'type', 'cat', 'bp', 'acc', 'pp'].map(th).join('')}<span>Description</span>`;
+	}
 	function moveRows(set) {
 		const ql = toID(q);
 		const sp = D.species[set.species];
@@ -243,7 +267,11 @@
 		const list = sp.moves.filter(id => {
 			const m = D.moves[id];
 			return m && (!ql || toID(m.name).includes(ql) || toID(m.type) === ql || toID(m.cat) === ql);
-		}).sort((a, b) => D.moves[a].name.localeCompare(D.moves[b].name));
+		}).sort((a, b) => {
+			const x = D.moves[a], y = D.moves[b];
+			const by = MOVE_SORT[moveSort.key];
+			return (by.num ? by.val(x) - by.val(y) : String(by.val(x)).localeCompare(String(by.val(y)))) * moveSort.dir || x.name.localeCompare(y.name);
+		});
 		return list.map(id => {
 			const m = D.moves[id];
 			return {
@@ -265,7 +293,7 @@
 		if (pick === 'species') { rows = speciesRows(set); cls = 'br-species'; head = '<span>Pokémon</span><span>Types</span><span>Abilities</span><span>Base stats</span>'; }
 		else if (pick === 'item') { rows = itemRows(set); cls = 'br-items'; head = '<span>Item</span><span>Description</span>'; }
 		else if (pick === 'ability') { rows = abilityRows(set); cls = 'br-items'; head = '<span>Ability</span><span>Description</span>'; }
-		else { rows = moveRows(set); cls = 'br-moves'; head = '<span>Move</span><span>Type</span><span>Cat</span><span class="br-num">Pow</span><span class="br-num">Acc</span><span class="br-num">PP</span><span>Description</span>'; }
+		else { rows = moveRows(set); cls = 'br-moves'; head = moveHead(); }
 		let n = -1;
 		const pickable = rows.filter(r => !r.head && !r.disabled);
 		if (hi >= pickable.length) hi = Math.max(0, pickable.length - 1);
@@ -420,7 +448,7 @@
 
 	// ---------- speed tiers ----------
 
-	// One speed spread applied to every opponent Pokémon, so each is listed once
+	// Each opponent Pokémon is listed once, at the speed spread picked on its own row
 	const SPEED_OPP = {
 		max: { label: '252+', ev: 252, iv: 31, mult: 1.1 },
 		neutral: { label: '252', ev: 252, iv: 31, mult: 1 },
@@ -428,8 +456,11 @@
 		none: { label: 'No investment', ev: 0, iv: 31, mult: 1 },
 		min: { label: 'Min (0 IV, −)', ev: 0, iv: 0, mult: 0.9 },
 	};
-	let speedOpp = 'max';
-	try { const v = localStorage.getItem('dls-speed-opp'); if (SPEED_OPP[v]) speedOpp = v; } catch {}
+	let speedOppDefault = 'max';
+	let speedOpp = {};
+	try { const v = localStorage.getItem('dls-speed-opp'); if (SPEED_OPP[v]) speedOppDefault = v; } catch {}
+	try { const m = JSON.parse(localStorage.getItem('dls-speed-opp-mons') || '{}'); if (m && typeof m === 'object') speedOpp = m; } catch {}
+	const oppSpread = id => (SPEED_OPP[speedOpp[id]] ? speedOpp[id] : speedOppDefault);
 
 	function renderSpeed() {
 		const el = document.getElementById('tb-speed');
@@ -443,9 +474,10 @@
 		for (const r of B.rosters[week.opp] || []) {
 			const sp = D.species[r.id];
 			if (!sp) continue;
-			const o = SPEED_OPP[speedOpp];
+			const spread = oppSpread(r.id);
+			const o = SPEED_OPP[spread];
 			const spe = Sets.calcStat('spe', sp.stats.spe, o.ev, o.iv, 100, o.mult);
-			rws.push({ spe: o.scarf ? Math.floor(spe * 1.5) : spe, id: r.id, note: o.scarf ? 'Scarf' : '' });
+			rws.push({ spe: o.scarf ? Math.floor(spe * 1.5) : spe, id: r.id, spread });
 		}
 		for (const past of B.scouting[week.opp] || []) {
 			for (const ps of past.sets) {
@@ -455,10 +487,11 @@
 		}
 		rws.sort((a, b) => b.spe - a.spe || (a.mine ? -1 : 1));
 		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed · vs ${esc(week.oppName)}</h3></summary>
-			<label class="row speed-opp"><span class="muted">Their Pokémon</span><select class="inp mini" data-act="speed-opp" aria-label="Opponent speed spread">${Object.entries(SPEED_OPP).map(([v, o]) =>
-				`<option value="${v}" ${v === speedOpp ? 'selected' : ''}>${o.label}</option>`).join('')}</select></label>
 			<div class="speedlist">${rws.map(r => `
-			<div class="row ${r.mine ? 'mine' : ''} ${r.scouted ? 'scouted' : ''}"><span class="num">${r.spe}</span>${img(r.id, 'xs')}<span class="nm">${esc(nameOf(r.id))}</span><span class="spacer"></span><small class="muted">${r.note}</small></div>`).join('') ||
+			<div class="row ${r.mine ? 'mine' : ''} ${r.scouted ? 'scouted' : ''}"><span class="num">${r.spe}</span>${img(r.id, 'xs')}<span class="nm">${esc(nameOf(r.id))}</span><span class="spacer"></span>${r.spread
+				? `<select class="inp mini" data-act="speed-opp" data-id="${esc(r.id)}" aria-label="${esc(nameOf(r.id))} speed spread">${Object.entries(SPEED_OPP).map(([v, o]) =>
+					`<option value="${v}" ${v === r.spread ? 'selected' : ''}>${o.label}</option>`).join('')}</select>`
+				: `<small class="muted">${r.note}</small>`}</div>`).join('') ||
 			'<p class="muted">Add Pokémon to compare.</p>'}</div></details>`;
 	}
 
@@ -751,6 +784,7 @@
 	// ---------- events ----------
 
 	root.addEventListener('mousedown', e => {
+		if (e.target.closest('[data-sort]')) { e.preventDefault(); return; } // keep focus in the move field; the click sorts
 		const row = e.target.closest('[data-choose]');
 		if (!row) return;
 		e.preventDefault(); // keep focus in the field until the choice is applied
@@ -780,6 +814,13 @@
 
 	root.addEventListener('click', e => {
 		if (e.target.dataset?.pick) { setPick(e.target.dataset.pick); return; }
+		const sort = e.target.closest('[data-sort]');
+		if (sort) {
+			const key = sort.dataset.sort;
+			moveSort = moveSort.key === key ? { key, dir: -moveSort.dir } : { key, dir: MOVE_SORT[key].desc ? -1 : 1 };
+			renderBrowse();
+			return;
+		}
 		const t = e.target.closest('[data-slot],[data-act],[data-flag],[data-preset],[data-cmove],[data-pickbtn],[data-tera]');
 		if (!t || t.tagName === 'SELECT') return;
 		const d = t.dataset;
@@ -858,8 +899,8 @@
 		const t = e.target;
 		const d = t.dataset;
 		if (d.act === 'speed-opp') {
-			speedOpp = t.value;
-			try { localStorage.setItem('dls-speed-opp', speedOpp); } catch {}
+			speedOpp[d.id] = t.value;
+			try { localStorage.setItem('dls-speed-opp-mons', JSON.stringify(speedOpp)); } catch {}
 			renderSpeed();
 			return;
 		}

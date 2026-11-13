@@ -2,7 +2,7 @@
 // the server only hands out public data (rosters, Pokédex entries, finished series' sets).
 import type { Express, Request, Response, Router } from 'express';
 import { all, one } from './db.ts';
-import { builtAs, descs, dex, mon, pickSpecies, toID, TYPES } from './dex.ts';
+import { builtAs, descs, dex, itemSprites, mon, pickSpecies, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { esc, page } from './views/layout.ts';
 import { playButton } from './pages.ts';
@@ -72,6 +72,9 @@ function dexJson(seasonId: number, settings: L.Settings) {
 	const items = itemList.map((i: any) => i.name).sort();
 	const itemDesc: { [name: string]: string } = {};
 	for (const i of itemList) itemDesc[i.name] = text.items[i.id]?.shortDesc || text.items[i.id]?.desc || '';
+	const sheet = itemSprites(settings.mod);
+	const itemSpriteNums: { [name: string]: number } = {};
+	for (const i of itemList) if (sheet[i.name] != null) itemSpriteNums[i.name] = sheet[i.name];
 	const abilityDesc: { [name: string]: string } = {};
 	for (const s of Object.values(species)) {
 		for (const a of s.abilities) abilityDesc[a] ||= text.abilities[toID(a)]?.shortDesc || text.abilities[toID(a)]?.desc || '';
@@ -79,7 +82,7 @@ function dexJson(seasonId: number, settings: L.Settings) {
 	const natures = d.natures.all().map((n: any) => ({ name: n.name, plus: n.plus, minus: n.minus }));
 	// VGC plays at level 50 (Adjust Level), whatever level a set says
 	const fixedLevel = settings.gameType === 'doubles' ? 50 : null;
-	const json = JSON.stringify({ species, moves, items, itemDesc, abilityDesc, natures, types: [...TYPES, 'Stellar'], fixedLevel });
+	const json = JSON.stringify({ species, moves, items, itemDesc, itemSprites: itemSpriteNums, abilityDesc, natures, types: [...TYPES, 'Stellar'], fixedLevel });
 	dexCache.clear();
 	dexCache.set(key, json);
 	return json;

@@ -16,6 +16,13 @@
 		return dexPromise;
 	}
 
+	/** An item's icon from Showdown's item sheet (24px cells, 16 per row), using the dex's sprite numbers. */
+	function itemIcon(D, name) {
+		const n = name && D.itemSprites?.[name];
+		if (n == null) return '';
+		return `<span class="itemicon" style="background-position:-${(n % 16) * 24}px -${Math.floor(n / 16) * 24}px" aria-hidden="true"></span>`;
+	}
+
 	function natureMult(D, nature, stat) {
 		const n = D.natureMap.get(toID(nature));
 		if (!n) return 1;
@@ -140,5 +147,5 @@
 		try { localStorage.setItem(key(leagueId, seasonId, week), JSON.stringify(value)); } catch {}
 	}
 
-	window.Sets = { STATS, LABEL, toID, esc, loadDex, natureMult, calcStat, levelOf, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
+	window.Sets = { STATS, LABEL, toID, esc, loadDex, itemIcon, natureMult, calcStat, levelOf, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
 })();

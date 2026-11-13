@@ -191,7 +191,7 @@
 				const on = chosen.includes(entryOf(s.species));
 				const off = locked || busy || noChoice || (!on && chosen.length >= n);
 				return `<button type="button" class="tslot bt-pickmon ${on ? 'on' : ''}" data-act="pick" data-species="${esc(entryOf(s.species))}" aria-pressed="${on}" ${off ? 'disabled' : ''}>
-					${sprite(s.species)}<span class="tmeta"><b>${esc(s.nickname || D.species[s.species].name)}</b><small>${esc(s.item || 'No item')}</small></span>
+					${sprite(s.species)}<span class="tmeta"><b>${esc(s.nickname || D.species[s.species].name)}</b><small>${Sets.itemIcon(D, s.item)}<span>${esc(s.item || 'No item')}</span></small></span>
 					${on && !locked && !noChoice ? `<span class="pill">${chosen.indexOf(entryOf(s.species)) + 1}</span>` : ''}</button>`;
 			}).join('')}</div>
 			<p class="muted bt-picknote">${note}</p>
