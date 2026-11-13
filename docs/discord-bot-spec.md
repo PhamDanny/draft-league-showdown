@@ -2,7 +2,7 @@
 
 A bot that lives in the league's Discord server. It does three things:
 
-1. **Runs a draft channel**: one live board message, a ping for whoever is up with a **Draft a Pokémon** button, and `/draft` to pick without leaving Discord.
+1. **Runs a draft channel**: one live board message, a ping for whoever is up, and `/draft` (one box that takes a name, a type or a price) to pick without leaving Discord.
 2. **Posts one recap a week**: standings, links to the week's games, next week's matchups.
 3. **Answers lookups**: standings, schedule, rosters, Pokémon prices, rules.
 
@@ -70,9 +70,11 @@ If the board message has been deleted, the next update posts a fresh one.
 
 ### 2.2 On-the-clock ping
 
-"@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks." Two more lines explain how to pick: press **Draft a Pokémon** (2.4), or type `/draft` (the `pokemon` option autocompletes to what the player can afford), with an only-you-see-it confirm step before the pick is final either way; and in a Tera Captains league how to draft a Tera Captain (the **Confirm as Tera Captain** button, or `/draft`'s `captain` option) (Terastallizes in battle, costs its normal points plus Tera points from the separate Tera budget, only Pokémon with a Tera price) with the player's captain slots and Tera points left, or that all their slots are used. Posted when `onClock` changes; the previous ping is deleted in the same step. A commissioner undo puts the earlier player back on the clock and pings them again. When the draft completes, the last ping is deleted.
+"@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks." Two more lines explain how to pick: type `/draft` and choose from the list that appears while typing a name, a type or a price (2.3), or use the draft room on the website, with an only-you-see-it confirm step before a Discord pick is final; and in a Tera Captains league how to draft a Tera Captain (the **Confirm as Tera Captain** button, or `/draft`'s `captain` option) (Terastallizes in battle, costs its normal points plus Tera points from the separate Tera budget, only Pokémon with a Tera price) with the player's captain slots and Tera points left, or that all their slots are used. Posted when `onClock` changes; the previous ping is deleted in the same step. A commissioner undo puts the earlier player back on the clock and pings them again. When the draft completes, the last ping is deleted.
 
-The ping carries a **Draft a Pokémon** button and, once the player has the roster minimum, **Finish drafting** (the same confirm step as `/done`). Anyone can press them, so each press is checked against who is on the clock at that moment, not when the ping was posted: anyone else gets a private "Not your pick." Both answer with a new private message and never edit the ping.
+`/draft` in the ping is a clickable command mention, `</draft:COMMAND_ID>` (Discord's message formatting), which offers the command in the reader's message box. The id comes from the answer to the boot-time registration (3.4), kept in memory only; a ping posted before that answer arrives (just after a restart) writes `` `/draft` `` as plain text instead.
+
+Once the player has the roster minimum the ping carries a **Finish drafting** button (the same confirm step as `/done`). Anyone can press it, so each press is checked against who pressed it, not who the ping was posted for; it answers with a new private message and never edits the ping. When `PUBLIC_URL` is `https://`, a link button (style 5) **Draft room** opens the draft page and the text says "with **Draft room** below" instead of printing the URL; with an `http://` URL (local development) the URL stays in the text and there is no link button, because Discord's docs give no rule for which schemes a link button accepts and a refused button would fail the whole ping. A ping with neither button has no button row at all (Discord refuses an empty one).
 
 The mention is dropped (the message is still posted) for a member with `/pings off`, and for dev-login users.
 
@@ -80,47 +82,28 @@ The mention is dropped (the message is still posted) for a member with `/pings o
 
 Works for the player on the clock. The reply is **ephemeral**: only the caller sees it, and neither the command nor the reply is a channel message, so there is nothing to clean up.
 
-1. **Parse.** The `pokemon` option has autocomplete over what the caller can afford right now (names that pass `pickProblem`), so the usual path is choosing from the list. Typed free text is matched to the pool by `toID`.
+1. **Parse.** The `pokemon` option has autocomplete over what the caller can take right now (entries that pass `pickProblem`, as a captain when `captain` is set), so the usual path is choosing from the list. It answers only the player on the clock (anyone else gets no choices). The box is read three ways, merged in this order without repeats, up to 25:
+   - **Empty:** everything the caller can take, priciest first.
+   - **A name:** pool entries whose name or id (`toID`) starts with the text, then those that only contain it; priciest first within each.
+   - **A type:** if the text (as a `toID`) is all letters, at least 3 of them, and starts a type's name (`dra`, `dragon`, `Fairy`), every Pokémon of that type, priciest first. Three letters tell every type apart (fir/fig/fly/fai, gra/gro/gho, dra/dar, poi/psy); fewer would bury short name matches under a whole type (`f`, `fa` are names only).
+   - **A price:** if the raw text is a whole number (`18`; not `1.5`), Pokémon costing exactly that, then cheaper ones to fill.
+
+   Each choice reads "Garchomp · 18", with "+N Tera" after the price when `captain` is set. Types can be typed but aren't shown, to keep the list short to read; an autocomplete choice is plain text, so it can't carry a sprite or a custom emoji either. Name and type checks order the candidates first; `pickProblem` runs only down that order until 25 pass. Typed free text that wasn't chosen from the list is matched to the pool by `toID`.
 2. **If it fails**, the reply says why in the site's own words (`pickProblem`'s message: not your turn, already drafted, too expensive, banned, not in the pool) and, for a name that matched nothing, offers the closest pool names as buttons. Pressing one continues at step 3. The caller can also just run `/draft` again.
 3. **Confirm.** The reply shows the sprite (large, as the embed image), name, cost, Tera Captain cost if `captain` is set, and what the pick leaves: "Draft **Garchomp** for 18? You'll have 44 left for at least 4 more picks." with **Confirm** and **Cancel** buttons. For a normal pick that could also be a Tera Captain right now (it has a Tera price, and the player has a captain slot and the Tera points), a **Confirm as Tera Captain (+N Tera)** button sits between them.
 4. **On Confirm** the pick is re-validated from scratch and made with `makePick`. The reply collapses to "Drafted Garchomp." The board updates and the next player is pinged (through `notify`, same as a pick made on the site). **Cancel** collapses it to "Cancelled."
 
-The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}:{userId}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the trailing site user id lets the handler check the presser is the player the pick is for. Every button except Cancel and the ping's two ends with the user id.
+The Confirm button's `custom_id` is `draft:{seasonId}:{overall}:{speciesId}:{captain}:{userId}`. The `overall` makes a stale confirmation fail cleanly ("That turn has passed") instead of spending a later turn, and the trailing site user id lets the handler check the presser is the player the pick is for. Every button except Cancel and the ping's Finish drafting (`finish:{seasonId}`) ends with the user id.
 
 `captain` is refused with a plain message in leagues where `teraMode` is not `captains`.
 
 `/done` finishes drafting (`finishDrafting`) with the same confirm step.
 
-### 2.4 The picker (Draft a Pokémon)
+### 2.4 No picker
 
-Pressing the ping's button opens a private message, already filled in, with up to four rows:
+Picks in Discord are made only with `/draft`. The ping once had a **Draft a Pokémon** button that opened a private picker (price-tier and type dropdowns, later tier step buttons and a search modal). It was cut: every version meant opening and scrolling several controls before reaching a Pokémon, where `/draft`'s box filters as the player types.
 
-1. **Price tier**: every tier with something the player can legally take (of the chosen type, below), priciest first, the current one selected.
-2. **Type**: "All types", then each type that at least one legal Pokémon has, in the usual type order (at most 18 + 1, inside a dropdown's 25). Types come from the dex, as on the draft page's type filter. Omitted if no type is known.
-3. **Pokémon**: the selected tier's Pokémon of the selected type ("Garchomp · 18", with its icon emoji when one has been uploaded; the picker never queues uploads).
-4. Buttons: **Previous** / **Next** when the list has more than 25, and **Search by name**.
-
-**Tier and type combine as a filter then a tier.** The type narrows the legal list first; the tier dropdown then lists only prices that have a Pokémon of that type, and the Pokémon list is that tier of that type. Choosing a type keeps the tier if it has one of that type, otherwise falls to the next such tier down (the cheapest if there is none below). Choosing either goes back to page 1. A type that no longer has a legal Pokémon falls back to All types. More than 25 tiers shows the 25 around the selected one.
-
-**Search.** **Search by name** answers with a modal (callback type 9) holding one short text input. Its submit (interaction type 5) edits the picker in place (callback type 7) to show every legal Pokémon whose name or id contains the text, across all tiers, names that start with it first (the matching `/draft`'s autocomplete uses), filtered by the selected type, the first 25 in the Pokémon dropdown (the message says how many matched and to type more when there are over 25). While searching, the tier dropdown gives way to **Search again** and **Browse by tier**, which drops the search and returns to the tier it came from. No match says "Nothing you can draft matches "…"" with the same two buttons and no Pokémon dropdown (a dropdown needs an option). Text with nothing usable in it (only punctuation) redraws the picker with a note. The search text is kept as its `toID`, cut to 30 characters, so it can never hold a `:`.
-
-**Choosing a Pokémon** replaces the picker with the same confirm step as `/draft` (2.3 step 3), plus a **Back** button (before Cancel) that reopens the picker at that Pokémon's price tier, with the same type and search, and the same page if that tier was the one on screen. The confirm step reached from `/draft` or its "did you mean" buttons has no Back: there is no picker behind it, and `/draft` is the way back. At most four buttons share the row (Confirm normal pick, Confirm as Tera Captain, Back, Cancel).
-
-All picker state is in the `custom_id`s; nothing is stored. Every picker id carries the whole view and ends with the owner's site user id:
-
-| Component | `custom_id` |
-|---|---|
-| Tier, type, Pokémon dropdowns | `tier:…`, `type:…`, `mon:…` |
-| Previous / Next, and the confirm step's Back | `page:…` |
-| Search by name / Search again | `search:…` |
-| Browse by tier | `browse:…` |
-| The search modal (its submit carries it back) | `find:…` |
-
-where `…` is `{seasonId}:{tier}:{type}:{search}:{page}:{userId}`: `type` is the type's id (`dragon`, empty for all), `search` the search's id (empty when browsing). The dropdowns' chosen value replaces the matching part (the type dropdown's All types is `all`). The longest is about 70 characters, inside Discord's 100, and no two components in one message share an id. Ids from a picker drawn before ids carried the view (`tier:{seasonId}:{userId}`) still work and open the first view.
-
-Every step re-reads the draft: once the player is no longer on the clock, any press, Search (no modal opens) and a late modal submit answer "That turn has passed." A tier that has emptied since falls to the next one down, and a page past the end is clamped. Only the owner can use the picker: every component and the modal submit is checked against the id's last part, and anyone else gets a private "This is for another player." The ping's own buttons are `open:{seasonId}` and `finish:{seasonId}`, the only ones without a user id.
-
-`/draft` stays as the shortcut for someone who knows the name.
+Buttons left on messages from that time don't throw. The old ping's `open:{seasonId}` answers anyone with a private "Picks are made with `/draft` now: start typing a name, a type or a price, then choose from the list." (with the command mention when its id is known). The picker's own components (`tier:`, `type:`, `mon:`, `page:`, `search:`, `browse:`) are still checked against the owner in the id's last part ("This is for another player.") and otherwise answer "This button no longer does anything."
 
 Picking from the site keeps working and produces the same board update and ping. Commissioners pick for other players on the site only.
 
@@ -187,7 +170,7 @@ README gets a short "Discord bot" section: create the bot user, copy the two val
 
 1. Verify the Ed25519 signature: header `X-Signature-Ed25519` over `X-Signature-Timestamp` + raw body, against `DISCORD_PUBLIC_KEY`, using `node:crypto` (wrap the 32-byte key in an SPKI prefix to import it). Bad or missing signature: `401`.
 2. `type 1` (ping): reply `{ type: 1 }`.
-3. `type 2` (command), `type 4` (autocomplete), `type 3` (button or dropdown), `type 5` (modal submit, the picker's search): dispatch by name or `custom_id`. A modal submit goes through the same `custom_id` dispatch and owner check as a button.
+3. `type 2` (command), `type 4` (autocomplete), `type 3` (button): dispatch by name or `custom_id`. The bot sends no modals, so a modal submit (`type 5`, only from the search the old picker once had) gets "Unsupported interaction." If a handler throws, the error is logged and the answer is a private "Something went wrong" message, except for an autocomplete, which can only be answered with choices and gets an empty list (a message there shows in Discord as "Loading options failed").
 
 Every handler is synchronous SQLite work and answers in the HTTP response, well inside Discord's 3-second limit.
 
@@ -197,7 +180,7 @@ Every handler is synchronous SQLite work and answers in the HTTP response, well 
 
 ### 3.4 Commands are registered at boot
 
-On startup, if the token is set, one `PUT /applications/{id}/commands` with the full global command list. It is idempotent, so there is no deploy step.
+On startup, if the token is set, one `PUT /applications/{id}/commands` with the full global command list. It is idempotent, so there is no deploy step. Its answer is the registered command objects; the bot keeps `/draft`'s `id` in memory for the ping's command mention (2.2).
 
 ### 3.5 To confirm against Discord's docs before building
 
@@ -208,7 +191,7 @@ Checked against Discord's developer docs while building. The result follows each
 - Signature scheme and headers as in 3.3; Discord probes the endpoint when its URL is saved. **Confirmed.** `X-Signature-Ed25519` over `X-Signature-Timestamp` + raw body; reply `401` when it fails; a PING (`type 1`) must get `200` with `{ "type": 1 }` and a JSON content type. Saving the URL fails unless both work, and Discord keeps running routine checks afterwards and removes the URL if the endpoint fails them.
 - Limits: 3-second response; 25 autocomplete choices; `custom_id` 100 characters; 6000 characters across a message's embeds, 25 fields per embed, 1024 per field value. **Confirmed**, plus: the 6000 counts titles, descriptions, field names and values, footer text and author names; a description holds 4096 and a title or field name 256; message content holds 2000; a message has up to 10 embeds, and a row up to 5 buttons.
 - An ephemeral reply can carry an embed image and buttons, and a button press can replace it (response type 7). **Partly confirmed.** Type 7 (UPDATE_MESSAGE) is valid for component interactions and edits the message the button is on; the ephemeral flag (64) is allowed on a reply with embeds and components, and no restriction on combining them is listed. Not tried against real Discord.
-- The picker's search modal (checked when search was added, against "Receiving and Responding" and the component reference on docs.discord.com). **Confirmed from the docs:** callback type 9 (MODAL) is "Not available for `MODAL_SUBMIT` and `PING` interactions", so a component press may answer with one; types 6 and 7 are "Only valid for `MODAL_SUBMIT` and component-based interactions", and the interaction's `message` is present "for components or modals triggered by components", so the submit edits the ephemeral picker the Search button was on. A modal has a `custom_id` (1–100), a `title` (45) and 1–5 components; text inputs "must be placed inside a Label" (type 18: `label` 45, `description` 100, `component`), and an action row holding a text input is deprecated, so the bot sends a Label. The submit's `data.components` holds the Label with the input (and its `value`) under `component`; the bot also reads the older action-row shape. **Not documented in so many words:** that type 7 on a modal submit edits an *ephemeral* message specifically. Not tried against real Discord.
+- The ping's `/draft` command mention and link button (checked against the message formatting reference, "Application Commands" and the component reference on docs.discord.com). **Confirmed:** the formatting table lists a slash command mention as `</NAME:COMMAND_ID>` (with `</NAME SUBCOMMAND:ID>` forms); bulk-overwriting global commands "Returns `200` and a list of application command objects", each with an `id`; a link button is style 5, "must have a `url`, and cannot have a `custom_id`", `url` at most 512 characters, and sends no interaction when clicked; a row holds up to 5 buttons. **Not documented:** what clicking a command mention does (that it puts the command in the reader's message box is Discord's known client behaviour, not stated in the docs), and which URL schemes a link button accepts (the docs give only the length), hence the https-only rule in 2.2. Not tried against real Discord.
 - Application emojis (checked when the board moved to icon emojis). **Confirmed:** `GET`/`POST /applications/{id}/emojis` (the list is wrapped in `items`), `name` plus `image` as a data URI (PNG, JPEG or GIF), "the 128x128 emoji image", at most 256 KiB, up to 2000 per application, and no Use External Emojis permission needed. **Not documented:** name rules (the bot uses `p_<species id>`, cut to 32, the limit for guild emojis), whether names must be unique in an application, a number for the emoji rate limit (the docs only warn that emoji routes don't follow the usual rate limit headers and may return 429s), and whether custom emojis render in embed descriptions (bots commonly rely on it, but the docs don't say). Not tried against real Discord.
 - Rate-limit headers and the `429` body (`retry_after`). **Confirmed.** `X-RateLimit-Limit`, `-Remaining`, `-Reset`, `-Reset-After` and `-Bucket`, plus `-Global` and `-Scope` on a 429; the body has `retry_after` in seconds (a float) and `global`, and `Retry-After` is sent too. Bots get 50 requests a second overall; interaction responses don't count toward it. Also relevant: 10,000 invalid requests (401, 403, 429) in 10 minutes gets the IP banned for a while, one more reason the bot stops sending to a channel after a 403 or 404 instead of retrying.
 
@@ -270,8 +253,9 @@ New `test/discord.mjs`, run by `npm test` with no real Discord:
   - A pick made on the site and a pick made with `/draft` leave the channel in the same state.
   - `/draft` off-turn, for a drafted Pokémon, and for an unaffordable one each return the site's message and change nothing; a misspelt name offers close matches.
   - Confirm with a stale `overall`, and Confirm pressed by another user, are refused.
-  - The ping's Draft a Pokémon refuses anyone off the clock privately and leaves the ping alone; the picker offers exactly the affordable tiers, leads to the confirm step (with Confirm as Tera Captain only when eligible), and a pick made through it lands like any other; its dropdowns go stale once the turn passes; a tier over 25 pages and a vanished page is clamped.
-  - The picker's confirm step has **Back**, which returns to that Pokémon's tier (keeping the type filter and search); `/draft`'s has none. The type dropdown lists only types with something legal, narrows the tiers to those with that type and the Pokémon to that type, and a tier without it falls to the next one down. Search opens a modal; its submit (in the Label shape and the older action-row shape) shows matches across tiers with prefixes first, up to 25; no match says so with no empty dropdown; punctuation-only text is sanitised (a `:` never reaches an id). Search and the modal submit refuse another player and answer "That turn has passed." once the turn moves on. Every picker id is at most 100 characters, unique in its message, and ends with the owner's id. A pick found by search lands like any other.
+  - The ping's how-to line holds `</draft:ID>` with the id the registration PUT answered (the fake API returns ids), and `` `/draft` `` when the id is unknown; the draft room is a link button only for an https URL (the http test URL stays in the text).
+  - `/draft`'s autocomplete: the empty box lists the priciest legal Pokémon; a name lists prefix matches before substring matches; a type (`fairy`, `fai`, `Dragon`) adds that type after any name matches, and two letters (`fa`) don't; a whole number lists that price then cheaper, and `1.5` is not a price; labels are "Name · cost", with "+N Tera" when `captain` is set and only captain-legal entries then; off the clock it is empty for any text. `/pokemon`'s lookup also lists prefixes first. A pick chosen from the autocomplete lands like any other.
+  - `/draft` leads to the confirm step (with Confirm as Tera Captain only when eligible, and the reason when not); another player pressing it is refused. The ping has no button row until Finish drafting or the https Draft room link applies. The old ping's `open:` button tells anyone that picks are typed now; the old picker's ids in every shape they had (3-, 5-, 6- and 7-part) say "This button no longer does anything." and still check the owner; a late modal submit doesn't fail.
   - Undo re-pings the earlier player; completing the draft removes the ping and posts week 1's matchups once.
   - A board for the largest pool and a 16-player full draft stays under 6000 characters.
   - Finishing a week's last series posts one recap with every series link; restarting the app does not post it again; a best-of-3 at 1–0 posts nothing.

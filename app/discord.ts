@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import express, { type Express } from 'express';
 import { DISCORD_API, DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_PUBLIC_KEY, PUBLIC_URL } from './config.ts';
 import { all, now, one, run } from './db.ts';
-import { mon, toID } from './dex.ts';
+import { mon, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import * as R from './discord-render.ts';
 import { emojisBusy, emojisIdle, requestEmojis } from './emoji.ts';
@@ -202,7 +202,7 @@ async function syncDraft(link: Link) {
 		await remove(channel, link.clock_message_id);
 		run(`UPDATE discord_links SET clock_message_id = NULL, clock_key = NULL WHERE ${still}`, link.league_id, channel);
 		if (key) {
-			const id = await post(channel, link.draft_channel_name, R.clockPing(league, season.id, settings, state!));
+			const id = await post(channel, link.draft_channel_name, R.clockPing(league, season.id, settings, state!, draftCommandId));
 			const r = run(`UPDATE discord_links SET clock_message_id = ?, clock_key = ? WHERE ${still}`, id, key, link.league_id, channel);
 			if (!r.changes) await remove(channel, id);
 		}
@@ -229,11 +229,20 @@ async function syncRecap(link: Link) {
 	}
 }
 
+/**
+ * /draft's command id, from registering the commands. Kept in memory only: a ping posted before the registration
+ * answers (just after a restart) writes `/draft` as plain text instead of the clickable mention.
+ */
+let draftCommandId: string | null = null;
+
 /** Sync every linked league once (startup) and register the slash commands. */
 export async function startDiscord() {
 	if (!enabled) return;
 	if (DISCORD_PUBLIC_KEY && DISCORD_CLIENT_ID) {
 		const r = await api('PUT', `/applications/${DISCORD_CLIENT_ID}/commands`, COMMANDS);
+		// The answer is the registered commands with their ids; /draft's makes the ping's clickable mention
+		const draft = r.status === 200 && Array.isArray(r.data) ? r.data.find((c: any) => c?.name === 'draft') : null;
+		if (draft && /^\d+$/.test(String(draft.id))) draftCommandId = String(draft.id);
 		if (r.status !== 200) console.error(`Discord: registering commands failed (${r.status}): ${JSON.stringify(r.data)?.slice(0, 300)}`);
 	} else {
 		console.log('Discord bot: DISCORD_PUBLIC_KEY or DISCORD_CLIENT_ID is unset, so slash commands are off. The board and recaps still post.');
@@ -577,7 +586,7 @@ function lookup(ctx: Ctx, o: Opts, fn: (league: L.League, season: L.Season, sett
 
 /** Shows the confirm step for a pick, or why it can't be made (pickProblem's own words). */
 function confirmStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
-	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, back?: string) {
+	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean) {
 	const state = L.draftState(season, settings);
 	const problem = L.pickProblem(season, settings, state, userId, entry.species_id, captain);
 	if (problem) return respond(problem);
@@ -587,50 +596,7 @@ function confirmStep(respond: typeof reply | typeof update, season: L.Season, se
 	// and one that can't says why, in pickProblem's words
 	const tcProblem = !captain && settings.teraMode === 'captains' ? L.pickProblem(season, settings, state, userId, entry.species_id, true) : null;
 	const asCaptain = !captain && settings.teraMode === 'captains' && !tcProblem;
-	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined, tcProblem ?? undefined, back));
-}
-
-const FIRST_VIEW: R.PickerView = { tier: null, type: '', q: '', page: 0 };
-/**
- * The picker view a component's id carries (`{kind}:{seasonId}:{tier}:{type}:{search}:{page}:{userId}`).
- * Type and search go through toID again: an id is user-supplied data, and neither may hold a `:`.
- */
-function viewOf(parts: string[]): R.PickerView {
-	if (parts.length !== 7) return FIRST_VIEW; // a picker drawn before ids carried the view
-	return {
-		tier: parts[2] === '' ? null : Number(parts[2]) || 0, type: toID(parts[3]),
-		q: toID(parts[4]).slice(0, R.SEARCH_MAX), page: Number(parts[5]) || 0,
-	};
-}
-
-/** Whether this player is on the clock now: every picker step re-reads the draft. */
-function onClockNow(season: L.Season, settings: L.Settings, userId: number) {
-	return season.status === 'drafting' && L.draftState(season, settings).onClock?.user_id === userId;
-}
-
-/** The picker's dropdowns for the player on the clock, or why there's none. */
-function pickerStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
-	view: R.PickerView, note?: string) {
-	if (season.status !== 'drafting') return respond('The draft is not running.');
-	const state = L.draftState(season, settings);
-	if (state.onClock?.user_id !== userId) return respond(respond === update ? 'That turn has passed.' : 'Not your pick.');
-	// Types come from the dex, as on the draft page's type filter
-	const available = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
-		'SELECT species_id, name, cost, tc_cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
-		.filter(p => !L.pickProblem(season, settings, state, userId, p.species_id, false))
-		.map(p => ({ ...p, types: mon(p.species_id, settings.mod).types }));
-	const out = R.picker(season.id, settings, state, userId, available, view.tier, view.page, undefined, { type: view.type, q: view.q, note });
-	return respond(out.content, { components: out.components });
-}
-
-/** The text typed into the search modal: inside a Label now, inside an action row in Discord's older modal shape. */
-function modalText(components: any[] | undefined, customId: string): string {
-	for (const c of components || []) {
-		if (c?.type === 4 && c.custom_id === customId) return String(c.value ?? '');
-		const inner = modalText([c?.component, ...(c?.components || [])].filter(Boolean), customId);
-		if (inner) return inner;
-	}
-	return '';
+	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined, tcProblem ?? undefined));
 }
 
 /** /done and the ping's "Finish drafting": the confirm step, or why it can't be offered. */
@@ -675,8 +641,8 @@ function button(ctx: Ctx) {
 		const found = seasonHere(ctx, Number(parts[1]));
 		if (!found || !found.current) return reply('That draft has ended.');
 		if (parts[0] === 'finish') return doneStep(ctx, found.league);
-		if (!ctx.user || !L.membership(found.league.id, ctx.user.id)) return reply(signIn());
-		return pickerStep(reply, found.season, found.settings, ctx.user.id, FIRST_VIEW);
+		// A ping posted when it still had a Draft a Pokémon button: picks are typed now
+		return reply(`Picks are made with ${R.draftCommand(draftCommandId)} now: start typing a name, a type or a price, then choose from the list.`);
 	}
 	// Every other button is for one player; the last part of its id says who
 	const owner = Number(parts.at(-1));
@@ -684,31 +650,6 @@ function button(ctx: Ctx) {
 	const found = seasonHere(ctx, Number(parts[1]));
 	if (!found || !found.current) return update('That draft has ended.');
 	const { season, league, settings } = found;
-	// The picker (private, so only its owner can press it). Each id carries the view it was drawn with
-	const view = viewOf(parts);
-	const chosen = String(ctx.i.data?.values?.[0] ?? '');
-	if (parts[0] === 'tier') return pickerStep(update, season, settings, owner, { ...view, tier: Number(chosen), page: 0 });
-	if (parts[0] === 'type') return pickerStep(update, season, settings, owner, { ...view, type: chosen === 'all' ? '' : toID(chosen), page: 0 });
-	if (parts[0] === 'page') return pickerStep(update, season, settings, owner, view);
-	if (parts[0] === 'browse') return pickerStep(update, season, settings, owner, { ...view, q: '', page: 0 });
-	if (parts[0] === 'search') {
-		// Checked before the modal opens, so a stale picker says so instead of asking for a name it can't use
-		if (!onClockNow(season, settings, owner)) return pickerStep(update, season, settings, owner, view);
-		return { type: 9, data: R.searchModal(`find:${season.id}:${R.viewId(view)}:${owner}`, view.q) };
-	}
-	if (parts[0] === 'find') {
-		// The modal's submit (interaction type 5): answered with type 7, which edits the picker the modal came from
-		const q = toID(modalText(ctx.i.data?.components, 'q')).slice(0, R.SEARCH_MAX);
-		if (!q) return pickerStep(update, season, settings, owner, view, 'Type part of a Pokémon\'s name to search.');
-		return pickerStep(update, season, settings, owner, { ...view, q, page: 0 });
-	}
-	if (parts[0] === 'mon') {
-		const entry = poolEntry(season.id, chosen);
-		if (!entry) return update('Not in the draft pool.');
-		// Back reopens the picker at this Pokémon's tier, same type and search; the page only if it's the tier on screen
-		const back = { ...view, tier: entry.cost, page: entry.cost === view.tier ? view.page : 0 };
-		return confirmStep(update, season, settings, owner, entry, false, `page:${season.id}:${R.viewId(back)}:${owner}`);
-	}
 	if (parts[0] === 'pick') {
 		const entry = poolEntry(season.id, parts[2]);
 		if (!entry) return update('Not in the draft pool.');
@@ -756,11 +697,16 @@ function autocomplete(ctx: Ctx, o: Opts) {
 		const state = L.draftState(season, settings);
 		if (state.onClock?.user_id !== ctx.user.id) return choices([]);
 		const captain = o.values.get('captain') === true;
+		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
+			'SELECT * FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
+			.map(p => ({ ...p, types: mon(p.species_id, settings.mod).types }));
+		// Cheap text and type checks order the candidates; pickProblem runs down that order only until 25 pass
 		const out: { name: string, value: string }[] = [];
-		for (const p of all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
-			'SELECT * FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)) {
+		const seen = new Set<string>();
+		for (const p of draftCandidates(pool, String(o.values.get('pokemon') ?? ''))) {
 			if (out.length >= 25) break;
-			if (typed && !p.species_id.includes(typed) && !toID(p.name).includes(typed)) continue;
+			if (seen.has(p.species_id)) continue;
+			seen.add(p.species_id);
 			if (L.pickProblem(season, settings, state, ctx.user.id, p.species_id, captain)) continue;
 			out.push({ name: `${p.name} · ${p.cost}${captain ? ` +${p.tc_cost} Tera` : ''}`, value: p.species_id });
 		}
@@ -769,10 +715,43 @@ function autocomplete(ctx: Ctx, o: Opts) {
 	if (name === 'pokemon' && o.focused === 'name') {
 		const pool = all<{ species_id: string, name: string, cost: number, banned: number }>(
 			'SELECT * FROM pool WHERE season_id = ? ORDER BY banned, cost DESC, name', season.id);
-		return choices(pool.filter(p => !typed || p.species_id.includes(typed) || toID(p.name).includes(typed))
-			.map(p => ({ name: `${p.name} · ${p.banned ? 'banned' : p.cost}`, value: p.species_id })));
+		return choices(byName(pool, typed).map(p => ({ name: `${p.name} · ${p.banned ? 'banned' : p.cost}`, value: p.species_id })));
 	}
 	return choices([]);
+}
+
+/** Pool entries whose id or name contains `typed`, those starting with it first, each group in the pool's order. */
+function byName<T extends { species_id: string, name: string }>(pool: T[], typed: string) {
+	if (!typed) return pool;
+	const starts = (p: T) => p.species_id.startsWith(typed) || toID(p.name).startsWith(typed);
+	const has = (p: T) => p.species_id.includes(typed) || toID(p.name).includes(typed);
+	return [...pool.filter(starts), ...pool.filter(p => !starts(p) && has(p))];
+}
+
+// Three letters tell every type apart (fir/fig/fly/fai, gra/gro/gho, dra/dar, poi/psy), and fewer would bury
+// a short name under a type's whole list: `f` alone is not read as a type
+const TYPE_PREFIX_MIN = 3;
+
+/**
+ * /draft's one box, priciest first within each part, in this order (duplicates are dropped by the caller):
+ * names starting with the text, then names containing it; then, for 3+ letters that start a type's name
+ * (`dra`, `dragon`), that type; then, for a whole number, Pokémon costing exactly that, then cheaper ones.
+ * An empty box is the whole list, priciest first.
+ */
+function* draftCandidates<T extends { species_id: string, name: string, cost: number, types: string[] }>(pool: T[], text: string) {
+	const typed = toID(text);
+	if (!typed) return yield* pool;
+	yield* byName(pool, typed);
+	if (/^[a-z]+$/.test(typed) && typed.length >= TYPE_PREFIX_MIN) {
+		const types = TYPES.filter(t => toID(t).startsWith(typed));
+		if (types.length) yield* pool.filter(p => p.types.some(t => types.includes(t)));
+	}
+	// The raw text, not its toID: `1.5` is not 15
+	if (/^\d+$/.test(text.trim())) {
+		const n = Number(text.trim());
+		yield* pool.filter(p => p.cost === n);
+		yield* pool.filter(p => p.cost < n);
+	}
 }
 
 function handle(i: any) {
@@ -786,8 +765,7 @@ function handle(i: any) {
 		user: discordId ? one<{ id: number, showdown_name: string }>('SELECT id, showdown_name FROM users WHERE discord_id = ?', discordId) : undefined,
 	};
 	if (!ctx.guildId) return i.type === 4 ? choices([]) : reply("Use the bot's commands in your league's Discord server.");
-	// A modal submit (5) is routed like a button: its id carries the owner and the picker view it came from
-	if (i.type === 3 || i.type === 5) return button(ctx);
+	if (i.type === 3) return button(ctx);
 	const o = options(i);
 	if (i.type === 4) return autocomplete(ctx, o);
 	if (i.type === 2) {
@@ -829,11 +807,23 @@ export function discordRoutes(app: Express) {
 			return res.status(400).end();
 		}
 		if (i.type === 1) return res.json({ type: 1 });
+		const started = Date.now();
 		try {
-			res.json(handle(i));
+			const out: any = handle(i);
+			res.json(out);
+			// DISCORD_DEBUG=1: one line per interaction. `in transit` is how long Discord's request took to get here
+			// (its id is a snowflake holding when it was made), which counts against the same 3 seconds as the answer
+			if (process.env.DISCORD_DEBUG) {
+				const made = /^\d+$/.test(String(i.id)) ? Number(BigInt(i.id) >> 22n) + 1420070400000 : null;
+				console.log(`Discord debug: type ${i.type} ${i.data?.name || i.data?.custom_id}, in transit ${made ? started - made : '?'} ms, handled in ${Date.now() - started} ms, ` +
+					`answered type ${out?.type}${out?.type === 8 ? ` with ${out.data.choices.length} choices` : ''}`);
+			}
+			// Discord drops an answer after 3 seconds ("Loading options failed", "This interaction failed"): say so here, where it can be seen
+			if (Date.now() - started > 1500) console.error(`Discord: answering a type ${i.type} interaction (${i.data?.name || i.data?.custom_id}) took ${Date.now() - started} ms; Discord allows 3000.`);
 		} catch (e) {
 			console.error('Discord interaction failed:', e);
-			res.json(reply('Something went wrong on the league site. Try again, or use the site.'));
+			// An autocomplete can only be answered with choices; a message there shows as "Loading options failed"
+			res.json(i.type === 4 ? choices([]) : reply('Something went wrong on the league site. Try again, or use the site.'));
 		}
 	});
 }

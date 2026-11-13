@@ -2,7 +2,7 @@
 // Only public league facts go in here (picks, rosters, prices); nothing reads a battle.
 import { PUBLIC_URL } from './config.ts';
 import { all } from './db.ts';
-import { mon, toID, TYPES } from './dex.ts';
+import { mon } from './dex.ts';
 import * as L from './league.ts';
 import { emojiMap, emojiName } from './emoji.ts';
 
@@ -247,8 +247,25 @@ export function board(league: L.League, season: L.Season, settings: L.Settings, 
 	return { embeds, allowed_mentions: { parse: [] }, wanted };
 }
 
+/**
+ * A link button to `url`, or null when it isn't https. Discord's docs give no rule for a link button's URL scheme,
+ * and a refused one would fail the whole ping, so a dev `http://localhost` URL stays in the text instead.
+ */
+export function linkButton(label: string, url: string) {
+	return /^https:\/\//.test(url) ? { type: 2, style: 5, label, url } : null;
+}
+
+/**
+ * `/draft` as a clickable command mention (`</draft:id>`, Discord's message formatting) when the command's id is
+ * known from registering it, else as plain code text (after a restart, until the registration answers).
+ */
+export function draftCommand(commandId?: string | null) {
+	return commandId && /^\d+$/.test(commandId) ? `</draft:${commandId}>` : '`/draft`';
+}
+
 /** "@player, you're up: round 3, pick 4. 62 points left, at least 5 more picks. Use /draft." */
-export function clockPing(league: L.League, seasonId: number, settings: L.Settings, state: L.DraftState) {
+export function clockPing(league: L.League, seasonId: number, settings: L.Settings, state: L.DraftState, draftCommandId?: string | null,
+	siteUrl = PUBLIC_URL) {
 	const p = state.onClock!;
 	const w = who(league.id).get(p.user_id);
 	const ids: string[] = [];
@@ -256,9 +273,11 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 	const need = Math.max(0, settings.rosterMin - count);
 	const left = settings.budget - (state.spent.get(p.user_id) || 0);
 	const more = need ? `at least ${plural(need, 'more pick')}` : `up to ${plural(settings.rosterMax - count, 'more pick')} (or \`/done\`)`;
+	const room = linkButton('Draft room', `${siteUrl}/l/${league.id}/draft`);
 	const lines = [
 		`${mention(w, ids)}, you're up: round ${state.round + 1}, pick ${(state.slot % state.players.length) + 1}. ${left} points left, ${more}.`,
-		`**How to pick:** You can draft directly through Discord by pressing **Draft a Pokémon** below, or draft on the website here: ${PUBLIC_URL}/l/${league.id}/draft`
+		`**How to pick:** You can draft directly through Discord by typing ${draftCommand(draftCommandId)} ` +
+			`(start typing a name, a type or a price, then choose from the list), or draft on the website ${room ? 'with **Draft room** below.' : `here: ${siteUrl}/l/${league.id}/draft`}`
 	];
 	if (settings.teraMode === 'captains') {
 		const slots = settings.maxCaptains - (state.captains.get(p.user_id) || 0);
@@ -268,16 +287,17 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 				`from a separate budget. You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
 			: `**Tera Captain:** you've used all ${plural(settings.maxCaptains, 'captain slot')}.`);
 	}
-	// Anyone can press these; the press is checked against who is on the clock then, not when this was posted
-	const buttons = [{ type: 2, style: 1, label: 'Draft a Pokémon', custom_id: `open:${seasonId}` }];
+	// Anyone can press Finish drafting; the press is checked against who pressed it, not who this was posted for
+	const buttons: object[] = [];
 	if (!need) buttons.push({ type: 2, style: 2, label: 'Finish drafting', custom_id: `finish:${seasonId}` });
-	return { content: lines.join('\n'), allowed_mentions: only(ids), components: [{ type: 1, components: buttons }] };
+	if (room) buttons.push(room);
+	return { content: lines.join('\n'), allowed_mentions: only(ids), components: buttons.length ? [{ type: 1, components: buttons }] : [] }; // Discord refuses an empty row
 }
 
 /** The ephemeral "Draft Garchomp for 18?" step. */
 export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: number,
 	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, customId: string, captainId?: string,
-	noCaptain?: string, backId?: string) {
+	noCaptain?: string) {
 	const count = (state.counts.get(userId) || 0) + 1;
 	const left = settings.budget - (state.spent.get(userId) || 0) - entry.cost;
 	const need = Math.max(0, settings.rosterMin - count);
@@ -299,136 +319,9 @@ export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: n
 		components: [{ type: 1, components: [
 			{ type: 2, style: 3, label: captainId ? 'Confirm normal pick' : 'Confirm', custom_id: customId },
 			...(captainId ? [{ type: 2, style: 1, label: `Confirm as Tera Captain (+${entry.tc_cost} Tera)`, custom_id: captainId }] : []),
-			// Only when this step came from the picker: /draft has no picker to go back to
-			...(backId ? [{ type: 2, style: 2, label: 'Back', custom_id: backId }] : []),
 			{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
 		] }],
 	};
-}
-
-export const PICKER_PAGE = 25; // a dropdown's most options
-
-/** `<:p_garchomp:123>` as a component's emoji object. */
-function emojiObject(markup: string | undefined) {
-	const m = markup ? /^<:(\w+):(\d+)>$/.exec(markup) : null;
-	return m ? { name: m[1], id: m[2] } : undefined;
-}
-
-/** Longest search text kept in a custom_id (as a toID), so every picker id stays well under Discord's 100. */
-export const SEARCH_MAX = 30;
-
-/**
- * What a picker shows: price tier (null: the priciest), type (a toID, '' for all), search text (a toID, '' when
- * browsing by tier) and page. Lives only in custom ids, as `{tier}:{type}:{search}:{page}`; toIDs hold no `:`.
- */
-export interface PickerView { tier: number | null, type: string, q: string, page: number }
-export function viewId(v: PickerView) {
-	return `${v.tier ?? ''}:${v.type}:${v.q}:${v.page}`;
-}
-
-/** The search box behind the picker's Search button: one short text input, in a Label (Discord's current modal shape). */
-export function searchModal(customId: string, q: string) {
-	return {
-		custom_id: customId,
-		title: 'Search the pool',
-		components: [{
-			type: 18, label: 'Pokémon name', description: 'Part of the name is enough. Only what you can draft right now is shown.',
-			component: { type: 4, custom_id: 'q', style: 1, min_length: 1, max_length: 40, required: true, placeholder: 'e.g. chomp', ...(q ? { value: q } : {}) },
-		}],
-	};
-}
-
-type Available = { species_id: string, name: string, cost: number, tc_cost?: number | null, types?: string[] };
-
-/**
- * The ephemeral picker behind the ping's "Draft a Pokémon": a price-tier dropdown, a type dropdown, and the
- * Pokémon in that tier of that type; or, after a search, the matches across every tier. `available` is what the
- * caller can legally take, priciest first, with each one's types. All state is in the custom ids.
- */
-export function picker(seasonId: number, settings: L.Settings, state: L.DraftState, userId: number,
-	available: Available[], tier: number | null, page: number, emojis = emojiMap(),
-	filter: { type?: string, q?: string, note?: string } = {}) {
-	if (!available.length) return { content: "There's nothing left in the pool you can draft.", components: [] };
-	// Types with something legal in any tier, in the usual type order. A type that has emptied since: all types
-	const types = TYPES.filter(t => available.some(p => p.types?.includes(t)));
-	const type = types.find(t => toID(t) === filter.type) ?? null;
-	const ofType = type ? available.filter(p => p.types?.includes(type)) : available;
-	const q = filter.q || '';
-	// Tiers only list prices that have a Pokémon of the chosen type
-	const tiers = [...new Set(ofType.map(p => p.cost))];
-	// No tier yet: the priciest. A tier that's gone since: the next one down (or the cheapest)
-	const at = tiers.findIndex(t => tier == null || t <= tier);
-	const chosen = tiers[at < 0 ? tiers.length - 1 : at];
-	// Search: matches by name or id across every tier, prefixes first (as /draft's autocomplete matches)
-	const matches = q ? ofType.filter(p => p.species_id.includes(q) || toID(p.name).includes(q))
-		.sort((a, b) => Number(!(a.species_id.startsWith(q) || toID(a.name).startsWith(q))) - Number(!(b.species_id.startsWith(q) || toID(b.name).startsWith(q)))) : [];
-	const list = q ? matches : ofType.filter(p => p.cost === chosen);
-	const pages = Math.max(1, Math.ceil(list.length / PICKER_PAGE));
-	page = q ? 0 : Math.min(Math.max(0, page), pages - 1); // the tier may have shrunk since the last press
-	const shown = list.slice(page * PICKER_PAGE, (page + 1) * PICKER_PAGE);
-	// Every id carries the whole view, so each press redraws from it; the owner stays last for button()'s check
-	const view: PickerView = { tier: chosen, type: type ? toID(type) : '', q, page };
-	const id = (kind: string, v: Partial<PickerView> = {}) => `${kind}:${seasonId}:${viewId({ ...view, ...v })}:${userId}`;
-	// More than 25 tiers: a window of 25 around the chosen one
-	const i = tiers.indexOf(chosen);
-	const start = Math.max(0, Math.min(i - 12, tiers.length - PICKER_PAGE));
-	const left = settings.budget - (state.spent.get(userId) || 0);
-	// Captains leagues: each Pokémon's Tera price under its name, while this player still has a captain slot
-	const tc = settings.teraMode === 'captains';
-	const slots = settings.maxCaptains - (state.captains.get(userId) || 0);
-	const tera = settings.tcBudget - (state.tcSpent.get(userId) || 0);
-	const teraNote = (p: Available) => (!tc || slots <= 0 ? null : p.tc_cost == null ? "Can't be a Tera Captain" :
-		`Captain: +${p.tc_cost} Tera${p.tc_cost > tera ? `, more than your ${tera} left` : ''}`);
-	const rows: object[] = [];
-	// Searching shows every tier at once, so the tier dropdown gives way to "Browse by tier"
-	if (!q) {
-		rows.push({ type: 1, components: [{
-			type: 3, custom_id: id('tier'), placeholder: 'Price tier',
-			options: tiers.slice(start, start + PICKER_PAGE).map(t => ({
-				label: plural(t, 'point'), value: String(t), default: t === chosen,
-				description: plural(ofType.filter(p => p.cost === t).length, 'Pokémon'),
-			})),
-		}] });
-	}
-	// No types known (nothing to filter by): no type dropdown. 18 types + All fit in one dropdown's 25
-	if (types.length) {
-		rows.push({ type: 1, components: [{
-			type: 3, custom_id: id('type'), placeholder: 'Type',
-			options: [{ label: 'All types', value: 'all', default: !type }, ...types.map(t => ({
-				label: t, value: toID(t), default: t === type, description: plural(available.filter(p => p.types?.includes(t)).length, 'Pokémon'),
-			}))],
-		}] });
-	}
-	// A dropdown needs at least one option: a search with no match shows only the message and buttons
-	if (shown.length) {
-		rows.push({ type: 1, components: [{
-			type: 3, custom_id: id('mon'),
-			// A search shows its first 25 without paging, so no page count there
-			placeholder: !q && pages > 1 ? `Choose a Pokémon (page ${page + 1} of ${pages})` : 'Choose a Pokémon',
-			options: shown.map(p => {
-				const emoji = emojiObject(emojis.get(p.species_id));
-				const description = teraNote(p);
-				return { label: `${p.name} · ${p.cost}`.slice(0, 100), value: p.species_id, ...(description ? { description } : {}), ...(emoji ? { emoji } : {}) };
-			}),
-		}] });
-	}
-	const buttons: object[] = [];
-	if (!q && pages > 1) {
-		buttons.push(
-			{ type: 2, style: 2, label: 'Previous', custom_id: id('page', { page: page - 1 }), disabled: page === 0 },
-			{ type: 2, style: 2, label: 'Next', custom_id: id('page', { page: page + 1 }), disabled: page === pages - 1 },
-		);
-	}
-	buttons.push({ type: 2, style: q ? 2 : 1, label: q ? 'Search again' : 'Search by name', custom_id: id('search') });
-	if (q) buttons.push({ type: 2, style: 1, label: 'Browse by tier', custom_id: id('browse', { q: '', page: 0 }) });
-	rows.push({ type: 1, components: buttons });
-	const have = `You have ${tc ? `${plural(left, 'point')}, ${plural(tera, 'Tera point')} and ${plural(slots, 'captain slot')}` : plural(left, 'point')} left. `;
-	const among = type ? ` among ${type} types` : '';
-	const what = !q ? "Choose a price tier, then a Pokémon. You confirm before it's final." :
-		!matches.length ? `Nothing you can draft matches "${q}"${among}. Search again, or browse by tier.` :
-		`${matches.length === 1 ? '1 Pokémon you can draft matches' : `${matches.length} Pokémon you can draft match`} "${q}"${among}` +
-			(matches.length > PICKER_PAGE ? `; showing the first ${PICKER_PAGE}, so type more of the name to narrow it.` : '.');
-	return { content: (filter.note ? `${filter.note}\n` : '') + have + what, components: rows };
 }
 
 // ---------- season ----------
