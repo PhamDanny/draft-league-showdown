@@ -461,6 +461,136 @@ test('completing the draft edits the board one last time and removes the ping', 
 	assert.ok(!boardText().includes('Best available'));
 });
 
+// ---------- season ----------
+
+const announcements = () => fake.messages(ANNOUNCE);
+const week = n => L.matches(season().id).filter(m => m.week === n);
+const showdownName = uid => players[uid].name;
+// Sets with moves and items the bot must never repeat, and a Pokémon on nobody's roster (banned in SV)
+const SECRET_MOVES = ['Mortal Spin', 'Toxic Spikes', 'Haze', 'Rapid Spin'];
+const SECRET_ITEM = 'Shed Shell';
+const SECRET_SPECIES = 'Koraidon';
+let room = 0;
+/** One game reported the way Showdown reports it, through the site's internal route. */
+async function playGame(m, winnerId) {
+	const { Teams } = await import('../app/dex.ts');
+	const team = ids => Teams().pack(ids.map(id => ({ species: id, item: SECRET_ITEM, ability: '', moves: SECRET_MOVES, nature: 'Bold', evs: { hp: 252 }, ivs: {} })));
+	const rosterOf = uid => [...L.roster(season().id, uid).map(r => r.species_id), SECRET_SPECIES];
+	const roomid = `battle-gen9botleague-${++room}`;
+	const res = await fetch(BASE + '/internal/battle-end', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', 'x-league-key': fs.readFileSync(path.join(DATA, 'keys', 'internal.key'), 'utf8').trim() },
+		body: JSON.stringify({
+			format: one('SELECT format_name FROM leagues WHERE id = ?', leagueId).format_name, roomid,
+			players: [showdownName(m.p1), showdownName(m.p2)], winner: showdownName(winnerId), turns: 10, endType: 'normal',
+			publicLog: '|win|x', fullLog: '|win|x',
+			inputLog: [`>player p1 ${JSON.stringify({ name: showdownName(m.p1), team: team(rosterOf(m.p1)) })}`,
+				`>player p2 ${JSON.stringify({ name: showdownName(m.p2), team: team(rosterOf(m.p2)) })}`],
+		}),
+	});
+	assert.equal(res.status, 200);
+	await settled();
+}
+
+test('completing the draft posts week 1\'s matchups once', async () => {
+	assert.equal(announcements().length, 1);
+	const post = announcements()[0];
+	assert.match(post.content, /the schedule is out \(3 weeks\)/);
+	for (const m of week(1)) assert.ok(post.content.includes(`<@${players[m.p1].discordId}> vs <@${players[m.p2].discordId}>`));
+	assert.deepEqual([...post.allowed_mentions.users].sort(), [alice, bob, carol, dave].map(c => c.discordId).sort());
+	D.changed(leagueId);
+	await settled();
+	assert.equal(announcements().length, 1);
+});
+
+test('finishing a week\'s last series posts one recap with every series link; a best-of-3 at 1–0 posts nothing', async () => {
+	const [m1, m2] = week(1);
+	await playGame(m1, m1.p1);
+	assert.equal(one('SELECT status FROM matches WHERE id = ?', m1.id).status, 'live');
+	assert.equal(announcements().length, 1, 'Bo3 at 1–0: nothing');
+	await playGame(m1, m1.p1);
+	await playGame(m2, m2.p2);
+	assert.equal(announcements().length, 1, 'one series of the week still open');
+	await playGame(m2, m2.p2);
+	assert.equal(announcements().length, 2);
+	const recap = announcements()[1];
+	const results = recap.embeds[0].description;
+	for (const m of [m1, m2]) assert.ok(results.includes(`(http://league.test/l/${leagueId}/series/${m.id})`), results);
+	assert.match(results, /2–0/);
+	assert.match(recap.embeds[1].description, /^```\n #  Player/);
+	assert.match(recap.content, /week 1 is final/);
+	for (const m of week(2)) assert.ok(recap.content.includes(`<@${players[m.p1].discordId}> vs <@${players[m.p2].discordId}>`), 'next week mentions the players');
+	// The standings code block lists the escaped-nowhere-else team name as plain text (code blocks don't render or ping)
+	assert.ok(recap.embeds[1].description.includes('@everyone **x**'));
+	assert.deepEqual(recap.allowed_mentions.users.length, 4);
+});
+
+test('restarting the app does not post a recap again; a changed result is not edited in', async () => {
+	const n = fake.calls.length;
+	await D.startDiscord();
+	assert.equal(announcements().length, 2);
+	const m1 = week(1)[0];
+	const res = await alice.req('POST', `${leagueUrl}/admin/result/${m1.id}`, { p1: '2', p2: '1' });
+	assert.equal(res.status, 302);
+	await settled();
+	assert.equal(announcements().length, 2);
+	assert.ok(!fake.calls.slice(n).some(c => c.path.startsWith(`/channels/${ANNOUNCE}/`)), 'no recap posted or edited');
+});
+
+test('the last week\'s recap says the regular season is complete', async () => {
+	for (const w of [2, 3]) {
+		for (const m of week(w)) await alice.req('POST', `${leagueUrl}/admin/result/${m.id}`, { p1: '2', p2: '0' });
+	}
+	await settled();
+	assert.equal(announcements().length, 4);
+	assert.match(announcements()[2].content, /week 2 is final/);
+	assert.match(announcements()[3].content, /week 3 is final\.[\s\S]*Regular season complete\./);
+	assert.deepEqual(announcements()[3].allowed_mentions, { parse: [] });
+});
+
+test('privacy: nothing sent to Discord holds a move, an item or an off-roster Pokémon from a team', () => {
+	const sent = JSON.stringify(fake.calls.map(c => c.body));
+	assert.ok(one('SELECT COUNT(*) AS n FROM battles WHERE teams IS NOT NULL').n >= 4, 'the games were revealed on the site');
+	for (const secret of [...SECRET_MOVES, SECRET_ITEM, SECRET_SPECIES]) assert.ok(!sent.includes(secret), secret);
+});
+
+test('lookups answer anyone in the server, ephemeral unless shared', async () => {
+	const stranger = { name: 'Stranger', discordId: '100000000000000099' };
+	let reply = await command(stranger, 'standings', {}, { channel: OTHER });
+	assert.equal(reply.data.flags, 64);
+	assert.match(reply.data.embeds[0].description, /^```/);
+	reply = await command(stranger, 'standings', { share: true }, { channel: OTHER });
+	assert.equal(reply.data.flags, 0);
+	assert.deepEqual(reply.data.allowed_mentions, { parse: [] });
+
+	reply = await command(stranger, 'schedule', { week: 2 }, { channel: OTHER });
+	assert.equal(reply.data.embeds[0].title, 'Week 2');
+	for (const m of week(2)) assert.ok(reply.data.embeds[0].description.includes(`/series/${m.id})`));
+	reply = await command(stranger, 'schedule', { week: 9 }, { channel: OTHER });
+	assert.equal(reply.data.content, "There's no week 9. This season has 3 weeks.");
+
+	reply = await command(alice, 'roster', {}, { channel: OTHER });
+	assert.equal(reply.data.embeds[0].title, 'Alice');
+	assert.match(reply.data.embeds[0].description, /\*\*Garchomp\*\* · \d+/);
+	assert.match(reply.data.embeds[0].footer.text, /points left · 3 Pokémon/);
+	reply = await command(stranger, 'roster', { player: carol.discordId }, { channel: OTHER });
+	assert.equal(reply.data.embeds[0].title, '@everyone **x**', 'embed titles are plain text and never ping');
+	reply = await command(stranger, 'roster', {}, { channel: OTHER });
+	assert.match(reply.data.content, /Sign in at/);
+
+	reply = await command(stranger, 'pokemon', { name: 'garchomp' }, { channel: OTHER });
+	assert.match(reply.data.embeds[0].description, /Drafted by \*\*Alice\*\* in round 1/);
+	reply = await command(stranger, 'pokemon', { name: 'koraidon' }, { channel: OTHER });
+	assert.match(reply.data.embeds[0].description, /Banned in this league/);
+	reply = await command(stranger, 'pokemon', { name: 'garchmop' }, { channel: OTHER });
+	assert.match(reply.data.content, /Closest: Garchomp/);
+	const ac = await autocomplete(stranger, 'pokemon', { name: 'gar' }, 'name', { channel: OTHER });
+	assert.ok(ac.data.choices.some(c => c.value === 'garchomp') && ac.data.choices.length <= 25);
+
+	reply = await command(stranger, 'rules', {}, { channel: OTHER });
+	assert.match(JSON.stringify(reply.data.embeds[0].fields), /SV: Gen 9 Singles.*99 points, 2–3 Pokémon.*Best of 3.*Tera Captains: up to 1/);
+});
+
 test('every message pings only who it means to', () => {
 	const sent = fake.calls.filter(c => (c.method === 'POST' || c.method === 'PATCH') && c.path.startsWith('/channels/'));
 	assert.ok(sent.length > 10);

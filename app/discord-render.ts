@@ -24,9 +24,12 @@ export interface Embed {
 	footer?: { text: string };
 }
 
-/** Escapes Discord markdown, and breaks @everyone / @here and <@id> so a name can never ping or format. */
+/**
+ * Escapes Discord markdown, and breaks @everyone / @here and <@id> so a name can never ping or format.
+ * Hyphens are left alone: they only mean something at the start of a line, where no name is placed.
+ */
 export function md(text: unknown) {
-	return String(text ?? '').replace(/[\\*_~`|<>#[\]()-]/g, '\\$&').replace(/@/g, '@\u200b');
+	return String(text ?? '').replace(/[\\*_~`|<>#[\]()]/g, '\\$&').replace(/@/g, '@\u200b');
 }
 
 function cut(text: string, max: number) {
@@ -247,4 +250,110 @@ export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: n
 			{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
 		] }],
 	};
+}
+
+// ---------- season ----------
+
+const seriesUrl = (leagueId: number, matchId: number) => `${PUBLIC_URL}/l/${leagueId}/series/${matchId}`;
+const inWeek = (seasonId: number, week: number) => L.matches(seasonId).filter(m => m.week === week);
+export function weeksIn(seasonId: number) {
+	return L.matches(seasonId).reduce((a, m) => Math.max(a, m.week), 0);
+}
+
+/** A series as "**A** 2–1 **B**" (or "**A** vs **B**" before it starts), linked to its page on the site. */
+function seriesLine(leagueId: number, m: L.Match, names: Map<number, Who>) {
+	const mid = m.status === 'scheduled' ? 'vs' : `${m.p1_wins}–${m.p2_wins}`;
+	const live = m.status === 'live' ? ' (in progress)' : '';
+	return `[${bold(names.get(m.p1), 24)} ${mid} ${bold(names.get(m.p2), 24)}](${seriesUrl(leagueId, m.id)})${live}`;
+}
+
+/** A week's matchups for message content, the only place a mention notifies anyone (embeds never do). */
+function matchups(seasonId: number, week: number, names: Map<number, Who>, ids: string[]) {
+	return inWeek(seasonId, week).map(m => `${mention(names.get(m.p1), ids)} vs ${mention(names.get(m.p2), ids)}`).join('\n');
+}
+
+/** The standings table in a code block, so the columns line up. Same order and tiebreaks as the site. */
+export function standingsBlock(seasonId: number, names: Map<number, Who>) {
+	const rows = L.standings(seasonId);
+	// Code blocks render no markdown or mentions; only a backtick could break out of one
+	const nameOf = (uid: number) => cut(teamOf(names.get(uid)).replace(/`/g, "'"), 18);
+	const width = Math.max(6, ...rows.map(r => nameOf(r.userId).length));
+	const lines = [`${'#'.padStart(2)}  ${'Player'.padEnd(width)}  Series  Games  Diff`];
+	rows.forEach((r, i) => {
+		const diff = r.gw - r.gl;
+		lines.push(`${String(i + 1).padStart(2)}  ${nameOf(r.userId).padEnd(width)}  ${`${r.sw}-${r.sl}`.padEnd(6)}  ${`${r.gw}-${r.gl}`.padEnd(5)}  ${diff > 0 ? '+' : ''}${diff}`);
+	});
+	return '```\n' + lines.join('\n') + '\n```';
+}
+
+/** Posted once when the schedule is made: week 1's matchups. */
+export function scheduleOut(league: L.League, season: L.Season) {
+	const names = who(league.id);
+	const ids: string[] = [];
+	const content = `**${md(league.name)}**: the draft is done and the schedule is out (${plural(weeksIn(season.id), 'week')}). ` +
+		`Agree a time with your opponent and play on the site: ${PUBLIC_URL}/l/${league.id}/schedule\n\n**Week 1**\n${matchups(season.id, 1, names, ids)}`;
+	return { content: cut(content, 2000), allowed_mentions: only(ids) };
+}
+
+/** One message per finished week: results, standings, and next week's matchups (or the end of the season). */
+export function recap(league: L.League, season: L.Season, week: number) {
+	const names = who(league.id);
+	const ids: string[] = [];
+	const next = week >= weeksIn(season.id) ? 'Regular season complete.' : `**Week ${week + 1}**\n${matchups(season.id, week + 1, names, ids)}`;
+	const embeds: Embed[] = [
+		{ title: `Week ${week} results`, color: COLOR, description: cut(inWeek(season.id, week).map(m => seriesLine(league.id, m, names)).join('\n'), MAX_DESCRIPTION) },
+		{ title: 'Standings', color: COLOR, description: standingsBlock(season.id, names) },
+	];
+	return { content: cut(`**${md(league.name)}**: week ${week} is final. Teams and replays are open on each series page.\n\n${next}`, 2000), embeds, allowed_mentions: only(ids) };
+}
+
+// ---------- lookups ----------
+
+export function standingsEmbed(league: L.League, season: L.Season): Embed {
+	return { title: `${league.name} standings`, url: `${PUBLIC_URL}/l/${league.id}#standings`, color: COLOR, description: standingsBlock(season.id, who(league.id)) };
+}
+
+export function scheduleEmbed(league: L.League, season: L.Season, week: number): Embed {
+	const names = who(league.id);
+	const lines = inWeek(season.id, week).map(m => seriesLine(league.id, m, names));
+	return { title: `Week ${week}`, url: `${PUBLIC_URL}/l/${league.id}/schedule`, color: COLOR, description: cut(lines.join('\n') || 'No series this week.', MAX_DESCRIPTION) };
+}
+
+export function rosterEmbed(league: L.League, season: L.Season, settings: L.Settings, userId: number): Embed {
+	const r = L.roster(season.id, userId);
+	const tc = settings.teraMode === 'captains';
+	const spent = r.reduce((a, x) => a + x.cost, 0);
+	return {
+		title: teamOf(who(league.id).get(userId)),
+		url: `${PUBLIC_URL}/l/${league.id}/team/${userId}`,
+		color: COLOR,
+		description: cut(r.map(x => `**${md(x.name)}** · ${x.cost}${tc && x.captain ? ` · Tera Captain${x.tc_cost != null ? ` (${x.tc_cost} Tera)` : ''}` : ''}`).join('\n') || 'No picks yet.', MAX_DESCRIPTION),
+		footer: { text: `${settings.budget - spent} of ${settings.budget} points left · ${r.length} Pokémon` },
+		...(r[0] ? { thumbnail: { url: spriteUrl(r[0].species_id, settings.mod) } } : {}),
+	};
+}
+
+export function pokemonEmbed(league: L.League, season: L.Season, settings: L.Settings,
+	entry: { species_id: string, name: string, cost: number, tc_cost: number | null, banned: number }): Embed {
+	const pick = L.picks(season.id).find(p => p.species_id === entry.species_id);
+	const lines = [`${entry.cost} points`];
+	if (settings.teraMode === 'captains') lines.push(entry.tc_cost == null ? "Can't be a Tera Captain" : `Tera Captain: ${entry.tc_cost} Tera points`);
+	if (entry.banned) lines.push('Banned in this league');
+	else if (pick) lines.push(`Drafted by ${bold(who(league.id).get(pick.user_id))} in round ${pick.round + 1}${settings.teraMode === 'captains' && pick.captain ? ' as a Tera Captain' : ''}`);
+	else lines.push('Available');
+	return { title: entry.name, color: COLOR, description: lines.join('\n'), thumbnail: { url: spriteUrl(entry.species_id, settings.mod) } };
+}
+
+export function rulesEmbed(league: L.League, settings: L.Settings): Embed {
+	const f = L.formatDescription(settings);
+	const fields = [
+		{ name: 'Format', value: `${f.label}: ${f.game}` },
+		{ name: 'Draft', value: `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon` },
+		{ name: 'Series', value: `Best of ${settings.bestOf}. ${L.TEAM_PREVIEW[settings.teamPreview].rule}.` },
+	];
+	if (L.genOf(settings.mod) === 9) {
+		fields.push({ name: 'Tera', value: settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, paid from a separate ${settings.tcBudget}-point Tera budget` :
+			settings.teraMode === 'all' ? 'Everyone can Terastallize' : 'No Terastallization' });
+	}
+	return { title: `${league.name} rules`, url: `${PUBLIC_URL}/l/${league.id}/rules`, color: COLOR, fields, footer: { text: 'Clauses and bans are on the Rules page.' } };
 }

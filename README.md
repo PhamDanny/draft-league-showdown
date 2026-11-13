@@ -27,7 +27,7 @@ Setup copies `.env.example` to `.env`. Fill in:
 
 Optional. With `DISCORD_BOT_TOKEN` empty, none of this runs.
 
-The bot posts a live draft board and an on-the-clock ping in a draft channel, lets players pick with `/draft` and `/done`, and takes `/pings on|off` from players who'd rather not be mentioned. It never connects to Discord's gateway: it sends with the bot token over REST and receives slash commands at `/discord/interactions`, so it shows as offline in the member list. Battles, remakes and commissioner tools stay on the site. See `docs/discord-bot-spec.md`.
+The bot posts a live draft board and an on-the-clock ping in a draft channel, lets players pick with `/draft` and `/done`, posts one recap per finished week in an announcements channel, and answers `/standings`, `/schedule`, `/roster`, `/pokemon`, `/rules` and `/pings`. It never connects to Discord's gateway: it sends with the bot token over REST and receives slash commands at `/discord/interactions`, so it shows as offline in the member list. Battles, remakes and commissioner tools stay on the site. See `docs/discord-bot-spec.md`.
 
 1. In the same Discord application used for sign-in, open **Bot**, reset the token and put it in `.env` as `DISCORD_BOT_TOKEN`.
 2. From **General Information**, copy **Public Key** into `DISCORD_PUBLIC_KEY`, restart the site, and set **Interactions Endpoint URL** to `PUBLIC_URL` + `/discord/interactions`. Discord checks the URL when you save it, so the site must be running and reachable over HTTPS (for local testing use a tunnel such as `cloudflared`). The board and recaps work without it; slash commands don't.

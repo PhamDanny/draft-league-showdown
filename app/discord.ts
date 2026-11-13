@@ -206,8 +206,24 @@ async function syncDraft(link: Link) {
 	}
 }
 
-async function syncRecap(_link: Link) {
-	// Weekly recap: phase 2
+// 3. Recap: week 1's matchups once the schedule is made, then one post per week once all of its series are final.
+// Posted once each: a result changed afterwards shows in the next recap's standings, not as an edit.
+async function syncRecap(link: Link) {
+	const league = leagueOf(link.league_id);
+	const season = league && L.currentSeason(league.id);
+	if (!league || !season || season.status !== 'regular' || !L.matches(season.id).length) return;
+	const still = 'league_id = ? AND channel_id = ?';
+	let week = link.recap_season_id === season.id ? link.recap_week : null;
+	if (week === null) {
+		await post(link.channel_id, link.channel_name, R.scheduleOut(league, season));
+		run(`UPDATE discord_links SET recap_season_id = ?, recap_week = 0 WHERE ${still}`, season.id, league.id, link.channel_id);
+		week = 0;
+	}
+	const done = finalWeeks(season.id);
+	for (let w = week + 1; w <= done; w++) {
+		await post(link.channel_id, link.channel_name, R.recap(league, season, w));
+		run(`UPDATE discord_links SET recap_week = ? WHERE ${still}`, w, league.id, link.channel_id);
+	}
 }
 
 /** Sync every linked league once (startup) and register the slash commands. */
@@ -241,8 +257,9 @@ async function fetchGuildName(leagueId: number, guildId: string) {
 
 // ---------- slash commands ----------
 
-const SUB_COMMAND = 1, STRING = 3, BOOLEAN = 5;
+const SUB_COMMAND = 1, STRING = 3, INTEGER = 4, BOOLEAN = 5, USER = 6;
 const leagueOption = { type: STRING, name: 'league', description: 'Which league, if this server has more than one', autocomplete: true };
+const shareOption = { type: BOOLEAN, name: 'share', description: 'Post the answer in the channel instead of only to you' };
 const guildOnly = { contexts: [0], integration_types: [0] };
 export const COMMANDS = [
 	{
@@ -270,7 +287,28 @@ export const COMMANDS = [
 			leagueOption,
 		],
 	},
+	{ name: 'standings', description: 'The standings table', ...guildOnly, options: [leagueOption, shareOption] },
+	{
+		name: 'schedule', description: "A week's matchups and scores", ...guildOnly, options: [
+			{ type: INTEGER, name: 'week', description: 'Which week (default: the current one)', min_value: 1 },
+			leagueOption, shareOption,
+		],
+	},
+	{
+		name: 'roster', description: "A player's drafted Pokémon", ...guildOnly, options: [
+			{ type: USER, name: 'player', description: 'Whose roster (default: yours)' },
+			leagueOption, shareOption,
+		],
+	},
+	{
+		name: 'pokemon', description: "A Pokémon's price, and who drafted it", ...guildOnly, options: [
+			{ type: STRING, name: 'name', description: 'The Pokémon', required: true, autocomplete: true },
+			leagueOption, shareOption,
+		],
+	},
+	{ name: 'rules', description: "The league's format, budget and series rules", ...guildOnly, options: [leagueOption, shareOption] },
 ];
+
 // ---------- interactions ----------
 
 const EPHEMERAL = 64;
@@ -355,11 +393,11 @@ function distance(a: string, b: string) {
 	}
 	return d[b.length];
 }
-/** The closest undrafted, unbanned pool names to a misspelling. */
-function closest(seasonId: number, text: unknown, n = 5) {
+/** The pool names closest to a misspelling: only ones still up for grabs, unless `whole`. */
+function closest(seasonId: number, text: unknown, n = 5, whole = false) {
 	const id = toID(text);
-	return all<{ species_id: string, name: string }>(`SELECT species_id, name FROM pool WHERE season_id = ? AND banned = 0
-		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?)`, seasonId, seasonId)
+	return all<{ species_id: string, name: string }>(`SELECT species_id, name FROM pool WHERE season_id = ?${whole ? '' : ` AND banned = 0
+		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?)`}`, seasonId, ...(whole ? [] : [seasonId]))
 		.map(p => ({ ...p, d: p.species_id.startsWith(id) ? 0 : distance(id, p.species_id) }))
 		.sort((a, b) => a.d - b.d || a.name.localeCompare(b.name)).slice(0, n);
 }
@@ -502,7 +540,58 @@ const commands: { [name: string]: (ctx: Ctx, o: Opts) => object } = {
 		return reply(on ? `The bot will mention you in **${R.md(r.league.name)}**.` :
 			`The bot will write your name instead of mentioning you in **${R.md(r.league.name)}**.`);
 	},
+
+	// Lookups: anyone in the linked server, ephemeral unless share is set
+	standings(ctx, o) {
+		return lookup(ctx, o, (league, season) => {
+			if (season.status === 'setup' || season.status === 'drafting') return 'Standings start once the draft is done and the schedule is made.';
+			return { embeds: [R.standingsEmbed(league, season)] };
+		});
+	},
+	schedule(ctx, o) {
+		return lookup(ctx, o, (league, season) => {
+			const weeks = R.weeksIn(season.id);
+			if (!weeks) return "There's no schedule yet. It's made when the draft ends.";
+			const week = Number(o.values.get('week')) || L.currentWeek(season.id);
+			if (week < 1 || week > weeks) return `There's no week ${week}. This season has ${weeks} weeks.`;
+			return { embeds: [R.scheduleEmbed(league, season, week)] };
+		});
+	},
+	roster(ctx, o) {
+		return lookup(ctx, o, (league, season, settings) => {
+			const discordId = o.values.get('player') ?? ctx.discordId;
+			const target = one<{ id: number }>('SELECT id FROM users WHERE discord_id = ?', String(discordId));
+			if (!target || !L.membership(league.id, target.id)) {
+				return discordId === ctx.discordId ? signIn() : "That player isn't in this league (or hasn't signed in to the site with this Discord account).";
+			}
+			if (season.status === 'setup') return 'Rosters start when the draft does.';
+			return { embeds: [R.rosterEmbed(league, season, settings, target.id)] };
+		});
+	},
+	pokemon(ctx, o) {
+		return lookup(ctx, o, (league, season, settings) => {
+			const entry = poolEntry(season.id, o.values.get('name'));
+			if (!entry) {
+				const near = closest(season.id, o.values.get('name'), 3, true).map(p => p.name);
+				return `No Pokémon by that name in this league's pool.${near.length ? ` Closest: ${near.join(', ')}.` : ''}`;
+			}
+			return { embeds: [R.pokemonEmbed(league, season, settings, entry)] };
+		});
+	},
+	rules(ctx, o) {
+		return lookup(ctx, o, (league, _season, settings) => ({ embeds: [R.rulesEmbed(league, settings)] }));
+	},
 };
+
+/** The shared shape of a lookup: resolve the league, answer with text or embeds, ephemeral unless shared. */
+function lookup(ctx: Ctx, o: Opts, fn: (league: L.League, season: L.Season, settings: L.Settings) => string | object) {
+	const r = resolveLeague(ctx, o.values.get('league'));
+	if ('error' in r) return reply(r.error);
+	const out = fn(r.league, L.currentSeason(r.league.id)!, L.settingsOf(r.league));
+	const share = o.values.get('share') === true;
+	// A text answer is a "can't answer that" note: only the caller sees it, even with share
+	return typeof out === 'string' ? reply(out) : reply('', out, share);
+}
 
 /** Shows the confirm step for a pick, or why it can't be made (pickProblem's own words). */
 function confirmStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
@@ -588,6 +677,12 @@ function autocomplete(ctx: Ctx, o: Opts) {
 			out.push({ name: `${p.name} · ${p.cost}${captain ? ` · ${p.tc_cost} Tera` : ''}`, value: p.species_id });
 		}
 		return choices(out);
+	}
+	if (name === 'pokemon' && o.focused === 'name') {
+		const pool = all<{ species_id: string, name: string, cost: number, banned: number }>(
+			'SELECT * FROM pool WHERE season_id = ? ORDER BY banned, cost DESC, name', season.id);
+		return choices(pool.filter(p => !typed || p.species_id.includes(typed) || toID(p.name).includes(typed))
+			.map(p => ({ name: `${p.name} · ${p.banned ? 'banned' : p.cost}`, value: p.species_id })));
 	}
 	return choices([]);
 }
