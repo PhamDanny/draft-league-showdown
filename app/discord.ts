@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import express, { type Express } from 'express';
 import { DISCORD_API, DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_PUBLIC_KEY, PUBLIC_URL } from './config.ts';
 import { all, now, one, run } from './db.ts';
-import { toID } from './dex.ts';
+import { mon, toID } from './dex.ts';
 import * as L from './league.ts';
 import * as R from './discord-render.ts';
 import { emojisBusy, emojisIdle, requestEmojis } from './emoji.ts';
@@ -577,7 +577,7 @@ function lookup(ctx: Ctx, o: Opts, fn: (league: L.League, season: L.Season, sett
 
 /** Shows the confirm step for a pick, or why it can't be made (pickProblem's own words). */
 function confirmStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
-	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean) {
+	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, back?: string) {
 	const state = L.draftState(season, settings);
 	const problem = L.pickProblem(season, settings, state, userId, entry.species_id, captain);
 	if (problem) return respond(problem);
@@ -587,20 +587,50 @@ function confirmStep(respond: typeof reply | typeof update, season: L.Season, se
 	// and one that can't says why, in pickProblem's words
 	const tcProblem = !captain && settings.teraMode === 'captains' ? L.pickProblem(season, settings, state, userId, entry.species_id, true) : null;
 	const asCaptain = !captain && settings.teraMode === 'captains' && !tcProblem;
-	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined, tcProblem ?? undefined));
+	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined, tcProblem ?? undefined, back));
+}
+
+const FIRST_VIEW: R.PickerView = { tier: null, type: '', q: '', page: 0 };
+/**
+ * The picker view a component's id carries (`{kind}:{seasonId}:{tier}:{type}:{search}:{page}:{userId}`).
+ * Type and search go through toID again: an id is user-supplied data, and neither may hold a `:`.
+ */
+function viewOf(parts: string[]): R.PickerView {
+	if (parts.length !== 7) return FIRST_VIEW; // a picker drawn before ids carried the view
+	return {
+		tier: parts[2] === '' ? null : Number(parts[2]) || 0, type: toID(parts[3]),
+		q: toID(parts[4]).slice(0, R.SEARCH_MAX), page: Number(parts[5]) || 0,
+	};
+}
+
+/** Whether this player is on the clock now: every picker step re-reads the draft. */
+function onClockNow(season: L.Season, settings: L.Settings, userId: number) {
+	return season.status === 'drafting' && L.draftState(season, settings).onClock?.user_id === userId;
 }
 
 /** The picker's dropdowns for the player on the clock, or why there's none. */
 function pickerStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
-	tier: number | null, page: number) {
+	view: R.PickerView, note?: string) {
 	if (season.status !== 'drafting') return respond('The draft is not running.');
 	const state = L.draftState(season, settings);
 	if (state.onClock?.user_id !== userId) return respond(respond === update ? 'That turn has passed.' : 'Not your pick.');
+	// Types come from the dex, as on the draft page's type filter
 	const available = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
 		'SELECT species_id, name, cost, tc_cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
-		.filter(p => !L.pickProblem(season, settings, state, userId, p.species_id, false));
-	const out = R.picker(season.id, settings, state, userId, available, tier, page);
+		.filter(p => !L.pickProblem(season, settings, state, userId, p.species_id, false))
+		.map(p => ({ ...p, types: mon(p.species_id, settings.mod).types }));
+	const out = R.picker(season.id, settings, state, userId, available, view.tier, view.page, undefined, { type: view.type, q: view.q, note });
 	return respond(out.content, { components: out.components });
+}
+
+/** The text typed into the search modal: inside a Label now, inside an action row in Discord's older modal shape. */
+function modalText(components: any[] | undefined, customId: string): string {
+	for (const c of components || []) {
+		if (c?.type === 4 && c.custom_id === customId) return String(c.value ?? '');
+		const inner = modalText([c?.component, ...(c?.components || [])].filter(Boolean), customId);
+		if (inner) return inner;
+	}
+	return '';
 }
 
 /** /done and the ping's "Finish drafting": the confirm step, or why it can't be offered. */
@@ -646,7 +676,7 @@ function button(ctx: Ctx) {
 		if (!found || !found.current) return reply('That draft has ended.');
 		if (parts[0] === 'finish') return doneStep(ctx, found.league);
 		if (!ctx.user || !L.membership(found.league.id, ctx.user.id)) return reply(signIn());
-		return pickerStep(reply, found.season, found.settings, ctx.user.id, null, 0);
+		return pickerStep(reply, found.season, found.settings, ctx.user.id, FIRST_VIEW);
 	}
 	// Every other button is for one player; the last part of its id says who
 	const owner = Number(parts.at(-1));
@@ -654,13 +684,30 @@ function button(ctx: Ctx) {
 	const found = seasonHere(ctx, Number(parts[1]));
 	if (!found || !found.current) return update('That draft has ended.');
 	const { season, league, settings } = found;
-	// The picker (private, so only its owner can press it)
-	if (parts[0] === 'tier') return pickerStep(update, season, settings, owner, Number(ctx.i.data?.values?.[0]), 0);
-	if (parts[0] === 'page') return pickerStep(update, season, settings, owner, Number(parts[2]), Number(parts[3]));
+	// The picker (private, so only its owner can press it). Each id carries the view it was drawn with
+	const view = viewOf(parts);
+	const chosen = String(ctx.i.data?.values?.[0] ?? '');
+	if (parts[0] === 'tier') return pickerStep(update, season, settings, owner, { ...view, tier: Number(chosen), page: 0 });
+	if (parts[0] === 'type') return pickerStep(update, season, settings, owner, { ...view, type: chosen === 'all' ? '' : toID(chosen), page: 0 });
+	if (parts[0] === 'page') return pickerStep(update, season, settings, owner, view);
+	if (parts[0] === 'browse') return pickerStep(update, season, settings, owner, { ...view, q: '', page: 0 });
+	if (parts[0] === 'search') {
+		// Checked before the modal opens, so a stale picker says so instead of asking for a name it can't use
+		if (!onClockNow(season, settings, owner)) return pickerStep(update, season, settings, owner, view);
+		return { type: 9, data: R.searchModal(`find:${season.id}:${R.viewId(view)}:${owner}`, view.q) };
+	}
+	if (parts[0] === 'find') {
+		// The modal's submit (interaction type 5): answered with type 7, which edits the picker the modal came from
+		const q = toID(modalText(ctx.i.data?.components, 'q')).slice(0, R.SEARCH_MAX);
+		if (!q) return pickerStep(update, season, settings, owner, view, 'Type part of a Pokémon\'s name to search.');
+		return pickerStep(update, season, settings, owner, { ...view, q, page: 0 });
+	}
 	if (parts[0] === 'mon') {
-		const entry = poolEntry(season.id, ctx.i.data?.values?.[0]);
+		const entry = poolEntry(season.id, chosen);
 		if (!entry) return update('Not in the draft pool.');
-		return confirmStep(update, season, settings, owner, entry, false);
+		// Back reopens the picker at this Pokémon's tier, same type and search; the page only if it's the tier on screen
+		const back = { ...view, tier: entry.cost, page: entry.cost === view.tier ? view.page : 0 };
+		return confirmStep(update, season, settings, owner, entry, false, `page:${season.id}:${R.viewId(back)}:${owner}`);
 	}
 	if (parts[0] === 'pick') {
 		const entry = poolEntry(season.id, parts[2]);
@@ -739,7 +786,8 @@ function handle(i: any) {
 		user: discordId ? one<{ id: number, showdown_name: string }>('SELECT id, showdown_name FROM users WHERE discord_id = ?', discordId) : undefined,
 	};
 	if (!ctx.guildId) return i.type === 4 ? choices([]) : reply("Use the bot's commands in your league's Discord server.");
-	if (i.type === 3) return button(ctx);
+	// A modal submit (5) is routed like a button: its id carries the owner and the picker view it came from
+	if (i.type === 3 || i.type === 5) return button(ctx);
 	const o = options(i);
 	if (i.type === 4) return autocomplete(ctx, o);
 	if (i.type === 2) {

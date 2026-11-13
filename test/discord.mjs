@@ -218,6 +218,23 @@ async function select(user, customId, value, { channel = DRAFT } = {}) {
 	return r.body;
 }
 const dropdown = (reply, prefix) => buttons(reply).find(c => c.type === 3 && c.custom_id.startsWith(prefix));
+/** Submits the picker's search modal (interaction type 5), in Discord's current shape (a Label holding the text input) or the older action-row one. */
+async function submit(user, customId, text, { channel = DRAFT, legacy = false } = {}) {
+	const input = { type: 4, id: 2, custom_id: 'q', value: text };
+	const components = legacy ? [{ type: 1, id: 1, components: [input] }] : [{ type: 18, id: 1, component: input }];
+	const r = await interact({ ...base(user, channel, '0'), type: 5, data: { custom_id: customId, components }, message: { id: '1' } });
+	assert.equal(r.status, 200);
+	return r.body;
+}
+/** Every custom_id in a reply is at most 100 characters, unique, and ends with the owner's id. */
+function checkIds(reply, owner) {
+	const ids = buttons(reply).map(c => c.custom_id).filter(Boolean);
+	assert.equal(new Set(ids).size, ids.length, `unique ids: ${ids}`);
+	for (const id of ids) {
+		assert.ok(id.length <= 100, `${id.length}: ${id}`);
+		if (id !== 'cancel') assert.equal(id.split(':').at(-1), String(owner.id), id);
+	}
+}
 const poolRows = () => all('SELECT * FROM pool WHERE season_id = ? ORDER BY cost DESC, name', season().id);
 
 const settled = () => D.settled();
@@ -278,6 +295,18 @@ const pickerPick = async (who, species) => {
 	assert.match(done.data.content, /^Drafted /);
 	await settled();
 };
+/** The ping's Draft a Pokémon button, then Search by name, the modal, the match, then Confirm. */
+const searchPick = async (who, species) => {
+	const open = await press(who, buttons({ data: draftMsgs()[1] }).find(b => b.label === 'Draft a Pokémon').custom_id);
+	const modal = await press(who, buttons(open).find(b => b.label === 'Search by name').custom_id);
+	assert.equal(modal.type, 9);
+	const found = await submit(who, modal.data.custom_id, poolRows().find(p => p.species_id === species).name);
+	assert.equal(found.type, 7);
+	const step = await select(who, dropdown(found, 'mon:').custom_id, species);
+	const done = await press(who, buttons(step).find(b => b.style === 3).custom_id);
+	assert.match(done.data.content, /^Drafted /);
+	await settled();
+};
 
 // ---------- tests ----------
 
@@ -334,9 +363,9 @@ test('starting the draft posts the board and pings the first player', async () =
 	assert.match(boardText(), /Draft order/);
 	const [first, how, captain, ...rest] = pingText().split('\n');
 	assert.equal(first, `<@${alice.discordId}>, you're up: round 1, pick 1. 99 points left, at least 2 more picks.`);
-	assert.match(how, /^\*\*How to pick:\*\* press \*\*Draft a Pokémon\*\* below .* or type `\/draft`/);
-	assert.equal(captain, "**Tera Captain:** only captains can Terastallize in battle. A captain costs its normal points plus its Tera points from a separate budget, " +
-		"and you choose it on the confirm step; it can't be added later. You have 1 captain slot and 28 Tera points left.");
+	assert.equal(how, `**How to pick:** You can draft directly through Discord by pressing **Draft a Pokémon** below, or draft on the website here: http://league.test/l/${leagueId}/draft`);
+	assert.equal(captain, '**Tera Captain:** Only Tera captains can Terastallize in battle. Drafting a Pokémon as a Tera captain costs its normal points plus Tera points ' +
+		'from a seperate budget. You have 1 captain slot and 28 Tera points left.');
 	assert.deepEqual(rest, []);
 	// No Finish drafting yet: Alice needs 2 more
 	assert.deepEqual(buttons({ data: draftMsgs()[1] }).map(b => b.label), ['Draft a Pokémon']);
@@ -346,7 +375,7 @@ test('starting the draft posts the board and pings the first player', async () =
 test('best available shows icon emojis, uploaded once each, in place of names', async () => {
 	const s = L.currentSeason(leagueId);
 	const pool = all(`SELECT species_id, name, cost FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name`, s.id);
-	const best = draftMsgs()[0].embeds.find(e => e.title === 'Best available');
+	const best = draftMsgs()[0].embeds.find(e => e.title === 'Remaining Draft Pool');
 	const lines = best.description.split('\n').filter(l => l.startsWith('**'));
 	assert.ok(lines.length >= 1);
 	// Every shown Pokémon is an emoji now: "**20** <:p_x:id> <:p_y:id>"
@@ -404,13 +433,13 @@ test('Draft a Pokémon: refused off-turn; the picker offers only affordable tier
 	// Both outcomes spelt out, and the plain button says it's the normal pick
 	assert.equal(step.data.embeds[0].description, `Normal pick: ${tc.cost} points, ${99 - tc.cost} left for at least 1 more pick.\n` +
 		`As a Tera Captain: ${tc.cost} points + ${tc.tc_cost} Tera, ${28 - tc.tc_cost} Tera left. Captains can Terastallize; this can't be added later.`);
-	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm normal pick', `Confirm as Tera Captain (+${tc.tc_cost} Tera)`, 'Cancel']);
+	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm normal pick', `Confirm as Tera Captain (+${tc.tc_cost} Tera)`, 'Back', 'Cancel']);
 	assert.equal(buttons(step)[0].custom_id, `draft:${s.id}:0:${tc.species_id}:0:${alice.id}`);
 	assert.equal(buttons(step)[1].custom_id, `draft:${s.id}:0:${tc.species_id}:1:${alice.id}`);
 	step = await select(alice, dropdown(tiered, 'mon:').custom_id, 'garchomp');
-	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Cancel']);
-	assert.match(step.data.embeds[0].description, /\nNormal pick only: Garchomp can't be a Tera Captain\.$/);
-	// Asked for as a captain: the captain step, worded as before
+	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Back', 'Cancel']);
+	assert.match(step.data.embeds[0].description, /\nGarchomp can't be a Tera Captain\.$/);
+	// Asked for as a captain: the captain step, worded as before, with no Back (/draft has no picker to go back to)
 	step = await command(alice, 'draft', { pokemon: tc.species_id, captain: true });
 	assert.equal(step.data.embeds[0].title, `Draft ${tc.name} as a Tera Captain for ${tc.cost} and ${tc.tc_cost} Tera points?`);
 	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Cancel']);
@@ -432,28 +461,31 @@ test('the picker pages a tier over 25 and clamps a page that no longer exists', 
 	const available = Array.from({ length: 30 }, (_, i) => ({ species_id: `mon${String(i).padStart(2, '0')}`, name: `Mon ${i}`, cost: 5 }))
 		.concat([{ species_id: 'cheap', name: 'Cheap', cost: 1 }]);
 	const view = (tier, page, emojis = new Map()) => R.picker(season().id, settings, state, alice.id, available, tier, page, emojis);
+	const part = (out, prefix) => dropdown({ data: out }, prefix);
+	const monOf = out => part(out, 'mon:');
 	let out = view(5, 0);
-	const [tierRow, monRow, pageRow] = out.components;
-	assert.equal(tierRow.components[0].options.length, 2);
-	assert.equal(monRow.components[0].options.length, 25);
-	assert.match(monRow.components[0].placeholder, /page 1 of 2/);
-	assert.deepEqual(pageRow.components.map(b => [b.label, b.disabled]), [['Previous', true], ['Next', false]]);
+	assert.equal(part(out, 'tier:').options.length, 2);
+	assert.equal(part(out, 'type:'), undefined, 'no types known: no type dropdown');
+	assert.equal(monOf(out).options.length, 25);
+	assert.match(monOf(out).placeholder, /page 1 of 2/);
+	const pageRow = out.components.at(-1);
+	assert.deepEqual(pageRow.components.map(b => [b.label, b.disabled]), [['Previous', true], ['Next', false], ['Search by name', undefined]]);
 	out = view(5, 1);
-	assert.deepEqual(out.components[1].components[0].options.map(o => o.value), ['mon25', 'mon26', 'mon27', 'mon28', 'mon29']);
+	assert.deepEqual(monOf(out).options.map(o => o.value), ['mon25', 'mon26', 'mon27', 'mon28', 'mon29']);
 	out = view(5, 9);
-	assert.match(out.components[1].components[0].placeholder, /page 2 of 2/, 'clamped to the last page');
+	assert.match(monOf(out).placeholder, /page 2 of 2/, 'clamped to the last page');
 	// A tier that's gone falls to the next one down
 	out = view(3, 0);
-	assert.deepEqual(out.components[1].components[0].options.map(o => o.value), ['cheap']);
-	assert.equal(out.components.length, 2, 'no page buttons for a short tier');
+	assert.deepEqual(monOf(out).options.map(o => o.value), ['cheap']);
+	assert.deepEqual(out.components.at(-1).components.map(b => b.label), ['Search by name'], 'no page buttons for a short tier');
 	// Emoji objects, not markup, and only when the emoji exists
 	out = view(1, 0, new Map([['cheap', '<:p_cheap:123>']]));
-	assert.deepEqual(out.components[1].components[0].options[0].emoji, { name: 'p_cheap', id: '123' });
-	assert.equal(view(5, 0).components[1].components[0].options[0].emoji, undefined);
+	assert.deepEqual(monOf(out).options[0].emoji, { name: 'p_cheap', id: '123' });
+	assert.equal(monOf(view(5, 0)).options[0].emoji, undefined);
 	assert.match(R.picker(season().id, settings, state, alice.id, [], null, 0).content, /nothing left/);
 	// Tera notes: a price over what's left says so; no slots left or no captains in the league, no notes at all
 	const tcMons = [{ species_id: 'big', name: 'Big', cost: 5, tc_cost: 20 }, { species_id: 'none', name: 'None', cost: 5, tc_cost: null }];
-	const notes = (set, st) => R.picker(season().id, set, st, alice.id, tcMons, 5, 0, new Map()).components[1].components[0].options.map(o => o.description);
+	const notes = (set, st) => monOf(R.picker(season().id, set, st, alice.id, tcMons, 5, 0, new Map())).options.map(o => o.description);
 	assert.deepEqual(notes({ ...settings, tcBudget: 10 }, state), ['Captain: +20 Tera, more than your 10 left', "Can't be a Tera Captain"]);
 	const full = { ...state, captains: new Map([[alice.id, settings.maxCaptains]]) };
 	assert.deepEqual(notes(settings, full), [undefined, undefined]);
@@ -463,8 +495,166 @@ test('the picker pages a tier over 25 and clamps a page that no longer exists', 
 	assert.match(R.picker(season().id, off, state, alice.id, tcMons, 5, 0, new Map()).content, /^You have \d+ points left\. Choose/);
 	// The confirm step says why a normal pick can't also be a captain
 	const step = R.pickConfirm(settings, full, alice.id, { ...tcMons[0], tc_cost: 5 }, false, 'x', undefined, 'No captain slots left.');
-	assert.match(step.embeds[0].description, /\nNormal pick only: No captain slots left\.$/);
+	assert.match(step.embeds[0].description, /\nNo captain slots left\.$/);
 	assert.deepEqual(step.components[0].components.map(b => b.label), ['Confirm', 'Cancel']);
+});
+
+test('the picker\'s type filter narrows tiers and Pokémon; search matches prefixes first across tiers', () => {
+	const settings = L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId));
+	const state = L.draftState(season(), settings);
+	const available = [
+		{ species_id: 'dragapult', name: 'Dragapult', cost: 18, types: ['Dragon', 'Ghost'] },
+		{ species_id: 'gholdengo', name: 'Gholdengo', cost: 18, types: ['Steel', 'Ghost'] },
+		{ species_id: 'garchomp', name: 'Garchomp', cost: 15, types: ['Dragon', 'Ground'] },
+		{ species_id: 'tinkaton', name: 'Tinkaton', cost: 12, types: ['Fairy', 'Steel'] },
+		{ species_id: 'ironmoth', name: 'Iron Moth', cost: 10, types: ['Fire', 'Poison'] },
+		{ species_id: 'hydrapple', name: 'Hydrapple', cost: 8, types: ['Grass', 'Dragon'] },
+	];
+	const view = (tier, filter) => R.picker(season().id, settings, state, alice.id, available, tier, 0, new Map(), filter);
+	const part = (out, prefix) => dropdown({ data: out }, prefix);
+	// Type dropdown: All types, then only types with something legal, in the usual type order
+	let out = view(null, {});
+	assert.deepEqual(part(out, 'type:').options.map(o => o.value), ['all', 'fire', 'grass', 'poison', 'ground', 'ghost', 'dragon', 'steel', 'fairy']);
+	assert.equal(part(out, 'type:').options.find(o => o.default).value, 'all');
+	// Dragon: only tiers with a Dragon, and only Dragons in them
+	out = view(18, { type: 'dragon' });
+	assert.deepEqual(part(out, 'tier:').options.map(o => o.value), ['18', '15', '8']);
+	assert.deepEqual(part(out, 'mon:').options.map(o => o.value), ['dragapult']);
+	assert.equal(part(out, 'type:').options.find(o => o.default).value, 'dragon');
+	// A tier with no Dragon falls to the next Dragon tier down
+	assert.deepEqual(part(view(12, { type: 'dragon' }), 'mon:').options.map(o => o.value), ['hydrapple']);
+	// Every id carries tier, type, search and page, and ends with the owner
+	assert.equal(part(out, 'mon:').custom_id, `mon:${season().id}:18:dragon::0:${alice.id}`);
+	// A type with nothing legal left (or unknown) is all types again
+	assert.equal(part(view(18, { type: 'ice' }), 'type:').options.find(o => o.default).value, 'all');
+
+	// Search: across every tier, names starting with it first; no tier dropdown, a way back to browsing
+	out = view(18, { q: 'ga' });
+	assert.equal(part(out, 'tier:'), undefined);
+	assert.deepEqual(part(out, 'mon:').options.map(o => o.value), ['garchomp', 'dragapult']);
+	assert.match(out.content, /2 Pokémon you can draft match "ga"\.$/);
+	assert.deepEqual(out.components.at(-1).components.map(b => [b.label, b.custom_id]),
+		[['Search again', `search:${season().id}:18::ga:0:${alice.id}`], ['Browse by tier', `browse:${season().id}:18:::0:${alice.id}`]]);
+	// Combined with a type
+	assert.deepEqual(part(view(18, { q: 'ga', type: 'ground' }), 'mon:').options.map(o => o.value), ['garchomp']);
+	// No match: the message and buttons, and no empty dropdown
+	out = view(18, { q: 'zzz', type: 'fire' });
+	assert.equal(part(out, 'mon:'), undefined);
+	assert.match(out.content, /Nothing you can draft matches "zzz" among Fire types\. Search again, or browse by tier\.$/);
+	assert.ok(part(out, 'type:'), 'the type can still be widened');
+	// More than 25 matches: the first 25, and a note to narrow it
+	const many = Array.from({ length: 30 }, (_, i) => ({ species_id: `mon${i}`, name: `Mon ${i}`, cost: 5, types: ['Normal'] }));
+	out = R.picker(season().id, settings, state, alice.id, many, null, 0, new Map(), { q: 'mon' });
+	assert.equal(part(out, 'mon:').options.length, 25);
+	assert.match(out.content, /30 Pokémon you can draft match "mon"; showing the first 25/);
+	assert.equal(part(out, 'mon:').placeholder, 'Choose a Pokémon', 'no page count: a search does not page');
+	assert.deepEqual(out.components.at(-1).components.map(b => b.label), ['Search again', 'Browse by tier']);
+
+	// The modal: one short text input inside a Label
+	const modal = R.searchModal('find:1:18:::0:2', 'ga');
+	assert.equal(modal.components[0].type, 18);
+	assert.deepEqual([modal.components[0].component.type, modal.components[0].component.style, modal.components[0].component.value], [4, 1, 'ga']);
+	assert.ok(modal.title.length <= 45 && modal.components[0].label.length <= 45);
+});
+
+let staleSearch, staleFind;
+test('picker Back, search and type filter, live: Back returns to the tier, ids fit, only the owner can search', async () => {
+	assert.equal(onClock(), alice.id);
+	const { mon } = await import('../app/dex.ts');
+	const s = season(), settings = L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId));
+	const state = L.draftState(s, settings);
+	const legal = poolRows().filter(p => !p.banned && !L.pickProblem(s, settings, state, alice.id, p.species_id, false));
+	const before = { calls: fake.calls.length, picks: pickCount() };
+	const picker = await press(alice, `open:${s.id}`);
+	checkIds(picker, alice);
+
+	// Back: choose a lower tier, then a Pokémon, then Back lands on that tier again
+	const tiers = dropdown(picker, 'tier:').options.map(o => Number(o.value));
+	const low = tiers[Math.floor(tiers.length / 2)];
+	const tiered = await select(alice, dropdown(picker, 'tier:').custom_id, String(low));
+	const target = dropdown(tiered, 'mon:').options[0].value;
+	let step = await select(alice, dropdown(tiered, 'mon:').custom_id, target);
+	checkIds(step, alice);
+	const back = buttons(step).find(b => b.label === 'Back');
+	assert.ok(back, JSON.stringify(buttons(step)));
+	let again = await press(alice, back.custom_id);
+	assert.equal(again.type, 7);
+	assert.equal(dropdown(again, 'tier:').options.find(t => t.default).value, String(low));
+	assert.ok(dropdown(again, 'mon:').options.some(o => o.value === target));
+	// /draft's confirm step has no Back: there's no picker behind it
+	assert.ok(!buttons(await command(alice, 'draft', { pokemon: target })).some(b => b.label === 'Back'));
+
+	// Type filter: the tiers are those with a Pokémon of that type, and every Pokémon shown is of it
+	const typeOpts = dropdown(picker, 'type:').options;
+	assert.equal(typeOpts[0].value, 'all');
+	assert.ok(typeOpts.length <= 25);
+	const typeOf = id => mon(id, settings.mod).types.map(t => t.toLowerCase());
+	const dragon = await select(alice, dropdown(picker, 'type:').custom_id, 'dragon');
+	assert.equal(dragon.type, 7);
+	checkIds(dragon, alice);
+	const dragonLegal = legal.filter(p => typeOf(p.species_id).includes('dragon'));
+	assert.deepEqual(dropdown(dragon, 'tier:').options.map(o => Number(o.value)), [...new Set(dragonLegal.map(p => p.cost))]);
+	assert.ok(dropdown(dragon, 'tier:').options.length < tiers.length, 'fewer tiers than all types');
+	assert.ok(dropdown(dragon, 'mon:').options.every(o => typeOf(o.value).includes('dragon')));
+	// Changing tier keeps the type
+	const dragonTier = dropdown(dragon, 'tier:').options.at(-1).value;
+	const dragonLow = await select(alice, dropdown(dragon, 'tier:').custom_id, dragonTier);
+	assert.equal(dropdown(dragonLow, 'type:').options.find(o => o.default).value, 'dragon');
+	assert.ok(dropdown(dragonLow, 'mon:').options.every(o => typeOf(o.value).includes('dragon') && o.label.endsWith(` · ${dragonTier}`)));
+	// Back from a filtered view keeps the filter
+	step = await select(alice, dropdown(dragonLow, 'mon:').custom_id, dropdown(dragonLow, 'mon:').options[0].value);
+	again = await press(alice, buttons(step).find(b => b.label === 'Back').custom_id);
+	assert.equal(dropdown(again, 'type:').options.find(o => o.default).value, 'dragon');
+	assert.equal(dropdown(again, 'tier:').options.find(o => o.default).value, dragonTier);
+
+	// Search: the button opens a modal; the submit edits the picker (type 7) with what matches
+	const searchBtn = buttons(picker).find(b => b.label === 'Search by name');
+	const modal = await press(alice, searchBtn.custom_id);
+	assert.equal(modal.type, 9);
+	assert.match(modal.data.custom_id, new RegExp(`^find:${s.id}:\\d+:::0:${alice.id}$`));
+	assert.equal(modal.data.components[0].component.custom_id, 'q');
+	let found = await submit(alice, modal.data.custom_id, 'Chomp');
+	assert.equal(found.type, 7);
+	checkIds(found, alice);
+	const expected = legal.filter(p => p.species_id.includes('chomp') || p.name.toLowerCase().replace(/[^a-z0-9]+/g, '').includes('chomp'));
+	assert.deepEqual(dropdown(found, 'mon:').options.map(o => o.value), expected.map(p => p.species_id).slice(0, 25));
+	assert.equal(dropdown(found, 'tier:'), undefined);
+	// Text with a colon and spaces is sanitised before it goes into any id
+	found = await submit(alice, modal.data.custom_id, 'Gar: chomp', { legacy: true });
+	checkIds(found, alice);
+	assert.ok(dropdown(found, 'mon:').custom_id.includes(':garchomp:'));
+	for (const c of buttons(found)) if (c.custom_id) assert.equal(c.custom_id.split(':').length, 7, c.custom_id);
+	// The longest search there can be still fits
+	const long = await submit(alice, modal.data.custom_id, 'x'.repeat(40));
+	checkIds(long, alice);
+	// Back from a search result goes back to the search
+	step = await select(alice, dropdown(found, 'mon:').custom_id, 'garchomp');
+	again = await press(alice, buttons(step).find(b => b.label === 'Back').custom_id);
+	assert.deepEqual(dropdown(again, 'mon:').options.map(o => o.value), ['garchomp']);
+	// No match
+	const none = await submit(alice, modal.data.custom_id, 'zzzzzz');
+	assert.equal(none.type, 7);
+	assert.match(none.data.content, /Nothing you can draft matches "zzzzzz"\. Search again, or browse by tier\.$/);
+	assert.equal(dropdown(none, 'mon:'), undefined);
+	// Nothing usable typed: the picker again, with a note
+	const empty = await submit(alice, modal.data.custom_id, '!!!');
+	assert.match(empty.data.content, /^Type part of a Pokémon's name to search\.\n/);
+	assert.ok(dropdown(empty, 'tier:'));
+	// Browse by tier leaves the search
+	const browse = await press(alice, buttons(none).find(b => b.label === 'Browse by tier').custom_id);
+	assert.ok(dropdown(browse, 'tier:') && dropdown(browse, 'mon:'));
+	assert.match(browse.data.content, /Choose a price tier/);
+
+	// Another player can't open Alice's search or submit it
+	assert.equal((await press(bob, searchBtn.custom_id)).data.content, 'This is for another player.');
+	const foreign = await submit(bob, modal.data.custom_id, 'chomp');
+	assert.equal(foreign.type, 4);
+	assert.equal(foreign.data.content, 'This is for another player.');
+	staleSearch = searchBtn.custom_id;
+	staleFind = modal.data.custom_id;
+
+	assert.equal(fake.calls.length, before.calls, 'nothing sent to the channel');
+	assert.equal(pickCount(), before.picks);
 });
 
 test('a team name of @everyone **x** is escaped and pings nobody', () => {
@@ -515,6 +705,8 @@ test('after each of several picks the channel holds the board and one ping for t
 	for (const [who, species] of plan) {
 		assert.equal(onClock(), who.id);
 		if (who === bob) await pickerPick(who, species);
+		// A pick found by search lands like any other: the same board and ping checks below
+		else if (who === carol) await searchPick(who, species);
 		else if (who === dave) await discordPick(who, species);
 		else await sitePick(who, species);
 		assert.equal(draftMsgs().length, 2, `two messages after ${species}`);
@@ -538,6 +730,11 @@ test('after each of several picks the channel holds the board and one ping for t
 	assert.equal(stale.type, 7);
 	assert.equal(stale.data.content, 'That turn has passed.');
 	assert.equal((await press(alice, `open:${season().id}`)).data.content, 'Not your pick.');
+	// So are its Search button (no modal opens) and a search submitted late
+	const staleBtn = await press(alice, staleSearch);
+	assert.deepEqual([staleBtn.type, staleBtn.data.content], [7, 'That turn has passed.']);
+	const lateFind = await submit(alice, staleFind, 'chomp');
+	assert.deepEqual([lateFind.type, lateFind.data.content], [7, 'That turn has passed.']);
 });
 
 test('a pick made on the site and one made with /draft leave the channel in the same state; undo re-pings', async () => {
@@ -658,7 +855,7 @@ test('completing the draft edits the board one last time and removes the ping', 
 	await settled();
 	assert.equal(draftMsgs().length, 1);
 	assert.match(boardText(), /draft complete/);
-	assert.ok(!boardText().includes('Best available'));
+	assert.ok(!boardText().includes('Remaining Draft Pool'));
 });
 
 // ---------- season ----------
@@ -838,7 +1035,7 @@ test('a board for the largest pool and a 16-player full draft stays under 6000 c
 		}
 		return embeds;
 	};
-	assert.equal(check('before the first pick')[2].title, 'Best available');
+	assert.equal(check('before the first pick')[2].title, 'Remaining Draft Pool');
 	let made = 0;
 	while (true) {
 		s = L.currentSeason(id);

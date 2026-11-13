@@ -2,7 +2,7 @@
 // Only public league facts go in here (picks, rosters, prices); nothing reads a battle.
 import { PUBLIC_URL } from './config.ts';
 import { all } from './db.ts';
-import { mon } from './dex.ts';
+import { mon, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
 import { emojiMap, emojiName } from './emoji.ts';
 
@@ -265,7 +265,7 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 		const tera = settings.tcBudget - (state.tcSpent.get(p.user_id) || 0);
 		lines.push(slots > 0
 			? `**Tera Captain:** Only Tera captains can Terastallize in battle. Drafting a Pokémon as a Tera captain costs its normal points plus Tera points ` +
-				`from a seperate budget. You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
+				`from a separate budget. You have ${plural(slots, 'captain slot')} and ${plural(tera, 'Tera point')} left.`
 			: `**Tera Captain:** you've used all ${plural(settings.maxCaptains, 'captain slot')}.`);
 	}
 	// Anyone can press these; the press is checked against who is on the clock then, not when this was posted
@@ -277,7 +277,7 @@ export function clockPing(league: L.League, seasonId: number, settings: L.Settin
 /** The ephemeral "Draft Garchomp for 18?" step. */
 export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: number,
 	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean, customId: string, captainId?: string,
-	noCaptain?: string) {
+	noCaptain?: string, backId?: string) {
 	const count = (state.counts.get(userId) || 0) + 1;
 	const left = settings.budget - (state.spent.get(userId) || 0) - entry.cost;
 	const need = Math.max(0, settings.rosterMin - count);
@@ -299,6 +299,8 @@ export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: n
 		components: [{ type: 1, components: [
 			{ type: 2, style: 3, label: captainId ? 'Confirm normal pick' : 'Confirm', custom_id: customId },
 			...(captainId ? [{ type: 2, style: 1, label: `Confirm as Tera Captain (+${entry.tc_cost} Tera)`, custom_id: captainId }] : []),
+			// Only when this step came from the picker: /draft has no picker to go back to
+			...(backId ? [{ type: 2, style: 2, label: 'Back', custom_id: backId }] : []),
 			{ type: 2, style: 2, label: 'Cancel', custom_id: 'cancel' },
 		] }],
 	};
@@ -312,22 +314,61 @@ function emojiObject(markup: string | undefined) {
 	return m ? { name: m[1], id: m[2] } : undefined;
 }
 
+/** Longest search text kept in a custom_id (as a toID), so every picker id stays well under Discord's 100. */
+export const SEARCH_MAX = 30;
+
 /**
- * The ephemeral picker behind the ping's "Draft a Pokémon": a price-tier dropdown and that tier's Pokémon.
- * `available` is what the caller can legally take, priciest first. All state is in the custom ids.
+ * What a picker shows: price tier (null: the priciest), type (a toID, '' for all), search text (a toID, '' when
+ * browsing by tier) and page. Lives only in custom ids, as `{tier}:{type}:{search}:{page}`; toIDs hold no `:`.
+ */
+export interface PickerView { tier: number | null, type: string, q: string, page: number }
+export function viewId(v: PickerView) {
+	return `${v.tier ?? ''}:${v.type}:${v.q}:${v.page}`;
+}
+
+/** The search box behind the picker's Search button: one short text input, in a Label (Discord's current modal shape). */
+export function searchModal(customId: string, q: string) {
+	return {
+		custom_id: customId,
+		title: 'Search the pool',
+		components: [{
+			type: 18, label: 'Pokémon name', description: 'Part of the name is enough. Only what you can draft right now is shown.',
+			component: { type: 4, custom_id: 'q', style: 1, min_length: 1, max_length: 40, required: true, placeholder: 'e.g. chomp', ...(q ? { value: q } : {}) },
+		}],
+	};
+}
+
+type Available = { species_id: string, name: string, cost: number, tc_cost?: number | null, types?: string[] };
+
+/**
+ * The ephemeral picker behind the ping's "Draft a Pokémon": a price-tier dropdown, a type dropdown, and the
+ * Pokémon in that tier of that type; or, after a search, the matches across every tier. `available` is what the
+ * caller can legally take, priciest first, with each one's types. All state is in the custom ids.
  */
 export function picker(seasonId: number, settings: L.Settings, state: L.DraftState, userId: number,
-	available: { species_id: string, name: string, cost: number, tc_cost?: number | null }[], tier: number | null, page: number, emojis = emojiMap()) {
-	const tiers = [...new Set(available.map(p => p.cost))];
-	if (!tiers.length) return { content: "There's nothing left in the pool you can draft.", components: [] };
+	available: Available[], tier: number | null, page: number, emojis = emojiMap(),
+	filter: { type?: string, q?: string, note?: string } = {}) {
+	if (!available.length) return { content: "There's nothing left in the pool you can draft.", components: [] };
+	// Types with something legal in any tier, in the usual type order. A type that has emptied since: all types
+	const types = TYPES.filter(t => available.some(p => p.types?.includes(t)));
+	const type = types.find(t => toID(t) === filter.type) ?? null;
+	const ofType = type ? available.filter(p => p.types?.includes(type)) : available;
+	const q = filter.q || '';
+	// Tiers only list prices that have a Pokémon of the chosen type
+	const tiers = [...new Set(ofType.map(p => p.cost))];
 	// No tier yet: the priciest. A tier that's gone since: the next one down (or the cheapest)
-	const want = tier;
-	const at = tiers.findIndex(t => want == null || t <= want);
+	const at = tiers.findIndex(t => tier == null || t <= tier);
 	const chosen = tiers[at < 0 ? tiers.length - 1 : at];
-	const inTier = available.filter(p => p.cost === chosen);
-	const pages = Math.ceil(inTier.length / PICKER_PAGE);
-	page = Math.min(Math.max(0, page), pages - 1); // the tier may have shrunk since the last press
-	const shown = inTier.slice(page * PICKER_PAGE, (page + 1) * PICKER_PAGE);
+	// Search: matches by name or id across every tier, prefixes first (as /draft's autocomplete matches)
+	const matches = q ? ofType.filter(p => p.species_id.includes(q) || toID(p.name).includes(q))
+		.sort((a, b) => Number(!(a.species_id.startsWith(q) || toID(a.name).startsWith(q))) - Number(!(b.species_id.startsWith(q) || toID(b.name).startsWith(q)))) : [];
+	const list = q ? matches : ofType.filter(p => p.cost === chosen);
+	const pages = Math.max(1, Math.ceil(list.length / PICKER_PAGE));
+	page = q ? 0 : Math.min(Math.max(0, page), pages - 1); // the tier may have shrunk since the last press
+	const shown = list.slice(page * PICKER_PAGE, (page + 1) * PICKER_PAGE);
+	// Every id carries the whole view, so each press redraws from it; the owner stays last for button()'s check
+	const view: PickerView = { tier: chosen, type: type ? toID(type) : '', q, page };
+	const id = (kind: string, v: Partial<PickerView> = {}) => `${kind}:${seasonId}:${viewId({ ...view, ...v })}:${userId}`;
 	// More than 25 tiers: a window of 25 around the chosen one
 	const i = tiers.indexOf(chosen);
 	const start = Math.max(0, Math.min(i - 12, tiers.length - PICKER_PAGE));
@@ -336,37 +377,58 @@ export function picker(seasonId: number, settings: L.Settings, state: L.DraftSta
 	const tc = settings.teraMode === 'captains';
 	const slots = settings.maxCaptains - (state.captains.get(userId) || 0);
 	const tera = settings.tcBudget - (state.tcSpent.get(userId) || 0);
-	const teraNote = (p: typeof available[number]) => (!tc || slots <= 0 ? null : p.tc_cost == null ? "Can't be a Tera Captain" :
+	const teraNote = (p: Available) => (!tc || slots <= 0 ? null : p.tc_cost == null ? "Can't be a Tera Captain" :
 		`Captain: +${p.tc_cost} Tera${p.tc_cost > tera ? `, more than your ${tera} left` : ''}`);
-	const rows: object[] = [
-		{ type: 1, components: [{
-			type: 3, custom_id: `tier:${seasonId}:${userId}`, placeholder: 'Price tier',
+	const rows: object[] = [];
+	// Searching shows every tier at once, so the tier dropdown gives way to "Browse by tier"
+	if (!q) {
+		rows.push({ type: 1, components: [{
+			type: 3, custom_id: id('tier'), placeholder: 'Price tier',
 			options: tiers.slice(start, start + PICKER_PAGE).map(t => ({
 				label: plural(t, 'point'), value: String(t), default: t === chosen,
-				description: plural(available.filter(p => p.cost === t).length, 'Pokémon'),
+				description: plural(ofType.filter(p => p.cost === t).length, 'Pokémon'),
 			})),
-		}] },
-		{ type: 1, components: [{
-			type: 3, custom_id: `mon:${seasonId}:${userId}`,
-			placeholder: pages > 1 ? `Choose a Pokémon (page ${page + 1} of ${pages})` : 'Choose a Pokémon',
+		}] });
+	}
+	// No types known (nothing to filter by): no type dropdown. 18 types + All fit in one dropdown's 25
+	if (types.length) {
+		rows.push({ type: 1, components: [{
+			type: 3, custom_id: id('type'), placeholder: 'Type',
+			options: [{ label: 'All types', value: 'all', default: !type }, ...types.map(t => ({
+				label: t, value: toID(t), default: t === type, description: plural(available.filter(p => p.types?.includes(t)).length, 'Pokémon'),
+			}))],
+		}] });
+	}
+	// A dropdown needs at least one option: a search with no match shows only the message and buttons
+	if (shown.length) {
+		rows.push({ type: 1, components: [{
+			type: 3, custom_id: id('mon'),
+			// A search shows its first 25 without paging, so no page count there
+			placeholder: !q && pages > 1 ? `Choose a Pokémon (page ${page + 1} of ${pages})` : 'Choose a Pokémon',
 			options: shown.map(p => {
 				const emoji = emojiObject(emojis.get(p.species_id));
 				const description = teraNote(p);
 				return { label: `${p.name} · ${p.cost}`.slice(0, 100), value: p.species_id, ...(description ? { description } : {}), ...(emoji ? { emoji } : {}) };
 			}),
-		}] },
-	];
-	if (pages > 1) {
-		rows.push({ type: 1, components: [
-			{ type: 2, style: 2, label: 'Previous', custom_id: `page:${seasonId}:${chosen}:${page - 1}:${userId}`, disabled: page === 0 },
-			{ type: 2, style: 2, label: 'Next', custom_id: `page:${seasonId}:${chosen}:${page + 1}:${userId}`, disabled: page === pages - 1 },
-		] });
+		}] });
 	}
-	return {
-		content: `You have ${tc ? `${plural(left, 'point')}, ${plural(tera, 'Tera point')} and ${plural(slots, 'captain slot')}` : plural(left, 'point')} left. ` +
-			"Choose a price tier, then a Pokémon. You confirm before it's final.",
-		components: rows,
-	};
+	const buttons: object[] = [];
+	if (!q && pages > 1) {
+		buttons.push(
+			{ type: 2, style: 2, label: 'Previous', custom_id: id('page', { page: page - 1 }), disabled: page === 0 },
+			{ type: 2, style: 2, label: 'Next', custom_id: id('page', { page: page + 1 }), disabled: page === pages - 1 },
+		);
+	}
+	buttons.push({ type: 2, style: q ? 2 : 1, label: q ? 'Search again' : 'Search by name', custom_id: id('search') });
+	if (q) buttons.push({ type: 2, style: 1, label: 'Browse by tier', custom_id: id('browse', { q: '', page: 0 }) });
+	rows.push({ type: 1, components: buttons });
+	const have = `You have ${tc ? `${plural(left, 'point')}, ${plural(tera, 'Tera point')} and ${plural(slots, 'captain slot')}` : plural(left, 'point')} left. `;
+	const among = type ? ` among ${type} types` : '';
+	const what = !q ? "Choose a price tier, then a Pokémon. You confirm before it's final." :
+		!matches.length ? `Nothing you can draft matches "${q}"${among}. Search again, or browse by tier.` :
+		`${matches.length === 1 ? '1 Pokémon you can draft matches' : `${matches.length} Pokémon you can draft match`} "${q}"${among}` +
+			(matches.length > PICKER_PAGE ? `; showing the first ${PICKER_PAGE}, so type more of the name to narrow it.` : '.');
+	return { content: (filter.note ? `${filter.note}\n` : '') + have + what, components: rows };
 }
 
 // ---------- season ----------
