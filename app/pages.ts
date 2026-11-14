@@ -30,11 +30,21 @@ const LIVE_SCRIPT = (leagueId: number, rootId: string) => `<script>
 				const q = document.getElementById('pool-search')?.value;
 				const t = document.getElementById('pool-type')?.value;
 				const scroll = document.querySelector('.pool-list')?.scrollTop;
+				// Unsent choices in forms marked data-keep (trade offers, free agent drops, playoff picks)
+				const kept = new Map();
+				const keyOf = el => el.form.getAttribute('action') + '|' + el.name + '|' + (el.type === 'checkbox' ? el.value : '');
+				cur.querySelectorAll('form[data-keep] [name]').forEach(el => { if (el.type !== 'hidden') kept.set(keyOf(el), el.type === 'checkbox' ? el.checked : el.value); });
 				// Unsaved Tera Captain ticks survive someone else's update
 				const capForm = document.querySelector('form.captains[data-dirty]');
 				const ticked = capForm && fresh.querySelector('form.captains[data-for="' + capForm.dataset.for + '"]')
 					? [...capForm.querySelectorAll('input[name=captain]:checked')].map(i => i.value) : null;
 				cur.replaceWith(fresh);
+				fresh.querySelectorAll('form[data-keep] [name]').forEach(el => {
+					if (!kept.has(keyOf(el))) return;
+					if (el.type === 'checkbox') el.checked = kept.get(keyOf(el));
+					else if (el.tagName !== 'SELECT' || [...el.options].some(o => o.value === kept.get(keyOf(el)))) el.value = kept.get(keyOf(el));
+				});
+				fresh.querySelectorAll('form.trade-form').forEach(f => window.updateTrade?.(f));
 				const capNow = document.querySelector('form.captains');
 				if (ticked) {
 					capNow.querySelectorAll('input[name=captain]').forEach(i => { i.checked = ticked.includes(i.value); });
@@ -486,7 +496,7 @@ export function pageRoutes(app: Express) {
 			const p = br.picking;
 			const canPick = p && (p.picker.userId === me || isComm);
 			const pickPanel = p ? `<section class="panel"><h2>${p.picker.userId === me ? `Pick your ${esc(br.rounds[p.round - 1].label.toLowerCase())} opponent` : `${esc(n.get(p.picker.userId))} (seed ${p.picker.seed}) is picking an opponent`}</h2>
-				${canPick ? `<form method="post" action="/l/${league.id}/playoffs/pick" class="row" ${confirmAttr('Pick this opponent? It can\'t be changed afterwards.')}>
+				${canPick ? `<form method="post" action="/l/${league.id}/playoffs/pick" class="row" data-keep ${confirmAttr('Pick this opponent? It can\'t be changed afterwards.')}>
 					<input type="hidden" name="for" value="${p.picker.userId}">
 					<label class="f">Opponent<select name="opponent">${p.options.map(o => `<option value="${o.userId}">${o.seed}. ${esc(n.get(o.userId))}</option>`).join('')}</select></label>
 					<button class="btn primary" type="submit" style="align-self:flex-end">${p.picker.userId === me ? 'Pick' : `Pick for ${esc(n.get(p.picker.userId))}`}</button></form>` :
@@ -573,22 +583,24 @@ export function pageRoutes(app: Express) {
 					<noscript><button class="btn sm" type="submit">Show</button></noscript></form>`);
 			}
 
-			// Trade offers: the ones to and from this player, and for a commissioner every pending one
-			const offers = isComm ? L.pendingOffers(season.id) : L.pendingOffers(season.id, who);
+			// Trade offers: your own, and for a commissioner every pending one (which they can cancel, not answer)
+			const offers = isComm ? L.pendingOffers(season.id) : L.pendingOffers(season.id, me);
 			if (settings.trades && offers.length) {
 				const offerRow = (o: L.TradeOffer) => {
 					const give: string[] = JSON.parse(o.give), get: string[] = JSON.parse(o.get);
 					const names2 = (ids: string[]) => ids.map(id => `<b>${esc(monName(id))}</b>`).join(' + ');
 					const btn = (action: string, label: string, primary = false, q = '') =>
-						`<form method="post" action="/l/${league.id}/moves/answer" class="inline" ${q ? confirmAttr(q) : ''}>${forQ}<input type="hidden" name="offer" value="${o.id}"><input type="hidden" name="action" value="${action}">
-							<button class="btn sm ${primary ? 'primary' : ''}" type="submit" ${action === 'accept' ? off : ''}>${label}</button></form>`;
-					const desc = o.to_user === who ? `From ${esc(n.get(o.from_user))}: their ${names2(give)} for your ${names2(get)}` :
-						o.from_user === who ? `To ${esc(n.get(o.to_user))}: your ${names2(give)} for their ${names2(get)}` :
+						`<form method="post" action="/l/${league.id}/moves/answer" class="inline" ${q ? confirmAttr(q) : ''}><input type="hidden" name="offer" value="${o.id}"><input type="hidden" name="action" value="${action}">
+							<button class="btn sm ${primary ? 'primary' : ''}" type="submit" ${action === 'accept' ? myLive : ''}>${label}</button></form>`;
+					// Accepting is blocked by your own series in progress, not by the player you're viewing
+					const myLive = L.seriesInProgress(season.id, me) || frozen ? 'disabled' : '';
+					const desc = o.to_user === me ? `From ${esc(n.get(o.from_user))}: their ${names2(give)} for your ${names2(get)}` :
+						o.from_user === me ? `To ${esc(n.get(o.to_user))}: your ${names2(give)} for their ${names2(get)}` :
 						`${esc(n.get(o.from_user))} offers ${names2(give)} to ${esc(n.get(o.to_user))} for ${names2(get)}`;
 					const acts = [
-						o.to_user === who ? btn('decline', 'Decline') + btn('accept', 'Accept', true, `Trade your ${get.map(monName).join(' + ')} for ${n.get(o.from_user)}'s ${give.map(monName).join(' + ')}? This happens right away.`) : '',
-						o.from_user === who ? btn('withdraw', 'Withdraw') : '',
-						isComm && o.from_user !== who && o.to_user !== who ? btn('cancel', 'Cancel', false, 'Cancel this offer?') : '',
+						o.to_user === me ? btn('decline', 'Decline') + btn('accept', 'Accept', true, `Trade your ${get.map(monName).join(' + ')} for ${n.get(o.from_user)}'s ${give.map(monName).join(' + ')}? This happens right away.`) : '',
+						o.from_user === me ? btn('withdraw', 'Withdraw') : '',
+						isComm && o.from_user !== me && o.to_user !== me ? btn('cancel', 'Cancel', false, 'Cancel this offer?') : '',
 					].join('');
 					return `<div class="row offer"><span>${desc}${o.note ? ` <span class="muted">“${esc(o.note)}”</span>` : ''}</span><span class="spacer"></span>${acts}</div>`;
 				};
@@ -596,7 +608,9 @@ export function pageRoutes(app: Express) {
 			}
 
 			const cols: string[] = [];
-			if (settings.trades) {
+			if (settings.trades && !self) {
+				cols.push(`<section class="panel"><h2>Propose a trade</h2><p class="muted" style="margin:0">Players offer and accept their own trades. You can cancel any pending offer above.</p></section>`);
+			} else if (settings.trades) {
 				const others = players.filter(p => p.user_id !== who);
 				const withId = Number(req.query.with) && others.some(p => p.user_id === Number(req.query.with)) ? Number(req.query.with) : others[0]?.user_id;
 				const theirs = withId ? L.roster(season.id, withId) : [];
@@ -605,12 +619,12 @@ export function pageRoutes(app: Express) {
 					${sprite(r.species_id, 'sm')}<span class="nm">${esc(r.name)}</span><span class="spacer"></span><span class="num muted">${r.cost}</span></label>`;
 				cols.push(`<section class="panel"><h2>Propose a trade</h2>
 					${tradeClosed ? `<p class="muted" style="margin:0">${esc(tradeClosed)}</p>` : `
-					<form method="get" class="row" style="gap:8px;margin:0 0 10px">${self ? '' : `<input type="hidden" name="for" value="${who}">`}<label class="f" style="flex:1">With<select name="with" onchange="this.form.submit()">${others.map(p =>
+					<form method="get" class="row" style="gap:8px;margin:0 0 10px"><label class="f" style="flex:1">With<select name="with" onchange="this.form.submit()">${others.map(p =>
 						`<option value="${p.user_id}" ${p.user_id === withId ? 'selected' : ''}>${esc(p.showdown_name)}</option>`).join('')}</select></label><noscript><button class="btn sm" type="submit">Show</button></noscript></form>
 					<form method="post" action="/l/${league.id}/moves/offer" class="trade-form" data-mine="${mine.length}" data-points="${points}" data-their-count="${theirs.length}" data-their-points="${theirPoints}"
-						data-min="${settings.rosterMin}" data-max="${settings.rosterMax}" data-budget="${settings.budget}">${forQ}<input type="hidden" name="with" value="${withId}">
-						<h3>${self ? 'You give' : `${esc(n.get(who))} gives`}</h3><div class="my-picks cap-list">${mine.map(r => box('give', r)).join('')}</div>
-						<h3>${self ? 'You get' : `${esc(n.get(who))} gets`}</h3><div class="my-picks cap-list">${theirs.map(r => box('get', r)).join('')}</div>
+						data-min="${settings.rosterMin}" data-max="${settings.rosterMax}" data-budget="${settings.budget}" data-keep><input type="hidden" name="with" value="${withId}">
+						<h3>You give</h3><div class="my-picks cap-list">${mine.map(r => box('give', r)).join('')}</div>
+						<h3>You get</h3><div class="my-picks cap-list">${theirs.map(r => box('get', r)).join('')}</div>
 						<label class="f" style="margin-top:10px">Note<input class="inp" name="note" maxlength="200" placeholder="Optional"></label>
 						<div class="row" style="margin-top:10px"><span class="muted" data-after style="font-size:13px"></span><span class="spacer"></span><button class="btn primary" type="submit" ${off}>Send offer</button></div>
 					</form>`}</section>`);
@@ -621,12 +635,12 @@ export function pageRoutes(app: Express) {
 				cols.push(`<section class="panel"><div class="row panel-head"><h2>Free agents</h2><span class="spacer"></span>
 						<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					${usedUp ? `<p class="muted" style="margin:0 0 10px">All ${settings.faLimit} free agent moves this season are used.</p>` : ''}
-					<form method="post" action="/l/${league.id}/moves/fa" onsubmit="const b = event.submitter, d = this.drop.selectedOptions[0]; return confirm((b.value ? 'Add ' + b.dataset.name + ' for ' + b.dataset.cost + ' points' : 'Drop ' + d.dataset.name) + (b.value && this.drop.value ? ' and drop ' + d.dataset.name : '') + '? This uses a free agent move.')">${forQ}
+					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search free agents" autocomplete="off">
+					<form method="post" action="/l/${league.id}/moves/fa" data-keep onsubmit="const b = event.submitter, d = this.drop.selectedOptions[0]; if (!b || (!b.value && !this.drop.value)) return false; return confirm((b.value ? 'Add ' + b.dataset.name + ' for ' + b.dataset.cost + ' points' : 'Drop ' + d.dataset.name) + (b.value && this.drop.value ? ' and drop ' + d.dataset.name : '') + '? This uses a free agent move.')">${forQ}
 						<div class="row" style="gap:8px;margin:0 0 10px"><label class="f" style="flex:1">Drop<select name="drop"><option value="">Nothing</option>${mine.map(r =>
 							`<option value="${esc(r.species_id)}" data-name="${esc(r.name)}">${esc(r.name)} (${r.cost})</option>`).join('')}</select></label>
 							<button class="btn" type="submit" name="add" value="" style="align-self:flex-end" ${off || (usedUp ? 'disabled' : '')}>Drop only</button></div>
 						<p class="muted field-help" style="margin:0 0 10px">${points} of ${settings.budget} points used, ${mine.length} of ${settings.rosterMax} Pokémon. Choosing a drop frees its points for the pickup.</p>
-						<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search free agents" autocomplete="off">
 						<div class="pool-list">${agents.map(p => `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(mon(p.species_id, settings.mod).types.join(','))}">
 							${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
 							<button class="btn sm" type="submit" name="add" value="${esc(p.species_id)}" data-name="${esc(p.name)}" data-cost="${p.cost}" ${off || (usedUp ? 'disabled' : '')} aria-label="Add ${esc(p.name)} for ${p.cost} points">${p.cost} pts</button></div>`).join('') ||
@@ -665,14 +679,14 @@ export function pageRoutes(app: Express) {
 	lg.post('/moves/offer', form, (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const to = Number(req.body.with);
-		const err = L.offerTrade(season, settings, movesFor(req), to, list(req.body.give), list(req.body.get), String(req.body.note || ''), req.user!.id);
+		const err = L.offerTrade(season, settings, req.user!.id, to, list(req.body.give), list(req.body.get), String(req.body.note || ''));
 		if (!err) notify(league.id);
 		movesBack(req, res, err, err ? `with=${to}` : '');
 	});
 	lg.post('/moves/answer', form, (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const isComm = league.role === 'commissioner';
-		const err = L.answerTrade(season, settings, Number(req.body.offer), movesFor(req), String(req.body.action), isComm, req.user!.id);
+		const err = L.answerTrade(season, settings, Number(req.body.offer), req.user!.id, String(req.body.action), isComm);
 		if (!err) {
 			syncShowdown();
 			notify(league.id);
@@ -1475,6 +1489,9 @@ document.addEventListener('change', async e => {
 				pool: all('SELECT * FROM pool WHERE season_id = ?', s.id),
 				picks: L.picks(s.id),
 				roster: all('SELECT * FROM roster WHERE season_id = ? ORDER BY user_id, cost DESC', s.id),
+				transactions: all('SELECT * FROM transactions WHERE season_id = ? ORDER BY id', s.id),
+				tradeOffers: all('SELECT * FROM trade_offers WHERE season_id = ? ORDER BY id', s.id),
+				playoffPicks: all('SELECT * FROM playoff_picks WHERE season_id = ? ORDER BY id', s.id),
 				matches: L.matches(s.id).map(m => ({
 					...m,
 					// Sealed games stay sealed in exports, and nothing from a game (not even what

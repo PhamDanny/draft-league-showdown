@@ -25,6 +25,7 @@ function user(name) {
 function season(names, overrides = {}) {
 	const ids = names.map(user);
 	const leagueId = L.createLeague('S' + ids[0], ids[0]);
+	for (const id of ids.slice(1)) run('INSERT INTO league_members (league_id, user_id, role, joined_at) VALUES (?, ?, ?, 0)', leagueId, id, 'member');
 	const league = one('SELECT * FROM leagues WHERE id = ?', leagueId);
 	const settings = { ...L.settingsOf(league), teraMode: 'none', draftType: 'linear', budget: 100, rosterMin: 1, rosterMax: 3, ...overrides };
 	run('UPDATE leagues SET settings = ? WHERE id = ?', JSON.stringify(settings), leagueId);
@@ -410,4 +411,41 @@ test('the trade deadline is halfway by default, closes trades once its week is f
 	assert.equal(L.pendingOffers(s.fresh().id).length, 0, 'the pending offer was cancelled');
 	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'The trade deadline (after week 2) has passed.');
 	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon8', null), null, 'free agency stays open');
+});
+
+// ---------- the Discord bot's view ----------
+
+test('Discord: recaps and week counts cover the regular season only', async () => {
+	const R = await import('../app/discord-render.ts');
+	const { finalWeeks } = await import('../app/discord.ts');
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 4 });
+	playOut(s);
+	assert.equal(L.phase(s.fresh(), s.settings), 'playoffs');
+	assert.equal(R.weeksIn(s.fresh().id), 3);
+	assert.equal(finalWeeks(s.fresh().id), 3);
+	// Finishing a semifinal doesn't make it a recapped week
+	s.result(s.ids[0], s.ids[3], 1, 0, true);
+	s.result(s.ids[1], s.ids[2], 1, 0, true);
+	assert.equal(finalWeeks(s.fresh().id), 3);
+	const league = one('SELECT * FROM leagues WHERE id = ?', s.leagueId);
+	assert.match(R.recap(league, s.fresh(), 3).content, /Regular season complete/);
+});
+
+test('Discord: /pokemon names the current owner after a trade or drop', async () => {
+	const R = await import('../app/discord-render.ts');
+	const s = season(['A', 'B'], { budget: 100, rosterMin: 1, rosterMax: 3, faLimit: 0 });
+	const [a, b] = s.ids;
+	const league = one('SELECT * FROM leagues WHERE id = ?', s.leagueId);
+	const entry = id => one('SELECT * FROM pool WHERE season_id = ? AND species_id = ?', s.fresh().id, id);
+	const text = id => R.pokemonEmbed(league, s.fresh(), s.settings, entry(id)).description;
+	assert.match(text('mon0'), /Drafted by \*\*A\*\* in round 1/);
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon2', null), null);
+	assert.equal(L.faMove(s.fresh(), s.settings, b, b, 'mon3', null), null);
+	assert.match(text('mon2'), /On the team of \*\*A\*\* \(free agent pickup\)/);
+	assert.equal(L.offerTrade(s.fresh(), s.settings, a, b, ['mon0'], ['mon1']), null);
+	assert.equal(L.answerTrade(s.fresh(), s.settings, L.pendingOffers(s.fresh().id)[0].id, b, 'accept'), null);
+	assert.match(text('mon0'), /On the team of \*\*B\*\* \(drafted by \*\*A\*\*\)/);
+	assert.equal(L.faMove(s.fresh(), s.settings, b, b, null, 'mon0'), null);
+	assert.match(text('mon0'), /Free agent \(drafted by \*\*A\*\*, since dropped\)/);
+	assert.match(text('mon5'), /Available/);
 });
