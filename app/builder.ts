@@ -121,6 +121,7 @@ function builderContext(req: Request) {
 	const { league, season, settings } = req as LReq;
 	const me = req.user!.id;
 	const n = namesOf(league.id);
+	const teamNames = new Map(L.members(league.id).map(m => [m.id, m.team_name || m.showdown_name] as [number, string]));
 	const all = L.matches(season.id);
 	const mine = all.filter(m => m.p1 === me || m.p2 === me);
 	const myRoster = rosterOf(season.id, me, settings.mod);
@@ -134,13 +135,16 @@ function builderContext(req: Request) {
 				.map(x => ({ week: x.week, sets: revealedSets(x.id, opp, settings.mod) })).filter(x => x.sets.length);
 		}
 		return {
-			week: m.week, matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?',
+			week: m.week, stage: m.stage, matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?', oppTeam: teamNames.get(opp) || n.get(opp) || '?',
 			score: m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins],
 			played: m.status === 'final' ? revealedSets(m.id, me, settings.mod) : null,
 		};
 	});
+	// Season record for the builder's home view: series won-lost and game differential, as standings count them
+	const st = L.standings(season.id).find(s => s.userId === me);
 	return {
-		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name,
+		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name, myTeam: teamNames.get(me) || req.user!.showdown_name,
+		leagueName: league.name, record: st ? { sw: st.sw, sl: st.sl, diff: st.gw - st.gl } : null,
 		format: toID(league.format_name), teraMode: settings.teraMode, ...gameOf(settings),
 		// While Tera Captains are being chosen after the draft, the builder points players at the draft room
 		choosingCaptains: season.status === 'captains',

@@ -23,6 +23,8 @@
 
 	const hashWeek = Number((/week-(\d+)/.exec(location.hash) || [])[1]);
 	let week = B.weeks.find(w => w.week === hashWeek) || B.weeks.find(w => w.week === B.current) || B.weeks[0] || null;
+	// With no week in the address the builder opens on its home view: every week's matchup as a card
+	let home = !hashWeek && location.hash !== '#build';
 	let slot = 0;
 	let data = load();
 	let C = null; // calc state, per week
@@ -71,6 +73,7 @@
 	// ---------- page ----------
 
 	function render() {
+		if (home) { renderHome(); return; }
 		const ro = readOnly();
 		const target = editableWeek();
 		const result = ro ? (week.score[0] > week.score[1] ? 'Won' : week.score[0] < week.score[1] ? 'Lost' : 'Tied') : '';
@@ -95,6 +98,7 @@
 			<div class="tb3 ${right ? '' : 'two'}">
 				<aside class="tb-l">
 					<section class="panel tb-teampanel">
+						<a class="eyebrow tb-back" href="#home">← All weeks</a>
 						${B.weeks.length ? `<label class="f">Week<select class="inp" data-act="week">${B.weeks.map(w =>
 							`<option value="${w.week}" ${w === week ? 'selected' : ''}>${esc(weekLabel(w))}</option>`).join('')}</select></label>` : '<p class="eyebrow">No schedule yet</p>'}
 						${B.teamPreview === 'game' || B.teamPreview === 'match' ? `<p class="muted tb-hint">Prep a set for every Pokémon on your roster. You pick 6 of them ${B.teamPreview === 'game' ? 'before each game' : 'before game 1, and keep them for the series'} on the battle page.</p>` : ''}
@@ -110,6 +114,49 @@
 		renderEditor();
 		renderCalc();
 		renderSpeed();
+	}
+
+	// ---------- home ----------
+
+	const spriteOf = r => D.species[r.formes.find(f => D.species[f]) || r.id]?.sprite || '';
+	const rosterImg = r => `<img class="spr ${r.captain && B.teraMode === 'captains' ? 'cap' : ''}" src="${esc(spriteOf(r))}" alt="${esc(nameOf(r.formes.find(f => D.species[f]) || r.id))}" title="${esc(nameOf(r.formes.find(f => D.species[f]) || r.id))}${r.captain && B.teraMode === 'captains' ? ' (Tera Captain)' : ''}" loading="lazy">`;
+	const stageLabel = w => !w.stage || w.stage === 'regular' ? `Week ${w.week}` : w.stage.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+	function renderHome() {
+		const r = B.record;
+		const diff = r ? (r.diff > 0 ? `+${r.diff}` : r.diff < 0 ? `−${-r.diff}` : '0') : '';
+		const cards = B.weeks.map(w => {
+			const done = w.status === 'final';
+			const saved = Sets.load(B.leagueId, B.seasonId, w.week).team.slice(0, SIZE).filter(Boolean).length;
+			const scoreCls = done ? (w.score[0] > w.score[1] ? 'w' : w.score[0] < w.score[1] ? 'l' : '') : w.status === 'live' ? 'live' : '';
+			const score = done || w.status === 'live' || w.score[0] || w.score[1] ? `${w.score[0]} – ${w.score[1]}` : w.week === B.current ? 'Next' : '—';
+			return `<article class="panel tbh-card ${w.week === B.current && !done ? 'now' : ''}">
+				<header class="tbh-chips">
+					<span class="tbh-chip tbh-team" title="${esc(w.oppTeam)} (${esc(w.oppName)})">${esc(w.oppTeam)}</span>
+					<span class="pill ${scoreCls}">${score}</span>
+					<span class="tbh-chip">${esc(stageLabel(w))}</span>
+				</header>
+				<div class="tbh-mons">${(B.rosters[w.opp] || []).map(rosterImg).join('')}</div>
+				<footer class="tbh-acts">
+					${done ? `<a class="btn" href="/l/${B.leagueId}/series/${w.matchId}">Series</a>` : `<a class="btn" href="/l/${B.leagueId}/battle/${w.matchId}">Play</a>`}
+					<a class="btn ${done ? '' : 'primary'}" href="#week-${w.week}">${done ? 'View team' : 'Prep'}</a>
+					<span class="muted tbh-saved">${done ? 'Played' : `${saved}/${SIZE} sets`}</span>
+				</footer>
+			</article>`;
+		}).join('');
+		root.innerHTML = `
+			<div class="tbh">
+				<header class="tbh-head">
+					<div><p class="eyebrow">Teambuilder · ${esc(B.leagueName)}</p><h1>${esc(B.myTeam)}</h1></div>
+					${r ? `<p class="tbh-rec" aria-label="Record ${r.sw} wins, ${r.sl} losses, game differential ${diff}">${r.sw} – ${r.sl}<span aria-hidden="true">|</span>${diff}</p>` : ''}
+				</header>
+				<div class="tbh-body">
+					<aside class="panel tbh-roster" aria-label="Your roster">${B.roster.map(rosterImg).join('')}</aside>
+					<section class="tbh-main">
+						${cards ? `<div class="tbh-grid">${cards}</div>` : `<div class="panel tb-empty"><p class="muted">No schedule yet. You can still prep sets for your roster.</p>
+							<a class="btn primary" href="#build">Open teambuilder</a></div>`}
+					</section>
+				</div>
+			</div>`;
 	}
 
 	function renderTeam() {
@@ -777,6 +824,7 @@
 	}
 
 	function goWeek(w) {
+		home = false;
 		week = w;
 		history.replaceState(null, '', `#week-${w.week}`);
 		slot = 0; data = load(); C = null; render();
@@ -984,7 +1032,9 @@
 
 	window.addEventListener('hashchange', () => {
 		const w = B.weeks.find(x => x.week === Number((/week-(\d+)/.exec(location.hash) || [])[1]));
-		if (w && w !== week) goWeek(w);
+		if (w) { if (w !== week || home) { goWeek(w); scrollTo(0, 0); } return; }
+		const toHome = location.hash !== '#build';
+		if (toHome !== home) { home = toHome; if (!home) { slot = 0; data = load(); C = null; } render(); scrollTo(0, 0); }
 	});
 
 	render();

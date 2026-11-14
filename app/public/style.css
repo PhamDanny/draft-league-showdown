@@ -269,6 +269,36 @@ form.inline{display:inline}
 .tb-acts select,.tb-acts .primary{grid-column:1/-1}
 .tb-acts select{padding:6px 8px;font-size:13px}
 .tb-empty{padding:40px 16px;text-align:center}
+/* Teambuilder home: header with record, roster rail on the left, one card per week */
+.tb-back{text-decoration:none}
+.tb-back:hover{color:var(--fg)}
+.tbh-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px 24px;flex-wrap:wrap;padding-bottom:12px;margin-bottom:16px;border-bottom:3px solid var(--fg)}
+.tbh-head h1{margin:0}
+.tbh-rec{margin:0;font-family:var(--display);font-size:32px;font-weight:700;color:var(--muted);display:flex;gap:10px;font-variant-numeric:tabular-nums}
+.tbh-body{display:grid;grid-template-columns:112px minmax(0,1fr);gap:16px;align-items:start}
+.tbh-roster{position:sticky;top:116px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 6px;background:var(--sel-soft);border-color:color-mix(in srgb,var(--sel) 30%,var(--line));max-height:calc(100vh - 140px);overflow-y:auto;scrollbar-width:thin}
+.tbh-roster img.spr{width:88px;height:88px;object-fit:contain}
+.tbh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:16px}
+.tbh-card{display:flex;flex-direction:column;gap:12px;padding:12px}
+.tbh-card.now{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.tbh-chips{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px}
+.tbh-chips .pill{font-size:13px;padding:4px 12px;font-variant-numeric:tabular-nums}
+.tbh-chip{border-radius:999px;background:var(--surface-2);padding:5px 14px;font-size:13px;font-weight:500;white-space:nowrap;text-align:center}
+.tbh-team{font-family:var(--display);font-size:19px;font-weight:700;padding:2px 14px;overflow:hidden;text-overflow:ellipsis}
+.tbh-mons{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:2px;justify-items:center;flex:1;align-content:start}
+.tbh-mons img.spr{width:100%;max-width:72px;aspect-ratio:1;height:auto;object-fit:contain}
+img.spr.cap{border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--tera) 22%,transparent) 55%,transparent 70%)}
+.tbh-acts{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.tbh-saved{font-size:12px;white-space:nowrap}
+@media (max-width:760px){
+  .tbh-rec{font-size:24px}
+  .tbh-body{grid-template-columns:1fr}
+  .tbh-roster{position:static;flex-direction:row;flex-wrap:wrap;justify-content:center;max-height:none}
+  .tbh-roster img.spr{width:52px;height:52px}
+  .tbh-chips{grid-template-columns:1fr auto}
+  .tbh-team{grid-column:1/-1}
+  .tbh-chips .pill{justify-self:start}
+}
 /* set card */
 .sd{padding:0;overflow:hidden}
 .sd-card{padding:12px 14px;border-bottom:1px solid var(--line)}
