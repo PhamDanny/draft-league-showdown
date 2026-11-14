@@ -317,3 +317,97 @@ test('dropping a Tera Captain frees its Tera points; a pickup is never a captain
 	assert.deepEqual(L.roster(s.fresh().id, a).map(r => [r.species_id, r.captain]), [['mon2', 0]]);
 	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon2'], true), null, 'a commissioner can make the pickup a captain');
 });
+
+// ---------- trades ----------
+
+/** Four players with two Pokémon each (mon0–mon7, 10 points), Bo1, three weeks: the deadline is week 2. */
+function tradeSeason(overrides = {}) {
+	const s = season(['A', 'B', 'C', 'D'], { budget: 100, rosterMin: 1, rosterMax: 3, bestOf: 1, faLimit: 0, ...overrides });
+	s.ids.forEach((uid, i) => assert.equal(L.faMove(s.fresh(), s.settings, uid, uid, 'mon' + (4 + i), null), null));
+	const offer = (from, to, give, get, settings = s.settings) => L.offerTrade(s.fresh(), settings, from, to, give, get);
+	const answer = (uid, action, offerId = L.pendingOffers(s.fresh().id)[0].id, comm = false) => L.answerTrade(s.fresh(), s.settings, offerId, uid, action, comm);
+	const mons = uid => L.roster(s.fresh().id, uid).map(r => r.species_id).sort();
+	/** Finishes every regular series in weeks 1..w. */
+	const finishWeeks = w => {
+		for (const m of L.matches(s.fresh().id).filter(m => m.week <= w && m.status !== 'final')) L.setResult(m.id, 1, 0, s.settings, s.ids[0], s.leagueId);
+	};
+	return { ...s, offer, answer, mons, finishWeeks };
+}
+
+test('a trade offered and accepted swaps the Pokémon, and a traded Tera Captain stops being one', () => {
+	const s = tradeSeason({ teraMode: 'captains', maxCaptains: 1, tcBudget: 20 });
+	const [a, b] = s.ids;
+	run('UPDATE pool SET tc_cost = 10 WHERE season_id = ?', s.fresh().id);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon0'], true), null);
+	assert.equal(s.offer(a, b, ['mon0', 'mon4'], ['mon1']), null);
+	assert.equal(s.answer(a, 'accept'), 'Only the player it was offered to can accept it.');
+	assert.equal(s.answer(b, 'accept'), null);
+	assert.deepEqual(s.mons(a), ['mon1']);
+	assert.deepEqual(s.mons(b), ['mon0', 'mon4', 'mon5']);
+	assert.deepEqual(L.roster(s.fresh().id, b).filter(r => r.captain), []);
+	assert.deepEqual(L.roster(s.fresh().id, b).map(r => [r.species_id, r.via]).sort(), [['mon0', 'trade'], ['mon4', 'trade'], ['mon5', 'fa']]);
+	const [t] = L.transactions(s.fresh().id);
+	assert.deepEqual([t.kind, t.user_id, t.other_id, JSON.parse(t.gave), JSON.parse(t.got)], ['trade', a, b, ['mon0', 'mon4'], ['mon1']]);
+	assert.equal(L.movesUsed(s.fresh().id, a), 1, "trades don't use free agent moves");
+});
+
+test('trades are checked when offered and again when accepted', () => {
+	const s = tradeSeason({ rosterMax: 2 });
+	const [a, b, c] = s.ids;
+	assert.equal(s.offer(a, a, ['mon0'], ['mon0']), 'Choose another player to trade with.');
+	assert.equal(s.offer(a, b, ['mon0'], []), 'Each side has to give at least one Pokémon.');
+	assert.equal(s.offer(a, b, ['mon1'], ['mon0']), "A doesn't have Mon 1.");
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1', 'mon5']), 'That would give A 3 Pokémon; the most is 2.');
+	// Two offers for the same Pokémon: accepting one cancels the other
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), null);
+	assert.equal(s.offer(c, b, ['mon2'], ['mon1']), null);
+	assert.equal(s.answer(b, 'accept', L.pendingOffers(s.fresh().id).find(o => o.from_user === a).id), null);
+	assert.equal(L.pendingOffers(s.fresh().id).length, 0);
+	// Prices that changed since the offer: accepting fails and the offer stays open
+	assert.equal(s.offer(a, c, ['mon1'], ['mon2']), null);
+	run('UPDATE roster SET cost = 95 WHERE season_id = ? AND species_id = ?', s.fresh().id, 'mon2');
+	assert.equal(s.answer(c, 'accept'), 'That would put A over budget: 105 of 100 points.');
+	assert.equal(L.pendingOffers(s.fresh().id).length, 1);
+	// Dropping a Pokémon in an offer cancels it
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, null, 'mon1'), null);
+	assert.equal(L.pendingOffers(s.fresh().id).length, 0);
+});
+
+test('withdraw, decline, and a commissioner cancel', () => {
+	const s = tradeSeason();
+	const [a, b] = s.ids;
+	s.offer(a, b, ['mon0'], ['mon1']);
+	assert.equal(s.answer(b, 'withdraw'), 'Only the player who made the offer can withdraw it.');
+	assert.equal(s.answer(a, 'withdraw'), null);
+	s.offer(a, b, ['mon0'], ['mon1']);
+	assert.equal(s.answer(a, 'decline'), 'Only the player it was offered to can decline it.');
+	assert.equal(s.answer(b, 'decline'), null);
+	s.offer(a, b, ['mon0'], ['mon1']);
+	const id = L.pendingOffers(s.fresh().id)[0].id;
+	assert.equal(s.answer(b, 'cancel', id), 'Only a commissioner can cancel an offer.');
+	assert.equal(s.answer(b, 'cancel', id, true), null);
+	assert.equal(s.answer(b, 'accept', id), 'This offer is no longer open.');
+});
+
+test('no trades while either player has a series in progress', () => {
+	const s = tradeSeason();
+	const [a, b] = s.ids;
+	const m = L.matches(s.fresh().id).find(m => m.p1 === b || m.p2 === b);
+	run("UPDATE matches SET status = 'live' WHERE id = ?", m.id);
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'B has a week 1 series in progress. Trades wait until it\'s final.');
+});
+
+test('the trade deadline is halfway by default, closes trades once its week is final, and cancels offers', () => {
+	const s = tradeSeason();
+	const [a, b] = s.ids;
+	assert.equal(L.tradeDeadlineWeek(s.fresh().id, s.settings), 2);
+	assert.equal(L.tradeDeadlineWeek(s.fresh().id, { ...s.settings, tradeDeadline: 1 }), 1);
+	assert.equal(L.tradeDeadlineWeek(s.fresh().id, { ...s.settings, tradeDeadline: 9 }), 3, 'never past the regular season');
+	s.finishWeeks(1);
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), null);
+	s.finishWeeks(2);
+	assert.equal(L.tradesClosed(s.fresh(), s.settings), 'The trade deadline (after week 2) has passed.');
+	assert.equal(L.pendingOffers(s.fresh().id).length, 0, 'the pending offer was cancelled');
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'The trade deadline (after week 2) has passed.');
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon8', null), null, 'free agency stays open');
+});

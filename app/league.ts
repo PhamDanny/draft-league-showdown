@@ -813,6 +813,128 @@ export function faMove(season: Season, settings: Settings, byUserId: number, for
 	});
 }
 
+export interface TradeOffer {
+	id: number; season_id: number; from_user: number; to_user: number; give: string; get: string; note: string | null;
+	status: 'pending' | 'accepted' | 'declined' | 'withdrawn' | 'cancelled'; created_at: number; resolved_at: number | null;
+}
+export function pendingOffers(seasonId: number, userId?: number) {
+	return all<TradeOffer>(`SELECT * FROM trade_offers WHERE season_id = ? AND status = 'pending'${userId ? ' AND (from_user = ? OR to_user = ?)' : ''} ORDER BY id DESC`,
+		seasonId, ...(userId ? [userId, userId] : []));
+}
+
+/** The last regular-season week trades are allowed in: the setting, or halfway (rounded up) when it's 0. */
+export function tradeDeadlineWeek(seasonId: number, settings: Settings) {
+	const weeks = regularWeeks(seasonId);
+	return Math.min(weeks, settings.tradeDeadline || Math.ceil(weeks / 2));
+}
+/** Why trades are closed right now, or null. The deadline passes once every series up to its week is final. */
+export function tradesClosed(season: Season, settings: Settings) {
+	if (!settings.trades) return 'Trades are off in this league.';
+	const ph = phase(season, settings);
+	if (ph === 'draft') return 'Trades open when the schedule is made.';
+	const deadline = tradeDeadlineWeek(season.id, settings);
+	if (ph !== 'regular' || currentWeek(season.id) > deadline) return `The trade deadline (after week ${deadline}) has passed.`;
+	return null;
+}
+
+const nameOf = (userId: number) => one<{ showdown_name: string }>('SELECT showdown_name FROM users WHERE id = ?', userId)?.showdown_name || 'That player';
+
+/** Why `from` can't trade `give` to `to` for `get` right now, or null. Checked when offered and again when accepted. */
+export function tradeProblem(season: Season, settings: Settings, from: number, to: number, give: string[], get: string[]): string | null {
+	const closed = tradesClosed(season, settings);
+	if (closed) return closed;
+	if (from === to) return 'Choose another player to trade with.';
+	if (!give.length || !get.length) return 'Each side has to give at least one Pokémon.';
+	if (new Set(give).size !== give.length || new Set(get).size !== get.length) return 'A Pokémon is listed twice.';
+	const players = draftPlayers(season.id);
+	for (const uid of [from, to]) {
+		if (!players.some(p => p.user_id === uid)) return `${nameOf(uid)} isn't in this season.`;
+		const live = seriesInProgress(season.id, uid);
+		if (live) return `${nameOf(uid)} has a ${matchLabel(live).toLowerCase()} series in progress. Trades wait until it's final.`;
+	}
+	const sides: [number, string[], string[]][] = [[from, give, get], [to, get, give]];
+	const rosters = new Map(sides.map(([uid]) => [uid, roster(season.id, uid)]));
+	for (const [uid, out] of sides) {
+		const missing = out.find(id => !rosters.get(uid)!.some(r => r.species_id === id));
+		if (missing) return `${nameOf(uid)} doesn't have ${one<{ name: string }>('SELECT name FROM pool WHERE season_id = ? AND species_id = ?', season.id, missing)?.name || missing}.`;
+	}
+	for (const [uid, out, into] of sides) {
+		const mine = rosters.get(uid)!;
+		const other = rosters.get(uid === from ? to : from)!;
+		const cost = (list: typeof mine, ids: string[]) => list.filter(r => ids.includes(r.species_id)).reduce((a, r) => a + r.cost, 0);
+		const points = mine.reduce((a, r) => a + r.cost, 0) - cost(mine, out) + cost(other, into);
+		const problem = rosterShapeProblem(settings, mine.length - out.length + into.length, points, nameOf(uid));
+		if (problem) return problem;
+	}
+	return null;
+}
+
+export function offerTrade(season: Season, settings: Settings, from: number, to: number, give: string[], get: string[], note = '') {
+	return tx(() => {
+		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
+		const problem = tradeProblem(fresh, settings, from, to, give, get);
+		if (problem) return problem;
+		const r = run('INSERT INTO trade_offers (season_id, from_user, to_user, give, get, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+			season.id, from, to, JSON.stringify(give), JSON.stringify(get), note.trim().slice(0, 200) || null, now());
+		audit(season.league_id, from, 'trade.offer', `offer ${r.lastInsertRowid}: ${give.join(',')} for ${get.join(',')} with user ${to}`);
+		return null;
+	});
+}
+
+/**
+ * Answers an offer: the other player accepts or declines, the player who made it withdraws it, or a
+ * commissioner cancels it. Accepting checks the trade again and leaves the offer pending if it fails.
+ */
+export function answerTrade(season: Season, settings: Settings, offerId: number, userId: number, action: string, asCommissioner = false) {
+	return tx(() => {
+		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
+		const o = one<TradeOffer>('SELECT * FROM trade_offers WHERE id = ? AND season_id = ?', offerId, season.id);
+		if (!o || o.status !== 'pending') return 'This offer is no longer open.';
+		const close = (status: string) => run('UPDATE trade_offers SET status = ?, resolved_at = ? WHERE id = ?', status, now(), o.id);
+		if (action === 'withdraw') {
+			if (o.from_user !== userId) return 'Only the player who made the offer can withdraw it.';
+			close('withdrawn');
+		} else if (action === 'decline') {
+			if (o.to_user !== userId) return 'Only the player it was offered to can decline it.';
+			close('declined');
+		} else if (action === 'cancel') {
+			if (!asCommissioner) return 'Only a commissioner can cancel an offer.';
+			close('cancelled');
+		} else if (action === 'accept') {
+			if (o.to_user !== userId) return 'Only the player it was offered to can accept it.';
+			const give: string[] = JSON.parse(o.give), get: string[] = JSON.parse(o.get);
+			const problem = tradeProblem(fresh, settings, o.from_user, o.to_user, give, get);
+			if (problem) return problem;
+			const t = now();
+			// A traded Tera Captain stops being one: the Tera budget belongs to the team
+			const move = (ids: string[], toUser: number) => {
+				for (const id of ids) {
+					run("UPDATE roster SET user_id = ?, via = 'trade', captain = 0, tc_cost = NULL, acquired_at = ? WHERE season_id = ? AND species_id = ?", toUser, t, season.id, id);
+				}
+			};
+			move(give, o.to_user);
+			move(get, o.from_user);
+			close('accepted');
+			run(`INSERT INTO transactions (season_id, kind, user_id, other_id, gave, got, made_by, at) VALUES (?, 'trade', ?, ?, ?, ?, ?, ?)`,
+				season.id, o.from_user, o.to_user, o.give, o.get, userId, t);
+			cancelOffersWith(season.id, [...give, ...get]);
+		} else {
+			return 'Unknown action.';
+		}
+		audit(season.league_id, userId, `trade.${action}`, `offer ${o.id}`);
+		return null;
+	});
+}
+
+/** Once the trade deadline has passed, offers still pending are cancelled. Runs inside a transaction. */
+function closeTradesIfPast(seasonId: number, settings: Settings) {
+	const season = one<Season>('SELECT * FROM seasons WHERE id = ?', seasonId)!;
+	const closed = tradesClosed(season, settings);
+	if (closed && closed !== 'Trades are off in this league.') {
+		run("UPDATE trade_offers SET status = 'cancelled', resolved_at = ? WHERE season_id = ? AND status = 'pending'", now(), seasonId);
+	}
+}
+
 /** Pending trade offers that include any of these Pokémon can no longer happen. */
 function cancelOffersWith(seasonId: number, speciesIds: string[]) {
 	for (const o of all<{ id: number, give: string, get: string }>("SELECT * FROM trade_offers WHERE season_id = ? AND status = 'pending'", seasonId)) {
@@ -1259,6 +1381,7 @@ export function champion(season: Season, settings: Settings) {
 function afterResult(seasonId: number, settings: Settings, leagueId: number) {
 	startPlayoffs(seasonId, settings, leagueId);
 	syncBracket(seasonId, settings);
+	closeTradesIfPast(seasonId, settings);
 }
 
 /**
