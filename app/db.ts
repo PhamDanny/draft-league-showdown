@@ -170,6 +170,8 @@ function addColumn(table: string, column: string, type: string) {
 }
 // Tera points a captain pick spent from the Tera budget (NULL: picked before Tera budgets, counts as 0)
 addColumn('picks', 'tc_cost', 'INTEGER');
+// 1: this player has saved their Tera Captains for the season (choosing none counts)
+addColumn('season_players', 'captains_set', 'INTEGER NOT NULL DEFAULT 0');
 // JSON array of species ids one pool entry covers (e.g. DPP's Rotom appliance formes), or NULL
 addColumn('pool', 'covers', 'TEXT');
 // 0: the Discord bot writes this member's name instead of mentioning them (/pings off)

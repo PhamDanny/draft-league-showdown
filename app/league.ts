@@ -12,7 +12,7 @@ export interface Settings {
 	gameType: 'singles' | 'doubles';
 	teraMode: 'captains' | 'all' | 'none';
 	maxCaptains: number;
-	/** Tera points each player has for drafting Tera Captains. */
+	/** Tera points each player has for choosing Tera Captains after the draft. */
 	tcBudget: number;
 	draftType: 'snake' | 'linear';
 	budget: number;
@@ -466,7 +466,7 @@ function availableCosts(seasonId: number) {
 
 /** Why this player can't take this Pokémon now, or null if they can. */
 export function pickProblem(season: Season, settings: Settings, state: DraftState, userId: number,
-	speciesId: string, captain: boolean): string | null {
+	speciesId: string): string | null {
 	if (season.status !== 'drafting') return 'The draft is not running.';
 	if (state.onClock?.user_id !== userId) return 'Not your pick.';
 	const entry = one<{ cost: number, tc_cost: number | null, banned: number, name: string }>(
@@ -474,12 +474,6 @@ export function pickProblem(season: Season, settings: Settings, state: DraftStat
 	if (!entry || entry.banned) return 'Not in the draft pool.';
 	if (state.picks.some(p => p.species_id === speciesId)) return `${entry.name} is taken.`;
 	const cost = entry.cost;
-	if (captain) {
-		if (settings.teraMode !== 'captains') return 'This league has no Tera Captains.';
-		if (entry.tc_cost == null) return `${entry.name} can't be a Tera Captain.`;
-		if ((state.captains.get(userId) || 0) >= settings.maxCaptains) return 'No captain slots left.';
-		if ((state.tcSpent.get(userId) || 0) + entry.tc_cost > settings.tcBudget) return 'Over the Tera budget.';
-	}
 	const count = state.counts.get(userId) || 0;
 	const left = settings.budget - (state.spent.get(userId) || 0) - cost;
 	const stillNeeded = Math.max(0, settings.rosterMin - count - 1);
@@ -488,20 +482,20 @@ export function pickProblem(season: Season, settings: Settings, state: DraftStat
 	return null;
 }
 
-export function makePick(season: Season, settings: Settings, byUserId: number, forUserId: number,
-	speciesId: string, captain: boolean) {
+export function makePick(season: Season, settings: Settings, byUserId: number, forUserId: number, speciesId: string) {
 	return tx(() => {
 		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
 		const state = draftState(fresh, settings);
-		const problem = pickProblem(fresh, settings, state, forUserId, speciesId, captain);
+		const problem = pickProblem(fresh, settings, state, forUserId, speciesId);
 		if (problem) return problem;
-		const entry = one<{ cost: number, tc_cost: number | null }>('SELECT * FROM pool WHERE season_id = ? AND species_id = ?', season.id, speciesId)!;
+		const entry = one<{ cost: number }>('SELECT * FROM pool WHERE season_id = ? AND species_id = ?', season.id, speciesId)!;
 		const overall = state.picks.length;
+		// Tera Captains are chosen after the draft (setCaptains), never with the pick
 		run(`INSERT INTO picks (season_id, overall, slot, round, user_id, species_id, cost, tc_cost, captain, made_by, made_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, season.id, overall, state.slot, state.round, forUserId, speciesId,
-		entry.cost, captain ? entry.tc_cost : null, captain ? 1 : 0, byUserId, now());
+			VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)`, season.id, overall, state.slot, state.round, forUserId, speciesId,
+		entry.cost, byUserId, now());
 		advance(season.id, settings, state.slot);
-		audit(season.league_id, byUserId, 'draft.pick', `${speciesId}${captain ? ' (captain)' : ''} for user ${forUserId}`);
+		audit(season.league_id, byUserId, 'draft.pick', `${speciesId} for user ${forUserId}`);
 		return null;
 	});
 }
@@ -543,6 +537,77 @@ export function undoPick(season: Season, userId: number) {
 	});
 }
 
+// ---------- Tera Captains ----------
+// Chosen after the draft: the commissioner ends the draft (status 'captains'), each player picks up to
+// maxCaptains of their own Pokémon within the Tera budget, and locking them makes the schedule.
+
+/** Whether captain choices can be shown to everyone. They stay private until the commissioner locks them. */
+export function captainsRevealed(season: Season) {
+	return !['setup', 'drafting', 'captains'].includes(season.status);
+}
+
+/** Players who have saved their captains this season (choosing none counts). */
+export function captainsChosen(seasonId: number) {
+	return new Set(all<{ user_id: number }>('SELECT user_id FROM season_players WHERE season_id = ? AND captains_set = 1', seasonId).map(r => r.user_id));
+}
+
+/** Why this set of captains isn't allowed for this player, or null if it is. */
+export function captainProblem(season: Season, settings: Settings, userId: number, speciesIds: string[]): string | null {
+	if (settings.teraMode !== 'captains') return 'This league has no Tera Captains.';
+	const mine = roster(season.id, userId);
+	if (!mine.length) return 'There are no Pokémon on this team.';
+	const ids = [...new Set(speciesIds)];
+	if (ids.length > settings.maxCaptains) return `At most ${settings.maxCaptains} Tera Captains.`;
+	let spent = 0;
+	for (const id of ids) {
+		const r = mine.find(x => x.species_id === id);
+		if (!r) return 'Tera Captains have to be Pokémon on the same team.';
+		if (r.pool_tc_cost == null) return `${r.name} can't be a Tera Captain.`;
+		spent += r.pool_tc_cost;
+	}
+	if (spent > settings.tcBudget) return `Those cost ${spent} Tera points; the Tera budget is ${settings.tcBudget}.`;
+	return null;
+}
+
+/**
+ * Sets a player's Tera Captains to exactly `speciesIds`. Players can do this while captains are being chosen;
+ * a commissioner (`asCommissioner`) can also do it after the lock, to fix mistakes.
+ */
+export function setCaptains(season: Season, settings: Settings, byUserId: number, forUserId: number,
+	speciesIds: string[], asCommissioner = false): string | null {
+	return tx(() => {
+		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
+		if (fresh.status !== 'captains' && !(asCommissioner && fresh.status === 'regular')) {
+			return ['setup', 'drafting'].includes(fresh.status) ? 'Tera Captains are chosen after the draft.' : 'Tera Captains are locked.';
+		}
+		const ids = [...new Set(speciesIds)];
+		const problem = captainProblem(fresh, settings, forUserId, ids);
+		if (problem) return problem;
+		run('UPDATE picks SET captain = 0, tc_cost = NULL WHERE season_id = ? AND user_id = ?', season.id, forUserId);
+		for (const id of ids) {
+			run(`UPDATE picks SET captain = 1, tc_cost = (SELECT tc_cost FROM pool WHERE pool.season_id = picks.season_id AND pool.species_id = picks.species_id)
+				WHERE season_id = ? AND user_id = ? AND species_id = ?`, season.id, forUserId, id);
+		}
+		run('UPDATE season_players SET captains_set = 1 WHERE season_id = ? AND user_id = ?', season.id, forUserId);
+		audit(season.league_id, byUserId, 'captains.set', `${ids.join(',') || 'none'} for user ${forUserId}`);
+		return null;
+	});
+}
+
+/**
+ * The commissioner's "End draft". With Tera Captains the season moves on to choosing them;
+ * otherwise it goes straight to the schedule. Returns the new status.
+ */
+export function endDraft(season: Season, settings: Settings, userId: number) {
+	if (settings.teraMode !== 'captains') {
+		completeDraft(season, userId);
+		return 'regular';
+	}
+	run("UPDATE seasons SET status = 'captains' WHERE id = ?", season.id);
+	audit(season.league_id, userId, 'draft.end');
+	return 'captains';
+}
+
 export function completeDraft(season: Season, userId: number) {
 	const players = draftPlayers(season.id).map(p => p.user_id);
 	tx(() => {
@@ -577,9 +642,10 @@ export function roundRobin(ids: number[]): [number, number][][] {
 
 // ---------- rosters ----------
 
+/** A player's picks. `tc_cost` is what a captain spent; `pool_tc_cost` is what it would cost as one (NULL: it can't be). */
 export function roster(seasonId: number, userId: number) {
-	return all<{ species_id: string, name: string, cost: number, captain: number, tc_cost: number | null }>(
-		`SELECT picks.species_id, pool.name, picks.cost, picks.captain, picks.tc_cost FROM picks JOIN pool
+	return all<{ species_id: string, name: string, cost: number, captain: number, tc_cost: number | null, pool_tc_cost: number | null }>(
+		`SELECT picks.species_id, pool.name, picks.cost, picks.captain, picks.tc_cost, pool.tc_cost AS pool_tc_cost FROM picks JOIN pool
 		ON pool.season_id = picks.season_id AND pool.species_id = picks.species_id
 		WHERE picks.season_id = ? AND picks.user_id = ? ORDER BY picks.cost DESC, pool.name`, seasonId, userId);
 }
@@ -805,13 +871,15 @@ export function showdownData() {
 		if (!season) continue;
 		const mod = settingsOf(l).mod;
 		const index = poolIndex(season.id);
+		// Captains chosen but not yet locked don't reach Showdown
+		const revealed = captainsRevealed(season);
 		const byUser: typeof rosters[string] = {};
 		for (const p of all<{ species_id: string, captain: number, showdown_id: string }>(`SELECT picks.species_id, picks.captain, users.showdown_id
 			FROM picks JOIN users ON users.id = picks.user_id WHERE picks.season_id = ?`, season.id)) {
 			const entry = (byUser[p.showdown_id] ||= { species: [], captains: [] });
 			const ids = entryIds(index, p.species_id, mod);
 			entry.species.push(...ids);
-			if (p.captain) entry.captains.push(...ids);
+			if (p.captain && revealed) entry.captains.push(...ids);
 		}
 		rosters[toID(l.format_name)] = byUser;
 	}

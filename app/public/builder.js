@@ -369,7 +369,8 @@
 			</div>
 			<h3 style="margin:16px 0 8px">Tera type</h3>
 			${tera ? `<div class="tera-pick">${D.types.map(t => `<button type="button" class="${t === set.teraType ? 'on' : ''}" data-tera="${t}">${t === 'Stellar' ? '<span class="type t-stellar">Stellar</span>' : typeTag(t)}</button>`).join('')}</div>` :
-				`<p class="muted" style="margin:0">${B.teraMode === 'none' ? 'Terastallization is off in this league.' : 'Only Tera Captains can Terastallize.'}</p>`}
+				`<p class="muted" style="margin:0">${B.teraMode === 'none' ? 'Terastallization is off in this league.' : B.choosingCaptains ?
+					`Only Tera Captains can Terastallize. <a href="/l/${B.leagueId}/draft">Choose yours in the Draft room</a>.` : 'Only Tera Captains can Terastallize.'}</p>`}
 		</div>`;
 	}
 

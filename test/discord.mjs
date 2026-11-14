@@ -268,9 +268,8 @@ const sitePick = async (who, species) => {
 	await settled();
 };
 /** /draft then Confirm, as the player on the clock would. */
-const discordPick = async (who, species, captain) => {
-	const reply = await command(who, 'draft', { pokemon: species, ...(captain ? { captain: true } : {}) });
-	// The green button: "Confirm", or "Confirm normal pick" when it could also be a captain
+const discordPick = async (who, species) => {
+	const reply = await command(who, 'draft', { pokemon: species });
 	const confirm = buttons(reply).find(b => b.style === 3);
 	assert.ok(confirm, `confirm step for ${species}: ${JSON.stringify(reply)}`);
 	const done = await press(who, confirm.custom_id);
@@ -347,8 +346,7 @@ test('starting the draft posts the board and pings the first player', async () =
 	const draftId = String(700000000000000000n + BigInt(D.COMMANDS.findIndex(c => c.name === 'draft')));
 	assert.equal(how, `**How to pick:** You can draft directly through Discord by typing </draft:${draftId}> ` +
 		`(start typing a name, a type or a price, then choose from the list), or draft on the website here: http://league.test/l/${leagueId}/draft`);
-	assert.equal(captain, '**Tera Captain:** Only Tera captains can Terastallize in battle. Drafting a Pokémon as a Tera captain costs its normal points plus Tera points ' +
-		'from a separate budget. You have 1 captain slot and 28 Tera points left.');
+	assert.equal(captain, '**Tera Captains** are chosen after the draft: up to 1 of your Pokémon, from a separate 28-point Tera budget.');
 	assert.deepEqual(rest, []);
 	// No buttons at all: no Finish drafting yet (Alice needs 2 more), no link button for an http site, and no empty row
 	assert.deepEqual(draftMsgs()[1].components, []);
@@ -408,39 +406,27 @@ test('/draft leads to the confirm step; buttons left from the old picker say pic
 	const before = { calls: fake.calls.length, ping: JSON.stringify(draftMsgs()[1]) };
 	const s = season(), settings = L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId));
 	const state = L.draftState(s, settings);
-	const legal = poolRows().filter(p => !p.banned && !L.pickProblem(s, settings, state, alice.id, p.species_id, false));
+	const legal = poolRows().filter(p => !p.banned && !L.pickProblem(s, settings, state, alice.id, p.species_id));
 
-	// A captain-eligible Pokémon gets a second confirm button; Garchomp has no Tera price and doesn't
-	const tc = legal.find(p => p.tc_cost != null && !L.pickProblem(s, settings, state, alice.id, p.species_id, true));
+	// Even a Pokémon that could be a Tera Captain is a plain pick: captains are chosen after the draft
+	const tc = legal.find(p => p.tc_cost != null);
 	let step = await command(alice, 'draft', { pokemon: tc.species_id });
 	assert.equal(step.type, 4);
 	assert.equal(step.data.flags, 64);
 	checkIds(step, alice);
 	assert.equal(step.data.embeds[0].title, `Draft ${tc.name} for ${tc.cost}?`);
-	// Both outcomes spelt out, and the plain button says it's the normal pick
-	assert.equal(step.data.embeds[0].description, `Normal pick: ${tc.cost} points, ${99 - tc.cost} left for at least 1 more pick.\n` +
-		`As a Tera Captain: ${tc.cost} points + ${tc.tc_cost} Tera, ${28 - tc.tc_cost} Tera left. Captains can Terastallize; this can't be added later.`);
-	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm normal pick', `Confirm as Tera Captain (+${tc.tc_cost} Tera)`, 'Cancel']);
+	assert.equal(step.data.embeds[0].description, `You'll have ${99 - tc.cost} left for at least 1 more pick.`);
+	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Cancel']);
 	assert.equal(buttons(step)[0].custom_id, `draft:${s.id}:0:${tc.species_id}:0:${alice.id}`);
-	assert.equal(buttons(step)[1].custom_id, `draft:${s.id}:0:${tc.species_id}:1:${alice.id}`);
 	// Another player can't press Alice's confirm step
 	assert.equal((await press(bob, buttons(step)[0].custom_id)).data.content, 'This is for another player.');
-	step = await command(alice, 'draft', { pokemon: 'garchomp' });
-	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Cancel']);
-	assert.match(step.data.embeds[0].description, /\nGarchomp can't be a Tera Captain\.$/);
-	// Asked for as a captain: the captain step
-	step = await command(alice, 'draft', { pokemon: tc.species_id, captain: true });
-	assert.equal(step.data.embeds[0].title, `Draft ${tc.name} as a Tera Captain for ${tc.cost} and ${tc.tc_cost} Tera points?`);
-	assert.deepEqual(buttons(step).map(b => b.label), ['Confirm', 'Cancel']);
-	// /draft's autocomplete prices a captain as an extra, before the types
-	const acTc = await autocomplete(alice, 'draft', { pokemon: tc.species_id, captain: true }, 'pokemon');
-	const tcLabel = `${tc.name} · ${tc.cost} +${tc.tc_cost} Tera`;
-	assert.ok(acTc.data.choices.some(c => c.value === tc.species_id && c.name === tcLabel), JSON.stringify(acTc.data.choices));
-	// The confirm step says why a normal pick can't also be a captain
-	const full = { ...state, captains: new Map([[alice.id, settings.maxCaptains]]) };
-	const none = R.pickConfirm(settings, full, alice.id, { species_id: 'cheap', name: 'Cheap', cost: 5, tc_cost: 5 }, false, 'x', undefined, 'No captain slots left.');
-	assert.match(none.embeds[0].description, /\nNo captain slots left\.$/);
-	assert.deepEqual(none.components[0].components.map(b => b.label), ['Confirm', 'Cancel']);
+	// /draft no longer has a captain option, and a captain confirm button left from before says where captains went
+	assert.ok(!D.COMMANDS.find(c => c.name === 'draft').options.some(o => o.name === 'captain'));
+	const old = await press(alice, `draft:${s.id}:0:${tc.species_id}:1:${alice.id}`);
+	assert.equal(old.type, 7);
+	assert.match(old.data.content, /^Tera Captains are chosen after the draft now\./);
+	// /captains mid-draft says to wait
+	assert.equal((await command(alice, 'captains', {})).data.content, 'Tera Captains are chosen after the draft.');
 
 	// The picker is gone: a ping posted when it had a Draft a Pokémon button points anyone who presses it at /draft
 	assert.equal(R.picker, undefined);
@@ -474,7 +460,7 @@ test('/draft autocomplete reads the box as a name, a type or a price', async () 
 	const { mon } = await import('../app/dex.ts');
 	const s = season(), settings = L.settingsOf(one('SELECT * FROM leagues WHERE id = ?', leagueId));
 	const state = L.draftState(s, settings);
-	const legal = poolRows().filter(p => !p.banned && !L.pickProblem(s, settings, state, alice.id, p.species_id, false));
+	const legal = poolRows().filter(p => !p.banned && !L.pickProblem(s, settings, state, alice.id, p.species_id));
 	const id = t => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
 	const ac = async text => (await autocomplete(alice, 'draft', { pokemon: text }, 'pokemon')).data.choices;
 	const values = async text => (await ac(text)).map(c => c.value);
@@ -521,14 +507,6 @@ test('/draft autocomplete reads the box as a name, a type or a price', async () 
 	assert.ok(priced.length && legal.find(p => p.species_id === priced[0]).cost <= price);
 	// Text that's neither a whole number nor a type: names only
 	assert.deepEqual(await values('1.5'), dedupe(named('1.5')));
-	// The captain option: only what can be a captain now, priced with its Tera
-	choices = (await autocomplete(alice, 'draft', { pokemon: '', captain: true }, 'pokemon')).data.choices;
-	assert.ok(choices.length);
-	for (const c of choices) {
-		const p = legal.find(x => x.species_id === c.value);
-		assert.equal(L.pickProblem(s, settings, state, alice.id, p.species_id, true), null);
-		assert.equal(c.name, `${p.name} · ${p.cost} +${p.tc_cost} Tera`);
-	}
 	// Off the clock: nothing, whatever is typed
 	for (const text of ['', 'ga', 'dragon', '10']) assert.deepEqual((await autocomplete(bob, 'draft', { pokemon: text }, 'pokemon')).data.choices, [], text);
 	// /pokemon's lookup lists names starting with the text first too
@@ -548,8 +526,6 @@ test('/draft off-turn, for a drafted Pokémon and for an unaffordable one return
 	let reply = await command(bob, 'draft', { pokemon: 'garchomp' });
 	assert.equal(reply.data.content, 'Not your pick.');
 	assert.equal(reply.data.flags, 64);
-	reply = await command(alice, 'draft', { pokemon: 'garchomp', captain: true });
-	assert.equal(reply.data.content, "Garchomp can't be a Tera Captain.");
 	// Unaffordable: the commissioner prices Kingambit at the whole budget, leaving nothing for a second pick
 	await alice.req('POST', leagueUrl + '/admin/pool', { id: 'kingambit', field: 'cost', value: '99' });
 	await settled();
@@ -596,7 +572,7 @@ test('after each of several picks the channel holds the board and one ping for t
 		const mine = rosters.fields.find(f => f.value.includes(`<:p_${last.species_id}:`));
 		assert.ok(mine, JSON.stringify(rosters.fields));
 		assert.match(mine.value, new RegExp(`<:p_${last.species_id}:\\d+> ${last.cost}`));
-		assert.match(mine.value, /^\d+ left · 28 Tera\n/, 'Tera points left beside points left');
+		assert.match(mine.value, /^\d+ left\n/, 'points left, and no Tera points: captains come after the draft');
 		assert.ok(!JSON.stringify(rosters.fields).includes(last.name), 'no names in the rosters');
 		const next = players[onClock()];
 		assert.ok(pingText().startsWith(`<@${next.discordId}>, you're up`), `ping for ${next.name}: ${pingText()}`);
@@ -617,10 +593,6 @@ test('a pick made on the site and one made with /draft leave the channel in the 
 	assert.equal(onClock(), dave.id);
 	assert.ok(pingText().startsWith(`<@${dave.discordId}>, you're up: round 2, pick 1.`), 'undo pings Dave again');
 	assert.equal(draftMsgs().length, 2);
-	await discordPick(dave, 'weavile', true);
-	// Weavile as a captain differs from the site pick; undo once more and pick it the same way
-	await alice.req('POST', leagueUrl + '/admin/undo', {});
-	await settled();
 	await discordPick(dave, 'weavile');
 	assert.deepEqual(strip(draftMsgs()), viaSite);
 });
@@ -713,18 +685,62 @@ test('/done finishes drafting with a confirm step', async () => {
 	assert.equal(reply.data.content, "You've already finished drafting.");
 });
 
-test('completing the draft edits the board one last time and removes the ping', async () => {
+test('ending the draft opens Tera Captain choice on the board and removes the ping', async () => {
 	await sitePick(bob, 'heatran');
 	await sitePick(carol, 'skeledirge');
 	// Everyone is full or done
 	assert.equal(onClock(), undefined);
 	assert.equal(draftMsgs().length, 1, 'no one on the clock: no ping');
 	assert.match(boardText(), /Every player is done/);
+	// With Tera Captains the schedule can't be made straight from the draft
+	await alice.req('POST', leagueUrl + '/admin/schedule', {});
+	assert.equal(season().status, 'drafting');
+	await alice.req('POST', leagueUrl + '/admin/end-draft', {});
+	await settled();
+	assert.equal(season().status, 'captains');
+	assert.equal(draftMsgs().length, 1);
+	assert.match(boardText(), /choosing Tera Captains/);
+	assert.match(boardText(), /Choose your Tera Captains with `\/captains`/);
+	assert.match(boardText(), /Not yet: .*Alice/);
+	assert.ok(!boardText().includes('Remaining Draft Pool'));
+});
+
+test('/captains offers a menu of your own Pokémon that can be captains, and keeps the choice private', async () => {
+	const s = season();
+	let reply = await command(alice, 'captains', {});
+	assert.equal(reply.data.flags, 64);
+	const menu = reply.data.components[0].components[0];
+	assert.deepEqual([menu.type, menu.custom_id, menu.min_values, menu.max_values], [3, `captains:${s.id}:${alice.id}`, 0, 1]);
+	const eligible = L.roster(s.id, alice.id).filter(r => r.pool_tc_cost != null);
+	assert.ok(eligible.length, 'Alice has a Pokémon that can be a captain');
+	assert.deepEqual(menu.options.map(o => o.value).sort(), eligible.map(r => r.species_id).sort());
+	assert.ok(!menu.options.some(o => o.value === 'garchomp'), "Garchomp can't be a captain, so it isn't offered");
+	for (const o of menu.options) assert.equal(o.description, `${eligible.find(r => r.species_id === o.value).pool_tc_cost} Tera points`);
+	// Someone else's menu isn't theirs to use
+	assert.equal((await select(bob, menu.custom_id, eligible[0].species_id)).data.content, 'This is for another player.');
+	// Choosing saves and shows the menu again with the choice ticked
+	const saved = await select(alice, menu.custom_id, eligible[0].species_id);
+	assert.equal(saved.type, 7);
+	assert.match(saved.data.content, /^\*\*Saved\.\*\*/);
+	assert.ok(saved.data.components[0].components[0].options.find(o => o.value === eligible[0].species_id).default);
+	await settled();
+	assert.deepEqual(L.roster(s.id, alice.id).filter(r => r.captain).map(r => r.species_id), [eligible[0].species_id]);
+	// The board says Alice has chosen, but not what
+	assert.match(boardText(), /Chosen: .*Alice/);
+	assert.ok(!boardText().includes('(TC)'), 'captains stay hidden until the lock');
+	// A Pokémon not on Alice's team is refused
+	const refused = await select(alice, menu.custom_id, 'heatran');
+	assert.match(refused.data.content, /^\*\*Not saved:\*\* Tera Captains have to be Pokémon on the same team\./);
+});
+
+test('locking the captains makes the schedule and shows them on the final board', async () => {
 	await alice.req('POST', leagueUrl + '/admin/schedule', {});
 	await settled();
+	assert.equal(season().status, 'regular');
 	assert.equal(draftMsgs().length, 1);
 	assert.match(boardText(), /draft complete/);
-	assert.ok(!boardText().includes('Remaining Draft Pool'));
+	assert.ok(boardText().includes('(TC)'), 'captains shown once locked');
+	assert.match((await command(alice, 'captains', {})).data.content, /^Tera Captains are locked\./);
 });
 
 // ---------- season ----------
@@ -888,7 +904,7 @@ test('a board for the largest pool and a 16-player full draft stays under 6000 c
 	L.startDraft(s, users[0], users);
 	// Longest names first, so rosters are as long as they can be
 	const pool = all('SELECT species_id FROM pool WHERE season_id = ? AND banned = 0 ORDER BY length(name) DESC, cost', s.id).map(p => p.species_id);
-	// The same draft rendered as a captains league too, whose rosters also carry Tera points left
+	// The same draft rendered as a captains league too
 	const captains = { ...settings, teraMode: 'captains', tcBudget: 28, maxCaptains: 2 };
 	const check = label => {
 		s = L.currentSeason(id);
@@ -911,12 +927,12 @@ test('a board for the largest pool and a 16-player full draft stays under 6000 c
 		const state = L.draftState(s, settings);
 		if (!state.onClock) break;
 		const uid = state.onClock.user_id;
-		const species = pool.find(p => !L.pickProblem(s, settings, state, uid, p, false));
+		const species = pool.find(p => !L.pickProblem(s, settings, state, uid, p));
 		if (!species) {
 			assert.equal(L.finishDrafting(s, settings, uid), null);
 			continue;
 		}
-		assert.equal(L.makePick(s, settings, uid, uid, species, false), null);
+		assert.equal(L.makePick(s, settings, uid, uid, species), null);
 		if (++made % 48 === 0) check(`after ${made} picks`);
 	}
 	assert.ok(made >= 16 * settings.rosterMin, `${made} picks`);
@@ -938,15 +954,15 @@ test('the board names players whose turns are skipped because they are stuck', (
 	run('UPDATE pool SET cost = 50 WHERE season_id = ?', s().id);
 	const [cheap, a, b] = all('SELECT species_id FROM pool WHERE season_id = ? AND banned = 0 LIMIT 3', s().id).map(p => p.species_id);
 	run('UPDATE pool SET cost = 10 WHERE season_id = ? AND species_id = ?', s().id, cheap);
-	assert.equal(L.makePick(s(), settings, users[0], users[0], a, false), null);
-	assert.equal(L.makePick(s(), settings, users[1], users[1], cheap, false), null);
+	assert.equal(L.makePick(s(), settings, users[0], users[0], a), null);
+	assert.equal(L.makePick(s(), settings, users[1], users[1], cheap), null);
 	let text = JSON.stringify(R.board(league, s(), settings).embeds);
 	assert.match(text, /\*\*StuckB\*\* is on the clock/);
 	assert.match(text, /\*\*StuckA\*\* can't afford enough of the Pokémon left to reach 2, so their turns are skipped/);
 	assert.match(text, /StuckA · skipped/);
 	assert.doesNotMatch(R.clockPing(league, s().id, settings, L.draftState(s(), settings)).content, /StuckA/);
 	// StuckB spends the rest: nobody is on the clock, and the board doesn't claim everyone is done
-	assert.equal(L.makePick(s(), settings, users[1], users[1], b, false), null);
+	assert.equal(L.makePick(s(), settings, users[1], users[1], b), null);
 	text = JSON.stringify(R.board(league, s(), settings).embeds);
 	assert.match(text, /Nobody can pick/);
 	assert.doesNotMatch(text, /Every player is done/);

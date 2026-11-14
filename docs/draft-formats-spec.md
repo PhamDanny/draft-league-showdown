@@ -174,7 +174,7 @@ Banned forme rows that the rules in section 3 already enforce: Zygarde-Complete 
 
 ## 5. Tera Captain budget (`sv`, `svlowtier`)
 
-Each coach has two budgets: the points budget for Pokémon and a 28-point Tera budget for captains. Drafting a Pokémon as a captain costs its normal price from the points budget **and** its `tc` price from the Tera budget.
+Each coach has two budgets: the points budget for Pokémon and a 28-point Tera budget for captains. Every pick costs its normal price from the points budget. **After the draft** each coach chooses up to `maxCaptains` of their Pokémon as Tera Captains, paying each one's `tc` price from the Tera budget. (Superseded in part by [`tera-captains-spec.md`](tera-captains-spec.md): the bullets below describe the original pick-time captains; captains are no longer chosen while drafting.)
 
 - Add a nullable `tc_cost INTEGER` column to `picks` (follow the pattern `app/db.ts` already uses for adding columns).
 - `makePick`: `picks.cost` is always `pool.cost`; a captain pick also stores `picks.tc_cost = pool.tc_cost`. Old captain picks have `tc_cost` NULL; treat NULL as 0 Tera points spent. No backfill.

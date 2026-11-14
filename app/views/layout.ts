@@ -33,14 +33,14 @@ export interface PageOpts {
 	flash?: string;
 	body: string;
 	scripts?: string;
-	/** The league's current season status; the Draft tab shows only during setup and drafting. */
+	/** The league's current season status; the Draft tab shows only during setup, drafting and choosing Tera Captains. */
 	seasonStatus?: string;
 	/** Header Play button: the viewer's next unfinished series. Absent when there is none. */
 	play?: { href: string, label: string };
 }
 
 function tabsFor(seasonStatus?: string, commissioner?: boolean): [string, string][] {
-	const drafting = seasonStatus === 'setup' || seasonStatus === 'drafting';
+	const drafting = seasonStatus === 'setup' || seasonStatus === 'drafting' || seasonStatus === 'captains';
 	return [
 		['', 'Home'], ['schedule', 'Schedule'], ['teams', 'Teams'],
 		...(drafting ? [['draft', 'Draft'] as [string, string]] : []),

@@ -63,8 +63,8 @@ assert(rules.includes('SV: Gen 9 Singles') && rules.includes('separate 28-point 
 await alice.req('POST', leagueUrl + '/admin/start-draft', { order: 'listed' });
 
 const plans = {
-	Alice: [['garchomp', 0], ['weavile', 1], ['clefable', 0], ['toxapex', 0], ['rotomwash', 0], ['corviknight', 0]],
-	Bob: [['greattusk', 0], ['gholdengo', 0], ['hippowdon', 1], ['azumarill', 0], ['skeledirge', 0], ['zapdos', 0]],
+	Alice: ['garchomp', 'weavile', 'clefable', 'toxapex', 'rotomwash', 'corviknight'],
+	Bob: ['greattusk', 'gholdengo', 'hippowdon', 'azumarill', 'skeledirge', 'zapdos'],
 };
 // snake: A B B A A B B A A B B A
 const order = ['Alice', 'Bob', 'Bob', 'Alice', 'Alice', 'Bob', 'Bob', 'Alice', 'Alice', 'Bob', 'Bob', 'Alice'];
@@ -74,37 +74,56 @@ const who = { Alice: alice, Bob: bob };
 r = await bob.req('POST', leagueUrl + '/draft/pick', { species: 'dragapult' });
 assert(r.headers.get('location').includes('msg='), 'out-of-turn pick rejected');
 const msgOf = r => decodeURIComponent(r.headers.get('location').split('msg=')[1] || '');
-r = await alice.req('POST', leagueUrl + '/draft/pick', { species: 'garchomp', captain: '1' });
-assert(msgOf(r).includes("can't be a Tera Captain"), 'Garchomp as a Tera Captain rejected in SV');
 r = await alice.req('POST', leagueUrl + '/draft/pick', { species: 'arceus' });
 assert(msgOf(r) === 'Not in the draft pool.', 'banned Pokémon rejected on the picker\'s own turn');
-// The pool explains Tera Captains, prices them as an extra, and says why a Captain button is off
+// The pool shows each Pokémon's Tera price for information only: Tera Captains are chosen after the draft
 let poolPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
-assert(poolPage.includes('Tera Captains can Terastallize in battle. A captain costs its normal points plus its Tera points'), 'pool explains Tera Captains');
-assert(/data-name="Weavile" data-cost="12" data-could-captain="1">/.test(poolPage), 'normal Weavile pick notes it could have been a captain');
-assert(poolPage.includes('>+&nbsp;12 Tera pts</button>') && poolPage.includes('<span class="ph-tera">As Tera Captain</span>'), 'Captain button shows its Tera points under its heading');
-assert(/data-name="Garchomp" data-cost="\d+">/.test(poolPage) && poolPage.includes('title="Garchomp can\'t be a Tera Captain"'), 'Garchomp marked as never a captain');
-assert(/Tera Captains selected<\/h3><div class="num"[^>]*>0 \/ 1</.test(poolPage) && /Pokémon selected<\/h3><div class="num">0 \/ 6</.test(poolPage), 'tiles count captains and Pokémon selected');
-assert(poolPage.includes('Tera points left</h3>'), 'Tera points tile shows while captains are left');
-poolPage = await (await bob.req('GET', leagueUrl + '/draft')).text();
-assert(/disabled title="Not your turn" aria-label="Draft Weavile as a Tera Captain for 12 points plus 12 Tera points\. Not your turn"/.test(poolPage), 'off-turn Captain button says why');
+assert(poolPage.includes('Tera Captains are chosen after the draft, from a separate 28-point Tera budget.'), 'pool says captains come after the draft');
+assert(poolPage.includes('<span class="ph-tera">Tera</span>') && /title="Weavile can be a Tera Captain for 12 Tera points">12</.test(poolPage), 'Tera column shows Weavile\'s captain price');
+assert(poolPage.includes('title="Garchomp can\'t be a Tera Captain"'), 'Garchomp marked as never a captain');
+assert(!poolPage.includes('As Tera Captain') && !poolPage.includes('data-captain') && !poolPage.includes('Tera Captains selected'), 'no captain buttons or counters while drafting');
+assert(/Pokémon selected<\/h3><div class="num">0 \/ 6</.test(poolPage), 'tiles count Pokémon selected');
 for (const p of order) {
-	const [species, captain] = plans[p][idx[p]++];
-	r = await who[p].req('POST', leagueUrl + '/draft/pick', { species, ...(captain ? { captain: '1' } : {}) });
-	assert(!r.headers.get('location').includes('msg='), `${p} picks ${species}${captain ? ' (TC)' : ''}`);
+	const species = plans[p][idx[p]++];
+	// An old captain field on the form is ignored: a pick is never a captain
+	r = await who[p].req('POST', leagueUrl + '/draft/pick', { species, captain: '1' });
+	assert(!r.headers.get('location').includes('msg='), `${p} picks ${species}`);
 }
 const draftPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
 assert(draftPage.includes('Done'), 'draft shows done');
-// Alice: 71 points (Weavile 12 of it) and 12 Tera points; Bob: 69 points and 5 Tera points
-assert(draftPage.includes('<small><span>49 points</span></small>') && draftPage.includes('<small><span>51 points</span></small>'), 'points budget charged the normal price for captains');
-// Both have drafted their one captain, so their Tera points stop showing, in the tiles and on the board
-assert(!draftPage.includes('Tera points left</h3>'), 'Tera points tile hidden once all captains are drafted');
-assert(!draftPage.includes(' Tera points</small>'), 'board headers drop Tera points once all captains are drafted');
-assert((draftPage.match(/>1\/1 Tera Captains selected</g) || []).length === 2, 'board headers count captains drafted');
-assert(draftPage.includes('<span class="pill tc">Tera Captain</span><span class="c">12 points</span><span class="c">12 Tera points</span>') &&
-	draftPage.includes('<span class="pill tc">Tera Captain</span><span class="c">5 points</span><span class="c">5 Tera points</span>'), 'draft board shows captains\' points and Tera price');
+// Alice: 71 points spent; Bob: 69
+assert(draftPage.includes('<small><span>49 points</span></small>') && draftPage.includes('<small><span>51 points</span></small>'), 'points budget charged each pick its price');
+assert(!draftPage.includes('class="pill tc"'), 'no captains during the draft');
 assert((draftPage.match(/<div class="h rd">/g) || []).length === 6, 'board shows every round');
+
+// ---- Tera Captains, after the draft ----
 await alice.req('POST', leagueUrl + '/admin/schedule', {});
+assert(!/\/series\/\d+/.test(await (await alice.req('GET', leagueUrl + '/schedule')).text()), 'no schedule before the captains are chosen');
+r = await alice.req('POST', leagueUrl + '/admin/end-draft', {});
+assert(r.status === 302, 'commissioner ends the draft');
+let capPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
+assert(capPage.includes('Choose your Tera Captains') && capPage.includes('Choosing Tera Captains'), 'draft room asks for Tera Captains');
+assert(/value="garchomp" data-tc=""\s+disabled/.test(capPage), 'Garchomp can\'t be ticked');
+r = await alice.req('POST', leagueUrl + '/draft/captains', [['captain', 'garchomp']]);
+assert(msgOf(r) === "Garchomp can't be a Tera Captain.", 'Garchomp as a Tera Captain rejected in SV');
+r = await alice.req('POST', leagueUrl + '/draft/captains', [['captain', 'weavile'], ['captain', 'clefable']]);
+assert(msgOf(r) === 'At most 1 Tera Captains.', 'one captain slot');
+r = await alice.req('POST', leagueUrl + '/draft/captains', [['captain', 'greattusk']]);
+assert(msgOf(r) === 'Tera Captains have to be Pokémon on the same team.', "can't choose another player's Pokémon");
+r = await alice.req('POST', leagueUrl + '/draft/captains', [['captain', 'weavile']]);
+assert(!msgOf(r) && r.headers.get('location').includes('ok=1'), 'Alice chooses Weavile');
+capPage = await (await alice.req('GET', leagueUrl + '/draft')).text();
+assert(/value="weavile" data-tc="12" checked/.test(capPage), 'Weavile is ticked');
+let bobPage = await (await bob.req('GET', leagueUrl + '/draft')).text();
+assert(!bobPage.includes('class="pill tc"') && !(await (await bob.req('GET', leagueUrl + '/teams')).text()).includes('pill tc'), 'Bob can\'t see Alice\'s captain before the lock');
+assert(/Alice<\/span><span class="spacer"><\/span>\s*<span class="pill final">Chosen<\/span>/.test(bobPage), 'Bob sees that Alice has chosen');
+r = await bob.req('POST', leagueUrl + '/draft/captains', [['captain', 'hippowdon']]);
+assert(!msgOf(r), 'Bob chooses Hippowdon');
+await alice.req('POST', leagueUrl + '/admin/schedule', {});
+const lockedBoard = await (await bob.req('GET', leagueUrl + '/draft')).text();
+assert((lockedBoard.match(/<span class="pill tc">Tera Captain<\/span>/g) || []).length === 2, 'both captains shown once locked');
+r = await bob.req('POST', leagueUrl + '/draft/captains', [['captain', 'zapdos']]);
+assert(msgOf(r) === 'Tera Captains are locked.', 'players can\'t change captains after the lock');
 const sched = await (await alice.req('GET', leagueUrl + '/schedule')).text();
 const seriesId = /\/series\/(\d+)/.exec(sched)[1];
 assert(seriesId, 'schedule generated');
@@ -191,8 +210,8 @@ assert(A.lines.some(l => l.includes("isn't on your roster")), 'off-roster team r
 
 async function playGame(n, forfeit) {
 	const before = A.lines.filter(l => l.startsWith('|win|') || l.startsWith('|tie')).length;
-	A.send(`|/utm ${makeTeam(plans.Alice.map(x => x[0]))}`);
-	B.send(`|/utm ${makeTeam(plans.Bob.map(x => x[0]))}`);
+	A.send(`|/utm ${makeTeam(plans.Alice)}`);
+	B.send(`|/utm ${makeTeam(plans.Bob)}`);
 	A.send(`|/challenge Bob, ${format}`);
 	await new Promise(r => setTimeout(r, 800));
 	B.send(`|/accept Alice`);
@@ -242,8 +261,8 @@ assert((await (await alice.req('GET', league2 + '/admin/settings')).text()).incl
 assert((await (await alice.req('GET', league2 + '/rules')).text()).includes('Each match'), 'rules page shows team preview');
 await alice.req('POST', league2 + '/admin/start-draft', { order: 'listed' });
 const plans2 = {
-	Alice: [...plans.Alice.map(x => x[0]), 'dragonite', 'kingambit'], // Dragapult is banned in SV
-	Bob: [...plans.Bob.map(x => x[0]), 'heatran', 'ironvaliant'],
+	Alice: [...plans.Alice, 'dragonite', 'kingambit'], // Dragapult is banned in SV
+	Bob: [...plans.Bob, 'heatran', 'ironvaliant'],
 };
 const idx2 = { Alice: 0, Bob: 0 };
 for (const p of [...order, 'Alice', 'Bob', 'Bob', 'Alice']) {
@@ -374,7 +393,7 @@ assert(vgcRules.includes('SV VGC: Gen 9 Doubles, bring 6, pick 4, level 50') && 
 await alice.req('POST', league4 + '/admin/start-draft', { order: 'listed' });
 const idx4 = { Alice: 0, Bob: 0 };
 for (const p of order) {
-	const species = plans[p][idx4[p]++][0];
+	const species = plans[p][idx4[p]++];
 	r = await who[p].req('POST', league4 + '/draft/pick', { species });
 	if (r.headers.get('location').includes('msg=')) assert(false, `VGC: ${p} picks ${species}: ${msgOf(r)}`);
 }
@@ -387,8 +406,8 @@ const B5 = await connect(bob);
 autoplay(A5, 'Alice');
 autoplay(B5, 'Bob');
 const format4 = 'gen9vgcleague';
-const aliceIds = plans.Alice.map(x => x[0]);
-const bobIds = plans.Bob.map(x => x[0]);
+const aliceIds = plans.Alice;
+const bobIds = plans.Bob;
 A5.send(`|/utm ${makeTeam(aliceIds, { items: { garchomp: 'Leftovers', weavile: 'Leftovers' } })}`);
 A5.send(`|/challenge Bob, ${format4}`);
 await new Promise(r => setTimeout(r, 1500));

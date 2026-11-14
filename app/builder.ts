@@ -142,6 +142,8 @@ function builderContext(req: Request) {
 	return {
 		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name,
 		format: toID(league.format_name), teraMode: settings.teraMode, ...gameOf(settings),
+		// While Tera Captains are being chosen after the draft, the builder points players at the draft room
+		choosingCaptains: season.status === 'captains',
 		roster: myRoster, rosters, scouting, weeks,
 		teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, myRoster.length),
 		current: L.currentWeek(season.id),
@@ -177,7 +179,7 @@ export function builderRoutes(lg: Router) {
 		if (!ctx.roster.length) {
 			const { league, season } = req as LReq;
 			return render(req, res, 'Teambuilder', 'builder', `<h1>Teambuilder</h1><p class="muted">You don't have a roster yet. It appears here once you've drafted.</p>
-				${season.status === 'drafting' ? `<a class="btn primary" href="/l/${league.id}/draft">Draft room</a>` : ''}`);
+				${season.status === 'drafting' || season.status === 'captains' ? `<a class="btn primary" href="/l/${league.id}/draft">Draft room</a>` : ''}`);
 		}
 		render(req, res, 'Teambuilder', 'builder', '<div id="builder"></div>',
 			`<script>window.BUILDER = ${json(ctx)};</script><script src="/static/calc/data.js"></script><script src="/static/calc/calc.js"></script>

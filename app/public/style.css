@@ -592,16 +592,19 @@ label.chk{gap:6px;font-size:14px}
 .tiles.four{grid-template-columns:repeat(4,minmax(0,1fr))}
 .tiles h3{margin:0}
 .tiles .num{font-size:16px}
-/* Draft and Captain buttons keep one width whatever the price, so they line up down the pool */
+/* Draft buttons keep one width whatever the price, so they line up down the pool */
 .pool-list .btn.sm{min-width:72px;gap:0;font-variant-numeric:tabular-nums}
-.pool-list .btn.sm.tera{min-width:112px}
-/* A captain pays both prices, so hovering its button lights up the row's Draft button too */
-.pool-list .row:has(.btn.tera:not([disabled]):hover) .btn.sm:not(.tera){background:var(--tera-soft);border-color:var(--tera);color:var(--tera)}
-/* Column headings over the Draft and Tera Captain buttons; they stay put while the pool scrolls */
+/* Column headings over the Tera price and Draft button; they stay put while the pool scrolls */
 .pool-list .row.pool-head{position:sticky;top:0;z-index:1;background:var(--surface);padding:0 0 6px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.pool-head .ph-draft{width:72px;text-align:center}.pool-head .ph-tera{width:112px;text-align:center}
-/* A Pokémon that can never be a captain: the Captain button's width, muted */
-.pool-list .btn.no-tc,.pool-list .btn.no-tc:hover{border-color:transparent;background:none;color:var(--muted);font-weight:400;cursor:default;justify-content:center}
+.pool-head .ph-draft{width:72px;text-align:center}.pool-head .ph-tera{width:44px;text-align:center}
+/* Captain price, for information only: Tera Captains are chosen after the draft */
+.pool-list .tc-price{width:44px;text-align:center;font-size:13px;color:var(--tera)}
+.pool-list .tc-price.none{color:var(--muted)}
+/* Tera Captain picker (after the draft) */
+.cap-list label.cap{cursor:pointer}
+.cap-list label.cap:has(input:disabled){cursor:default;opacity:.6}
+.cap-list label.cap:has(input:checked){color:var(--tera)}
+.cap-list input{accent-color:var(--tera);width:16px;height:16px;margin:0}
 .pool-list .row{gap:8px}
 .tc-note{font-size:13px;margin:0 0 10px}
 .board .h small.tc-left{color:var(--tera)}

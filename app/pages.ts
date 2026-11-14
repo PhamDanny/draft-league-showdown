@@ -30,7 +30,18 @@ const LIVE_SCRIPT = (leagueId: number, rootId: string) => `<script>
 				const q = document.getElementById('pool-search')?.value;
 				const t = document.getElementById('pool-type')?.value;
 				const scroll = document.querySelector('.pool-list')?.scrollTop;
+				// Unsaved Tera Captain ticks survive someone else's update
+				const capForm = document.querySelector('form.captains[data-dirty]');
+				const ticked = capForm && fresh.querySelector('form.captains[data-for="' + capForm.dataset.for + '"]')
+					? [...capForm.querySelectorAll('input[name=captain]:checked')].map(i => i.value) : null;
 				cur.replaceWith(fresh);
+				const capNow = document.querySelector('form.captains');
+				if (ticked) {
+					capNow.querySelectorAll('input[name=captain]').forEach(i => { i.checked = ticked.includes(i.value); });
+					capNow.dataset.dirty = '1';
+					capNow.querySelector('[data-saved]')?.remove();
+				}
+				if (capNow) window.updateCaptains?.(capNow);
 				if (q != null) document.getElementById('pool-search').value = q;
 				if (t != null) document.getElementById('pool-type').value = t;
 				if (scroll != null) document.querySelector('.pool-list').scrollTop = scroll;
@@ -69,8 +80,8 @@ if (document.getElementById('pool-afford')) window.filterPool();
 // its own form, so an update arriving mid-decision neither closes it nor detaches the form it submits.
 const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel bt-dialog">
 	<form method="post" action="/l/${leagueId}/draft/pick">
-		<h2 id="pick-q" style="margin-top:0"></h2><p id="pick-left" class="muted"></p><p id="pick-note" class="muted" hidden>This drafts it as a normal pick. It can't become a Tera Captain later.</p>
-		<input type="hidden" name="species"><input type="hidden" name="captain"><input type="hidden" name="for">
+		<h2 id="pick-q" style="margin-top:0"></h2><p id="pick-left" class="muted"></p>
+		<input type="hidden" name="species"><input type="hidden" name="for">
 		<div class="row" style="justify-content:flex-end"><button class="btn" type="button" value="cancel" autofocus>Cancel</button><button class="btn primary" type="submit">Draft</button></div>
 	</form>
 </dialog>
@@ -84,21 +95,85 @@ const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel
 		if (!src) return;
 		e.preventDefault();
 		const root = document.getElementById('draft-root');
-		const { name, cost, captain, tc, couldCaptain } = src.dataset;
+		const { name, cost } = src.dataset;
 		const who = root?.dataset.for || '';
 		const left = Number(root?.dataset.left) - Number(cost);
-		const price = cost + ' points' + (captain ? ' and ' + tc + ' Tera points' : '');
-		dlg.querySelector('#pick-q').textContent = 'Draft ' + name + (captain ? ' as a Tera Captain' : '') + ' for ' + (who || price) + '?';
-		dlg.querySelector('#pick-left').textContent = (who ? price + '. ' + who + ' would have ' : 'You would have ') + left + ' points' +
-			(captain ? ' and ' + (Number(root?.dataset.tcLeft) - Number(tc)) + ' Tera points' : '') + ' left.';
+		const price = cost + ' points';
 		// Reset on every open: the dialog outlives the row that opened it
-		dlg.querySelector('#pick-note').hidden = !couldCaptain;
+		dlg.querySelector('#pick-q').textContent = 'Draft ' + name + ' for ' + (who || price) + '?';
+		dlg.querySelector('#pick-left').textContent = (who ? price + '. ' + who + ' would have ' : 'You would have ') + left + ' points left.';
 		f.species.value = src.species.value;
-		f.captain.value = captain ? '1' : '';
 		f.for.value = root?.dataset.forId || '';
 		dlg.showModal();
 	});
 })();
+</script>`;
+
+/**
+ * The Tera Captain picker: one checkbox per Pokémon on `forUser`'s team. Works as a plain form; the script
+ * keeps the Tera budget and captain count up to date and disables boxes that would go over either.
+ */
+function captainPanel(leagueId: number, season: L.Season, settings: L.Settings, forUser: number, me: number,
+	players: L.DraftPlayer[], saved: boolean, justSaved: boolean) {
+	const r = L.roster(season.id, forUser);
+	const own = forUser === me;
+	const who = players.find(p => p.user_id === forUser)?.showdown_name || '';
+	const used = r.reduce((a, x) => a + (x.captain && x.pool_tc_cost != null ? x.pool_tc_cost : 0), 0);
+	const count = r.filter(x => x.captain).length;
+	const locked = season.status !== 'captains';
+	const picker = players.length > 1 ? `<form method="get" class="row" style="gap:8px;margin:0 0 12px">
+		<label class="f" style="flex:1">Choosing for<select name="for" onchange="this.form.submit()">${players.map(p =>
+			`<option value="${p.user_id}" ${p.user_id === forUser ? 'selected' : ''}>${esc(p.showdown_name)}${p.user_id === me ? ' (you)' : ''}</option>`).join('')}</select></label>
+		<noscript><button class="btn sm" type="submit">Show</button></noscript></form>` : '';
+	return `<section class="panel">
+		<div class="row panel-head"><h2>${own ? 'Choose your Tera Captains' : `Tera Captains for ${esc(who)}`}</h2></div>
+		${picker}
+		<p class="muted" style="margin:0 0 10px">Only Tera Captains can Terastallize in battle. Up to ${settings.maxCaptains}, paid from a separate ${settings.tcBudget}-point Tera budget.
+			${locked ? 'Captains are locked; changing them here can invalidate teams already built.' : 'You can change them until the commissioner locks them and makes the schedule.'}</p>
+		<form method="post" action="/l/${leagueId}/draft/captains" class="captains" data-for="${forUser}" data-budget="${settings.tcBudget}" data-max="${settings.maxCaptains}">
+			<input type="hidden" name="for" value="${forUser}">
+			<div class="tiles two">
+				<div><h3>Tera points</h3><div class="num"><span data-used>${used}</span> / ${settings.tcBudget}</div></div>
+				<div><h3>Captains</h3><div class="num"><span data-count>${count}</span> / ${settings.maxCaptains}</div></div>
+			</div>
+			<div class="my-picks cap-list">${r.map(x => {
+				const id = `cap-${esc(x.species_id)}`;
+				const can = x.pool_tc_cost != null;
+				return `<label class="row cap" for="${id}">
+					<input type="checkbox" id="${id}" name="captain" value="${esc(x.species_id)}" data-tc="${x.pool_tc_cost ?? ''}" ${x.captain ? 'checked' : ''} ${can ? '' : 'disabled'}>
+					${sprite(x.species_id, 'sm')}<span class="nm">${esc(x.name)}</span><span class="spacer"></span>
+					<span class="${can ? 'num' : 'muted'}" style="font-size:13px">${can ? `${x.pool_tc_cost} Tera` : 'Can\'t be a Tera Captain'}</span></label>`;
+			}).join('') || '<p class="muted" style="margin:0">No Pokémon on this team.</p>'}</div>
+			<div class="row" style="margin-top:12px"><span class="muted" data-why style="font-size:13px"></span><span class="spacer"></span>
+				${(saved && !locked) || justSaved ? '<span class="pill final" data-saved>Saved</span>' : ''}<button class="btn primary" type="submit">Save captains</button></div>
+		</form></section>`;
+}
+
+const CAPTAIN_SCRIPT = `<script>
+window.updateCaptains = f => {
+	const boxes = [...f.querySelectorAll('input[name=captain]')];
+	const on = boxes.filter(b => b.checked);
+	const used = on.reduce((a, b) => a + Number(b.dataset.tc), 0);
+	const budget = Number(f.dataset.budget), max = Number(f.dataset.max);
+	f.querySelector('[data-used]').textContent = used;
+	f.querySelector('[data-count]').textContent = on.length;
+	for (const b of boxes) {
+		if (b.dataset.tc === '' || b.checked) { b.title = ''; if (b.dataset.tc !== '') b.disabled = false; continue; }
+		const why = on.length >= max ? 'No captain slots left' : used + Number(b.dataset.tc) > budget ? 'Not enough Tera points (' + (budget - used) + ' left)' : '';
+		b.disabled = !!why;
+		b.title = why;
+		b.closest('label').title = why;
+	}
+	f.querySelector('[data-why]').textContent = budget - used + ' Tera points left';
+};
+document.addEventListener('change', e => {
+	const f = e.target.closest('form.captains');
+	if (!f) return;
+	f.dataset.dirty = '1';
+	f.querySelector('[data-saved]')?.remove();
+	window.updateCaptains(f);
+});
+document.querySelectorAll('form.captains').forEach(f => window.updateCaptains(f));
 </script>`;
 
 // ---------- helpers ----------
@@ -288,6 +363,14 @@ export function pageRoutes(app: Express) {
 				${mine ? `<div class="callout"><b>It's your pick.</b> Round ${state.round + 1}.</div>` : ''}
 				<p>${state.onClock ? (mine ? '' : `<b>${esc(state.onClock.showdown_name)}</b> is on the clock (round ${state.round + 1}).`) : 'The draft is complete. Waiting for the commissioner to make the schedule.'}</p>
 				<a class="btn primary" href="/l/${league.id}/draft">Draft room</a></section>`;
+		} else if (season.status === 'captains') {
+			const playing = L.draftPlayers(season.id).some(p => p.user_id === me);
+			const done = L.captainsChosen(season.id).has(me);
+			main = `<section class="panel"><h2>Tera Captains</h2>
+				${playing && !done ? `<div class="callout"><b>Choose your Tera Captains.</b> The draft is over; pick which of your Pokémon can Terastallize.</div>` : ''}
+				<p>${playing && done ? 'Your Tera Captains are saved. You can change them until the commissioner locks them and makes the schedule.' :
+					'The draft is over. Players are choosing their Tera Captains; the schedule is made once the commissioner locks them.'}</p>
+				<a class="btn primary" href="/l/${league.id}/draft">${playing ? 'Choose Tera Captains' : 'Draft room'}</a></section>`;
 		} else {
 			const my = ms.find(m => m.p1 === me || m.p2 === me);
 			let card;
@@ -364,7 +447,7 @@ export function pageRoutes(app: Express) {
 		const teamCol = (uid: number) => {
 			if (!final) {
 				return `<section class="panel"><h2>${esc(n.get(uid))}</h2><div class="bench">${L.roster(season.id, uid).map(r =>
-					monChip(r.species_id, { name: r.name, captain: settings.teraMode === 'captains' && !!r.captain })).join('')}</div></section>`;
+					monChip(r.species_id, { name: r.name, captain: settings.teraMode === 'captains' && L.captainsRevealed(season) && !!r.captain })).join('')}</div></section>`;
 			}
 			const sets = new Map<string, any>();
 			const entry = L.rosterFormes(season.id, uid, settings.mod);
@@ -439,6 +522,8 @@ export function pageRoutes(app: Express) {
 	lg.get('/teams', (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const players = season.status === 'setup' ? [] : L.draftPlayers(season.id);
+		// Captains stay private until the commissioner locks them, except to the player who chose them
+		const showCaps = (uid: number) => settings.teraMode === 'captains' && (L.captainsRevealed(season) || uid === req.user!.id);
 		render(req, res, {
 			title: 'Teams', tab: 'teams',
 			body: `<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Teams</h1><span class="spacer"></span>${season.status === 'regular' ? teamsSeg(league.id, 'rosters') : ''}</div>
@@ -448,7 +533,7 @@ export function pageRoutes(app: Express) {
 				const pts = r.reduce((a, x) => a + x.cost, 0);
 				return `<a class="panel team-card" href="/l/${league.id}/team/${p.user_id}">
 					<div class="row panel-head"><h2>${esc(p.showdown_name)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
-					<div class="bench">${r.map(x => monChip(x.species_id, { name: x.name, captain: settings.teraMode === 'captains' && !!x.captain })).join('')}</div></a>`;
+					<div class="bench">${r.map(x => monChip(x.species_id, { name: x.name, captain: showCaps(p.user_id) && !!x.captain })).join('')}</div></a>`;
 			}).join('')}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
 		});
@@ -460,6 +545,7 @@ export function pageRoutes(app: Express) {
 		const n = names(league.id);
 		if (!n.has(uid)) return res.status(404).send('Not found');
 		const r = L.roster(season.id, uid);
+		const showCaps = settings.teraMode === 'captains' && (L.captainsRevealed(season) || uid === req.user!.id);
 		const st = L.standings(season.id);
 		const rec = st.find(x => x.userId === uid);
 		const ms = L.matches(season.id).filter(m => m.p1 === uid || m.p2 === uid);
@@ -478,7 +564,7 @@ export function pageRoutes(app: Express) {
 			title: n.get(uid)!, tab: 'teams',
 			body: `${rec ? `<p class="eyebrow">${rec.sw}–${rec.sl} · ${st.indexOf(rec) + 1}${['st', 'nd', 'rd'][st.indexOf(rec)] || 'th'}</p>` : ''}<h1>${esc(n.get(uid))}</h1>
 			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
-				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && settings.teraMode === 'captains' ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}${x.captain && settings.teraMode === 'captains' && x.tc_cost != null ? ` +${x.tc_cost} Tera` : ''}</td></tr>`).join('')}
+				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && showCaps ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}${x.captain && showCaps && x.tc_cost != null ? ` +${x.tc_cost} Tera` : ''}</td></tr>`).join('')}
 			</tbody></table></div></section>
 			${ms.length ? `<section class="panel"><h2>Series</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
@@ -504,16 +590,16 @@ export function pageRoutes(app: Express) {
 		// Every round shows from the start, so the board gives a sense of how long the draft is
 		const shownRounds = Math.max(settings.rosterMax, ...state.picks.map(p => p.round + 1));
 		const tc = settings.teraMode === 'captains';
-		// Once a player has all their captains, their Tera points can't be spent, so they stop showing
-		const capsDone = (uid: number) => (state.captains.get(uid) || 0) >= settings.maxCaptains;
+		const choosing = season.status === 'captains';
+		// Captains show on the board only once the commissioner locks them
+		const revealed = tc && L.captainsRevealed(season);
+		const chosen = choosing ? L.captainsChosen(season.id) : new Set<number>();
 		const playerHead = (p: L.DraftPlayer) => {
 			const pts = settings.budget - (state.spent.get(p.user_id) || 0);
-			// Each figure stays on one line; a narrow column wraps between them
-			const tera = tc && !capsDone(p.user_id) ? ` <span class="sep">|</span> <span>${settings.tcBudget - (state.tcSpent.get(p.user_id) || 0)} Tera points</span>` : '';
-			const caps = tc ? `<small class="tc-left">${state.captains.get(p.user_id) || 0}/${settings.maxCaptains} Tera Captains selected</small>` : '';
+			const sub = choosing ? `<small class="tc-left">${chosen.has(p.user_id) ? 'Tera Captains chosen' : 'Choosing Tera Captains'}</small>` : '';
 			return `<div class="h ph ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}">
 				<span class="avatar">${p.avatar ? `<img src="${esc(p.avatar)}" alt="">` : esc(p.showdown_name.slice(0, 1).toUpperCase())}</span>
-				<span class="nm">${esc(p.showdown_name)}</span><small><span>${pts} points</span>${tera}</small>${caps}</div>`;
+				<span class="nm">${esc(p.showdown_name)}</span><small><span>${pts} points</span></small>${sub}</div>`;
 		};
 		const pickBySlot = new Map<string, L.Pick>();
 		for (const p of state.picks) pickBySlot.set(`${p.round}:${p.user_id}`, p);
@@ -523,7 +609,7 @@ export function pageRoutes(app: Express) {
 		const arrow = settings.draftType === 'snake' && r % 2 ? '←' : '→';
 		return `<div class="h rd">${r + 1} ${arrow}</div>${state.players.map(p => {
 			const pick = pickBySlot.get(`${r}:${p.user_id}`);
-			const captain = tc && !!pick?.captain;
+			const captain = revealed && !!pick?.captain;
 			if (pick) return `<div class="cell pk"><div class="t"><b title="${esc(pick.name)}">${esc(pick.name)}</b>${captain ? '<span class="pill tc">Tera Captain</span>' : ''}<span class="c">${pick.cost} points</span>${captain && pick.tc_cost != null ? `<span class="c">${pick.tc_cost} Tera points</span>` : ''}</div>${sprite(pick.species_id)}</div>`;
 			if (state.onClock?.user_id === p.user_id && state.round === r) return `<div class="cell now"><b>${esc(p.showdown_name)}</b>…</div>`;
 			return '<div class="cell empty"></div>';
@@ -535,8 +621,6 @@ export function pageRoutes(app: Express) {
 		const myTurn = state.onClock?.user_id === me;
 		const actingFor = myTurn ? me : (isComm && state.onClock ? state.onClock.user_id : null);
 		const spent = actingFor ? state.spent.get(actingFor) || 0 : 0;
-		const caps = actingFor ? state.captains.get(actingFor) || 0 : 0;
-		const tcLeft = actingFor ? settings.tcBudget - (state.tcSpent.get(actingFor) || 0) : 0;
 		const taken = new Map(state.picks.map(p => [p.species_id, p.user_id]));
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
 			'SELECT * FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id);
@@ -547,21 +631,15 @@ export function pageRoutes(app: Express) {
 		const canAfford = (cost: number) => !!actingFor && affordableFor(actingFor, cost);
 		// Whose budget the "hide unaffordable" filter uses: whoever you're picking for, else your own team
 		const budgetFor = actingFor ?? (state.players.some(p => p.user_id === me) ? me : null);
-		// Captain buttons and the Tera note go once whoever's view this is has all their captains
-		const showTera = tc && !(budgetFor && capsDone(budgetFor));
 		const poolRows = pool.filter(p => !taken.has(p.species_id)).map(p => {
 			const m = mon(p.species_id, settings.mod);
-			const tcOk = tc && p.tc_cost != null && caps < settings.maxCaptains && p.tc_cost <= tcLeft && canAfford(p.cost);
-			// Why the Captain button is off, in the order a player would check
-			const tcWhy = !tcOk && tc && p.tc_cost != null ? (!actingFor ? 'Not your turn' : caps >= settings.maxCaptains ? 'No Tera captain slots left' :
-				p.tc_cost > tcLeft ? `Not enough Tera points (${tcLeft} left)` : `Not enough points for ${p.name}`) : '';
+			// Tera price is information only: captains are chosen after the draft
+			const tera = !tc ? '' : p.tc_cost != null ? `<span class="tc-price num" title="${esc(p.name)} can be a Tera Captain for ${p.tc_cost} Tera points">${p.tc_cost}</span>` :
+				`<span class="tc-price none" title="${esc(p.name)} can't be a Tera Captain" aria-label="Can't be a Tera Captain">—</span>`;
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}" data-afford="${budgetFor && !affordableFor(budgetFor, p.cost) ? '0' : '1'}">
-				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
-				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"${tcOk ? ' data-could-captain="1"' : ''}><input type="hidden" name="species" value="${esc(p.species_id)}">
+				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>${tera}
+				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"><input type="hidden" name="species" value="${esc(p.species_id)}">
 					<button class="btn sm" type="submit" ${canAfford(p.cost) ? '' : 'disabled'} aria-label="Draft ${esc(p.name)} for ${p.cost} points">${p.cost} pts</button></form>
-				${showTera ? (p.tc_cost != null ? `<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}" data-tc="${p.tc_cost}" data-captain="1"><input type="hidden" name="species" value="${esc(p.species_id)}"><input type="hidden" name="captain" value="1">
-					<button class="btn sm tera" type="submit" ${tcOk ? '' : `disabled title="${esc(tcWhy)}"`} aria-label="Draft ${esc(p.name)} as a Tera Captain for ${p.cost} points plus ${p.tc_cost} Tera points${tcWhy ? `. ${esc(tcWhy)}` : ''}">+&nbsp;${p.tc_cost} Tera pts</button></form>` :
-		`<span class="btn sm tera no-tc" title="${esc(p.name)} can't be a Tera Captain" aria-label="${esc(p.name)} can't be a Tera Captain">Tera banned</span>`) : ''}
 			</div>`;
 		}).join('');
 		const myCount = state.counts.get(me) || 0;
@@ -569,9 +647,26 @@ export function pageRoutes(app: Express) {
 		const myFinished = state.players.find(p => p.user_id === me)?.finished;
 		const status = season.status === 'drafting' ?
 			(state.onClock ? `<span class="pill live">Round ${state.round + 1} · ${myTurn ? 'Your pick' : `${esc(state.onClock.showdown_name)} is picking`}</span>` : '<span class="pill final">Done</span>') :
-			'<span class="pill final">Final</span>';
+			choosing ? '<span class="pill live">Choosing Tera Captains</span>' : '<span class="pill final">Final</span>';
 
-		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-tc-left="${actingFor ? tcLeft : ''}" data-for-id="${actingFor || ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
+		// Tera Captains: each player chooses theirs once the draft ends; a commissioner can choose for anyone,
+		// then and (to fix mistakes) after the lock
+		const captainFor = (() => {
+			if (!tc || !(choosing || (isComm && season.status === 'regular'))) return null;
+			const asked = Number(req.query.for);
+			if (isComm && state.players.some(p => p.user_id === asked)) return asked;
+			if (amPlayer && (choosing || !isComm)) return me;
+			return isComm ? state.players[0]?.user_id ?? null : null;
+		})();
+		const captainSide = captainFor == null ? '' : captainPanel(league.id, season, settings, captainFor, me,
+			isComm ? state.players : [], chosen.has(captainFor), req.query.ok === '1');
+		const chosenList = choosing ? `<section class="panel"><h2>Tera Captains</h2>
+			<p class="muted" style="margin:0 0 10px">Everyone's captains are shown when the commissioner locks them and makes the schedule.</p>
+			<div class="list">${state.players.map(p => `<div class="row"><span>${esc(p.showdown_name)}</span><span class="spacer"></span>
+				${chosen.has(p.user_id) ? '<span class="pill final">Chosen</span>' : '<span class="pill">Not yet</span>'}</div>`).join('')}</div>
+			${isComm ? `<p style="margin:12px 0 0"><a href="/l/${league.id}/admin">Lock captains from Admin</a></p>` : ''}</section>` : '';
+
+		const body = `<div id="draft-root" data-left="${actingFor ? settings.budget - spent : ''}" data-for-id="${actingFor || ''}" data-for="${actingFor && !myTurn ? esc(state.onClock!.showdown_name) : ''}">
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Draft</h1>${status}
 				${!myTurn && actingFor ? `<span class="pill">Picking for ${esc(state.onClock!.showdown_name)}</span>` : ''}
 				${season.status === 'regular' ? `<span class="spacer"></span>${teamsSeg(league.id, 'board')}` : ''}</div>
@@ -582,20 +677,19 @@ export function pageRoutes(app: Express) {
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					${budgetFor ? `<label class="row" style="gap:6px;margin:0 0 10px;font-size:13px"><input type="checkbox" id="pool-afford"> Hide Pokémon ${actingFor && !myTurn ? esc(state.onClock!.showdown_name) + ' can\'t' : 'I can\'t'} afford</label>` : ''}
-					${showTera ? `<p class="muted tc-note">Tera Captains can Terastallize in battle. A captain costs its normal points plus its Tera points, from a separate Tera budget.</p>` : ''}
-					<div class="pool-list"><div class="row pool-head"><span class="spacer"></span><span class="ph-draft">Draft</span>${showTera ? '<span class="ph-tera">As Tera Captain</span>' : ''}</div>${poolRows}</div></section>
+					${tc ? `<p class="muted tc-note">Tera Captains are chosen after the draft, from a separate ${settings.tcBudget}-point Tera budget. The Tera column is each Pokémon's captain price; — means it can't be one.</p>` : ''}
+					<div class="pool-list"><div class="row pool-head"><span class="spacer"></span>${tc ? '<span class="ph-tera">Tera</span>' : ''}<span class="ph-draft">Draft</span></div>${poolRows}</div></section>
 				${amPlayer ? `<section class="panel"><h2>My team</h2>
 					<div class="tiles two">
 						<div><h3>Points left</h3><div class="num">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>
-						${tc && !capsDone(me) ? `<div><h3>Tera points left</h3><div class="num">${settings.tcBudget - (state.tcSpent.get(me) || 0)} / ${settings.tcBudget}</div></div>` : ''}
 						<div><h3>Pokémon selected</h3><div class="num">${myCount} / ${settings.rosterMax}</div></div>
-						${tc ? `<div><h3>Tera Captains selected</h3><div class="num">${state.captains.get(me) || 0} / ${settings.maxCaptains}</div></div>` : ''}
 					</div>
-					<div class="my-picks">${mine.map(p => `<div class="row">${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span>${tc && p.captain ? '<span class="pill tc">Tera Captain</span>' : ''}<span class="spacer"></span>
+					<div class="my-picks">${mine.map(p => `<div class="row">${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
 						<span class="types">${mon(p.species_id, settings.mod).types.map(t => `<span class="type t-${t.toLowerCase()}">${esc(t)}</span>`).join('')}</span></div>`).join('') || '<p class="muted" style="margin:0">No picks yet.</p>'}</div>
 					${myCount >= settings.rosterMin && !myFinished && myCount < settings.rosterMax ? `<form method="post" action="/l/${league.id}/draft/finish" style="margin-top:16px"><button class="btn" type="submit">Done drafting</button></form>` : ''}
 				</section>` : ''}
-			</div></div>` : board}
+			</div></div>` : choosing ? `<div class="draft-layout">${board}<div class="draft-side">${captainSide}${chosenList}</div></div>` :
+			`${board}${captainSide ? `<details class="panel fold" style="margin-top:16px" ${req.query.for || req.query.ok ? 'open' : ''}><summary><h3>Change Tera Captains (commissioner)</h3></summary>${captainSide}</details>` : ''}`}
 		</div>`;
 		if (req.get('x-partial')) {
 			res.send(`<div>${body}</div>`);
@@ -603,8 +697,25 @@ export function pageRoutes(app: Express) {
 		}
 		render(req, res, {
 			title: 'Draft', tab: season.status === 'regular' ? 'teams' : 'draft', wide: true, body,
-			scripts: PICK_DIALOG(league.id) + POOL_FILTER_SCRIPT + LIVE_SCRIPT(league.id, 'draft-root'),
+			scripts: PICK_DIALOG(league.id) + POOL_FILTER_SCRIPT + CAPTAIN_SCRIPT + LIVE_SCRIPT(league.id, 'draft-root'),
 		});
+	});
+
+	lg.post('/draft/captains', form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const me = req.user!.id;
+		const isComm = league.role === 'commissioner';
+		const forUser = isComm && Number(req.body.for) ? Number(req.body.for) : me;
+		const raw = req.body.captain;
+		const ids = (Array.isArray(raw) ? raw : raw ? [raw] : []).map((x: string) => toID(x));
+		const err = forUser !== me && !isComm ? 'Only a commissioner can choose for someone else.' :
+			L.draftPlayers(season.id).some(p => p.user_id === forUser) ? L.setCaptains(season, settings, me, forUser, ids, isComm) : 'Not in this draft.';
+		if (!err) {
+			syncShowdown();
+			notify(league.id);
+		}
+		const q = [forUser !== me ? `for=${forUser}` : '', err ? `msg=${encodeURIComponent(err)}` : 'ok=1'].filter(Boolean).join('&');
+		res.redirect(`/l/${league.id}/draft?${q}`);
 	});
 
 	lg.post('/draft/pick', form, (req, res) => {
@@ -615,7 +726,7 @@ export function pageRoutes(app: Express) {
 		// The confirm dialog says who the pick is for; if the draft moved on while it was open, don't hand the pick to the next player
 		const meant = Number(req.body.for) || forUser;
 		const err = meant !== forUser ? `The draft moved on while you were choosing. It's ${state.onClock ? state.onClock.showdown_name + "'s" : "nobody's"} pick now.` :
-			L.makePick(season, settings, me, forUser, toID(req.body.species), req.body.captain === '1');
+			L.makePick(season, settings, me, forUser, toID(req.body.species));
 		if (!err) {
 			syncShowdown();
 			notify(league.id);
@@ -642,7 +753,7 @@ export function pageRoutes(app: Express) {
 			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
 			...(hasTera ? [
-				['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, paid from a separate ${settings.tcBudget}-point Tera budget` :
+				['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, chosen after the draft from a separate ${settings.tcBudget}-point Tera budget` :
 					settings.teraMode === 'all' ? 'Everyone can Terastallize' : 'No Terastallization'],
 				...(settings.teraMode !== 'none' ? [['Tera preview', settings.teraPreview ? 'On' : 'Off']] : []),
 			] as [string, string][] : []),
@@ -677,11 +788,16 @@ export function pageRoutes(app: Express) {
 		const { league, season, settings } = req as LReq;
 		const ms = L.members(league.id);
 		const players = season.status === 'setup' ? [] : L.draftPlayers(season.id);
-		const last = season.status === 'drafting' ? L.picks(season.id).at(-1) : undefined;
+		const tcStep = settings.teraMode === 'captains';
+		const last = season.status === 'drafting' || season.status === 'captains' ? L.picks(season.id).at(-1) : undefined;
 		const lastBy = last ? players.find(p => p.user_id === last.user_id)?.showdown_name : '';
 		const counts = season.status === 'drafting' ? L.draftState(season, settings).counts : new Map<number, number>();
 		const short = players.filter(p => (counts.get(p.user_id) || 0) < settings.rosterMin).map(p => p.showdown_name);
 		const shortNote = short.length ? ` ${short.join(', ')} ${short.length === 1 ? 'has' : 'have'} fewer than the minimum ${settings.rosterMin} Pokémon.` : '';
+		const chosen = season.status === 'captains' ? L.captainsChosen(season.id) : new Set<number>();
+		const notChosen = players.filter(p => !chosen.has(p.user_id)).map(p => p.showdown_name);
+		const lockNote = notChosen.length ? ` ${notChosen.join(', ')} ${notChosen.length === 1 ? 'hasn\'t' : 'haven\'t'} chosen and will have no Tera Captains.` : '';
+		const undo = last ? `<form method="post" action="/l/${league.id}/admin/undo" class="inline" ${confirmAttr(`Undo ${lastBy || 'the last player'}'s pick of ${last.name} in round ${last.round + 1}?${season.status === 'captains' ? ' This reopens the draft.' : ''}`)}><button class="btn" type="submit">Undo last pick</button></form>` : '';
 		const invite = `${PUBLIC_URL}/join/${league.invite_code}`;
 		adminPage(req, res, '', 'Admin', `<div class="stack">
 			<section class="panel"><h2>Members</h2>
@@ -700,8 +816,15 @@ export function pageRoutes(app: Express) {
 				</form>` : ''}
 				${season.status === 'drafting' ? `<div class="row">
 					<span>Order: ${players.map(p => esc(p.showdown_name)).join(', ')}</span><span class="spacer"></span>
-					${last ? `<form method="post" action="/l/${league.id}/admin/undo" class="inline" ${confirmAttr(`Undo ${lastBy || 'the last player'}'s pick of ${last.name}${last.captain ? ' (Tera Captain)' : ''} in round ${last.round + 1}?`)}><button class="btn" type="submit">Undo last pick</button></form>` : ''}
-					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`End the draft and generate the schedule? Picks can't be changed afterwards.${shortNote}`)}><button class="btn primary" type="submit">End draft and make schedule</button></form></div>` : ''}
+					${undo}
+					${tcStep ? `<form method="post" action="/l/${league.id}/admin/end-draft" class="inline" ${confirmAttr(`End the draft? Players then choose their Tera Captains, and you make the schedule once they have.${shortNote}`)}><button class="btn primary" type="submit">End draft</button></form>` :
+						`<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`End the draft and generate the schedule? Picks can't be changed afterwards.${shortNote}`)}><button class="btn primary" type="submit">End draft and make schedule</button></form>`}</div>` : ''}
+				${season.status === 'captains' ? `<p style="margin:0 0 10px">The draft is over. Players are choosing their Tera Captains; nobody else sees them until you lock them.</p>
+					<div class="list" style="margin-bottom:12px">${players.map(p => `<div class="row"><span>${esc(p.showdown_name)}</span><span class="spacer"></span>
+						${chosen.has(p.user_id) ? '<span class="pill final">Chosen</span>' : '<span class="pill">Not yet</span>'}
+						<a class="btn sm" href="/l/${league.id}/draft?for=${p.user_id}">Choose for them</a></div>`).join('')}</div>
+					<div class="row"><span class="spacer"></span>${undo}
+					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`Lock everyone's Tera Captains and generate the schedule? Picks can't be changed afterwards.${lockNote}`)}><button class="btn primary" type="submit">Lock captains and make schedule</button></form></div>` : ''}
 				${season.status === 'regular' ? `<p class="muted" style="margin:0">Regular season. Best of ${settings.bestOf}.</p>` : ''}
 			</section>
 			${discord.enabled ? discordPanel(league.id) : ''}
@@ -805,6 +928,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		'league.create': 'created the league', 'league.format': 'changed the format', 'league.export': 'exported the league', 'settings.update': 'changed settings',
 		'member.join': 'joined the league', 'member.remove': 'removed a member', 'member.promote': 'made a member commissioner',
 		'draft.start': 'started the draft', 'draft.pick': 'made a draft pick', 'draft.undo': 'undid the last pick', 'draft.finish': 'finished drafting',
+		'draft.end': 'ended the draft', 'captains.set': 'set Tera Captains',
 		'season.schedule': 'ended the draft and made the schedule', 'pool.edit': 'edited the pool', 'result.override': 'overrode a series result',
 		'discord.unlink': 'unlinked Discord', 'remake.request': 'asked for a remake', 'remake.accept': 'accepted a remake', 'remake.decline': 'declined a remake', 'remake.cancel': 'withdrew a remake request',
 	};
@@ -822,6 +946,8 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 			if (a.action === 'draft.start') return `<span class="muted">Order: ${esc(d.split(',').map(id => userName(id) || id).join(', '))}</span>`;
 			if (a.action === 'draft.undo') return `<span>${esc(monName(d))}</span>`;
 			const pick = /^(\S+)( \(captain\))? for user (\d+)$/.exec(d);
+			const caps = /^(\S+) for user (\d+)$/.exec(d);
+			if (a.action === 'captains.set' && caps) return `<span>${caps[1] === 'none' ? 'No captains' : esc(caps[1].split(',').map(monName).join(', '))} for ${esc(userName(caps[2]) || 'user ' + caps[2])}</span>`;
 			if (a.action === 'draft.pick' && pick) return `<span>${esc(monName(pick[1]))}${pick[2] ? ' (Tera Captain)' : ''} for ${esc(userName(pick[3]) || 'user ' + pick[3])}</span>`;
 			const pool = /^(\S+) (.+)$/.exec(d);
 			if (a.action === 'pool.edit' && pool) return `<span>${esc(monName(pool[1]))} <span class="muted">${esc(pool[2])}</span></span>`;
@@ -911,9 +1037,19 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		notify(league.id);
 		res.redirect(`/l/${league.id}/admin?msg=Undone.`);
 	});
-	lg.post('/admin/schedule', commissioner, form, (req, res) => {
-		const { league, season } = req as LReq;
+	lg.post('/admin/end-draft', commissioner, form, (req, res) => {
+		const { league, season, settings } = req as LReq;
 		if (season.status !== 'drafting') return res.redirect(`/l/${league.id}/admin`);
+		const next = L.endDraft(season, settings, req.user!.id);
+		syncShowdown();
+		notify(league.id);
+		res.redirect(next === 'regular' ? `/l/${league.id}/schedule` : `/l/${league.id}/admin?msg=${encodeURIComponent('Draft ended. Players can now choose their Tera Captains.')}`);
+	});
+	lg.post('/admin/schedule', commissioner, form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		// With Tera Captains the draft ends first (end-draft) and this locks the captains
+		const ok = season.status === 'captains' || (season.status === 'drafting' && settings.teraMode !== 'captains');
+		if (!ok) return res.redirect(`/l/${league.id}/admin`);
 		L.completeDraft(season, req.user!.id);
 		syncShowdown();
 		notify(league.id);

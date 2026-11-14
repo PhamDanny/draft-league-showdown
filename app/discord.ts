@@ -288,10 +288,10 @@ export const COMMANDS = [
 	{
 		name: 'draft', description: 'Draft a Pokémon when you are on the clock', ...guildOnly, options: [
 			{ type: STRING, name: 'pokemon', description: 'The Pokémon to draft', required: true, autocomplete: true },
-			{ type: BOOLEAN, name: 'captain', description: 'Draft as a Tera Captain (can Terastallize, costs its Tera points too). Can\'t be added later.' },
 			leagueOption,
 		],
 	},
+	{ name: 'captains', description: 'Choose your Tera Captains once the draft is over', ...guildOnly, options: [leagueOption] },
 	{ name: 'done', description: 'Finish drafting (you stop getting turns)', ...guildOnly, options: [leagueOption] },
 	{
 		name: 'pings', description: 'Whether the bot mentions you in this league', ...guildOnly, options: [
@@ -502,18 +502,23 @@ const commands: { [name: string]: (ctx: Ctx, o: Opts) => object } = {
 		if (!ctx.user || !L.membership(r.league.id, ctx.user.id)) return reply(signIn());
 		const season = L.currentSeason(r.league.id)!;
 		const settings = L.settingsOf(r.league);
-		const captain = o.values.get('captain') === true;
-		if (captain && settings.teraMode !== 'captains') return reply('This league has no Tera Captains.');
 		const entry = poolEntry(season.id, o.values.get('pokemon'));
 		if (!entry) {
 			const near = closest(season.id, o.values.get('pokemon'));
 			return reply(`Not in the draft pool.${near.length ? ' Did you mean one of these?' : ''}`, near.length ? {
 				components: [{ type: 1, components: near.map(p => ({
-					type: 2, style: 2, label: p.name.slice(0, 80), custom_id: `pick:${season.id}:${p.species_id}:${captain ? 1 : 0}:${ctx.user!.id}`,
+					type: 2, style: 2, label: p.name.slice(0, 80), custom_id: `pick:${season.id}:${p.species_id}:0:${ctx.user!.id}`,
 				})) }],
 			} : {});
 		}
-		return confirmStep(reply, season, settings, ctx.user.id, entry, captain);
+		return confirmStep(reply, season, settings, ctx.user.id, entry);
+	},
+
+	captains(ctx, o) {
+		const r = resolveLeague(ctx, o.values.get('league'));
+		if ('error' in r) return reply(r.error);
+		if (!ctx.user || !L.membership(r.league.id, ctx.user.id)) return reply(signIn());
+		return captainsStep(reply, L.currentSeason(r.league.id)!, L.settingsOf(r.league), ctx.user.id);
 	},
 
 	done(ctx, o) {
@@ -535,7 +540,7 @@ const commands: { [name: string]: (ctx: Ctx, o: Opts) => object } = {
 	// Lookups: anyone in the linked server, ephemeral unless share is set
 	standings(ctx, o) {
 		return lookup(ctx, o, (league, season) => {
-			if (season.status === 'setup' || season.status === 'drafting') return 'Standings start once the draft is done and the schedule is made.';
+			if (['setup', 'drafting', 'captains'].includes(season.status)) return 'Standings start once the draft is done and the schedule is made.';
 			return { embeds: [R.standingsEmbed(league, season)] };
 		});
 	},
@@ -586,17 +591,45 @@ function lookup(ctx: Ctx, o: Opts, fn: (league: L.League, season: L.Season, sett
 
 /** Shows the confirm step for a pick, or why it can't be made (pickProblem's own words). */
 function confirmStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number,
-	entry: { species_id: string, name: string, cost: number, tc_cost: number | null }, captain: boolean) {
+	entry: { species_id: string, name: string, cost: number }) {
 	const state = L.draftState(season, settings);
-	const problem = L.pickProblem(season, settings, state, userId, entry.species_id, captain);
+	const problem = L.pickProblem(season, settings, state, userId, entry.species_id);
 	if (problem) return respond(problem);
-	// The overall pick number makes a stale confirmation fail instead of spending a later turn
-	const id = (tc: boolean) => `draft:${season.id}:${state.picks.length}:${entry.species_id}:${tc ? 1 : 0}:${userId}`;
-	// A normal pick that could also be a Tera Captain gets a second button for that
-	// and one that can't says why, in pickProblem's words
-	const tcProblem = !captain && settings.teraMode === 'captains' ? L.pickProblem(season, settings, state, userId, entry.species_id, true) : null;
-	const asCaptain = !captain && settings.teraMode === 'captains' && !tcProblem;
-	return respond('', R.pickConfirm(settings, state, userId, entry, captain, id(captain), asCaptain ? id(true) : undefined, tcProblem ?? undefined));
+	// The overall pick number makes a stale confirmation fail instead of spending a later turn.
+	// The 0 is where a captain flag used to go; Tera Captains are chosen after the draft now (/captains).
+	return respond('', R.pickConfirm(settings, state, userId, entry, `draft:${season.id}:${state.picks.length}:${entry.species_id}:0:${userId}`));
+}
+
+/**
+ * /captains: a menu of the player's Pokémon that can be Tera Captains, their current captains ticked.
+ * Discord can't add up prices in a menu, so the Tera budget is checked when the choice comes back.
+ */
+function captainsStep(respond: typeof reply | typeof update, season: L.Season, settings: L.Settings, userId: number, note = '') {
+	if (settings.teraMode !== 'captains') return respond('This league has no Tera Captains.');
+	if (season.status === 'setup' || season.status === 'drafting') return respond('Tera Captains are chosen after the draft.');
+	if (season.status !== 'captains') return respond('Tera Captains are locked. Ask a commissioner if one needs changing.');
+	if (!L.draftPlayers(season.id).some(p => p.user_id === userId)) return respond("You're not in this draft.");
+	const r = L.roster(season.id, userId);
+	const can = r.filter(x => x.pool_tc_cost != null).slice(0, 25);
+	const mine = r.filter(x => x.captain);
+	const used = mine.reduce((a, x) => a + (x.pool_tc_cost || 0), 0);
+	const lines = [
+		note,
+		`Only Tera Captains can Terastallize. Choose up to ${settings.maxCaptains}, from a ${settings.tcBudget}-point Tera budget. ` +
+			'You can change them until the commissioner locks them; nobody else sees them before then.',
+		'',
+		`Now: ${mine.length ? mine.map(x => `**${R.md(x.name)}** (${x.pool_tc_cost} Tera)`).join(', ') : 'none'} · ${used} of ${settings.tcBudget} Tera points`,
+	].filter((l, i) => l || i > 0);
+	if (!can.length) return respond(`${lines.join('\n')}\nNone of your Pokémon can be a Tera Captain.`);
+	return respond(lines.join('\n'), {
+		components: [{ type: 1, components: [{
+			type: 3, custom_id: `captains:${season.id}:${userId}`, placeholder: 'Choose your Tera Captains',
+			min_values: 0, max_values: Math.min(settings.maxCaptains, can.length),
+			options: can.map(x => ({
+				label: x.name.slice(0, 100), value: x.species_id, description: `${x.pool_tc_cost} Tera points`, default: !!x.captain,
+			})),
+		}] }],
+	});
 }
 
 /** /done and the ping's "Finish drafting": the confirm step, or why it can't be offered. */
@@ -653,19 +686,29 @@ function button(ctx: Ctx) {
 	if (parts[0] === 'pick') {
 		const entry = poolEntry(season.id, parts[2]);
 		if (!entry) return update('Not in the draft pool.');
-		return confirmStep(update, season, settings, owner, entry, parts[3] === '1');
+		return confirmStep(update, season, settings, owner, entry);
+	}
+	if (parts[0] === 'captains') {
+		const values: string[] = Array.isArray(ctx.i.data?.values) ? ctx.i.data.values.map(String) : [];
+		const err = L.setCaptains(season, settings, owner, owner, values);
+		if (err) return captainsStep(update, season, settings, owner, `**Not saved:** ${err}`);
+		syncShowdown();
+		notify(league.id);
+		return captainsStep(update, season, settings, owner, '**Saved.**');
 	}
 	if (parts[0] === 'draft') {
 		const [, , overall, speciesId, captain] = parts;
+		// A confirmation posted before Tera Captains moved to after the draft
+		if (captain === '1') return update('Tera Captains are chosen after the draft now. Run `/draft` again to make this pick, then `/captains` once the draft is over.');
 		const state = L.draftState(season, settings);
 		if (state.picks.length !== Number(overall) || state.onClock?.user_id !== owner) {
 			return update('That turn has passed. Run `/draft` again when you are on the clock.');
 		}
-		const err = L.makePick(season, settings, owner, owner, speciesId, captain === '1');
+		const err = L.makePick(season, settings, owner, owner, speciesId);
 		if (err) return update(err);
 		syncShowdown();
 		notify(league.id);
-		return update(`Drafted ${poolEntry(season.id, speciesId)?.name || speciesId}${captain === '1' ? ' as a Tera Captain' : ''}.`);
+		return update(`Drafted ${poolEntry(season.id, speciesId)?.name || speciesId}.`);
 	}
 	if (parts[0] === 'done') {
 		if (season.status !== 'drafting') return update('The draft is not running.');
@@ -696,7 +739,6 @@ function autocomplete(ctx: Ctx, o: Opts) {
 		if (!ctx.user || season.status !== 'drafting') return choices([]);
 		const state = L.draftState(season, settings);
 		if (state.onClock?.user_id !== ctx.user.id) return choices([]);
-		const captain = o.values.get('captain') === true;
 		const pool = all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(
 			'SELECT * FROM pool WHERE season_id = ? AND banned = 0 ORDER BY cost DESC, name', season.id)
 			.map(p => ({ ...p, types: mon(p.species_id, settings.mod).types }));
@@ -707,8 +749,8 @@ function autocomplete(ctx: Ctx, o: Opts) {
 			if (out.length >= 25) break;
 			if (seen.has(p.species_id)) continue;
 			seen.add(p.species_id);
-			if (L.pickProblem(season, settings, state, ctx.user.id, p.species_id, captain)) continue;
-			out.push({ name: `${p.name} · ${p.cost}${captain ? ` +${p.tc_cost} Tera` : ''}`, value: p.species_id });
+			if (L.pickProblem(season, settings, state, ctx.user.id, p.species_id)) continue;
+			out.push({ name: `${p.name} · ${p.cost}`, value: p.species_id });
 		}
 		return choices(out);
 	}
