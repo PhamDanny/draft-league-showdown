@@ -1,6 +1,6 @@
 # Playoffs, trades and free agency: plan
 
-**Status:** second draft, with the first review's changes folded in: a trade deadline (4a), a playoff series length (19), playoffs that start on their own (14), re-seeding (15a), a projected bracket (20a) and tiebreakers (20b). Nothing here is built yet.
+**Status:** implemented, with the reviewed decisions below (trade deadline 4a, playoff series length 19, playoffs that start on their own 14, re-seeding 15a, projected bracket 20a, tiebreakers 20b with a coin flip last). Where the build differs: the stored seeds are the whole final order (`seasons.final_order`, not `playoff_seeds`), so the standings can show who won a coin flip; tests are in `test/season.mjs`; and the end-to-end Showdown test (`test/e2e.mjs`) wasn't extended.
 
 **The problem:** the Settings page has `playoffTeams`, `trades` and `freeAgency`, and the Rules page shows them, but none of them do anything. A season today ends when the last regular-season series goes final, and a roster is fixed from the end of the draft until the season ends.
 

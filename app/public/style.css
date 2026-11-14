@@ -741,3 +741,8 @@ a.bk-card:hover{border-color:color-mix(in srgb,var(--fg) 28%,var(--line))}
 .bk-side.won .num:last-child{color:var(--good)}
 .bk-side.lost{color:var(--muted)}
 .bk-side.me .nm{color:var(--sel)}
+
+/* Transactions */
+.offer{gap:8px;flex-wrap:wrap}
+.trade-form h3{margin:12px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.trade-form h3:first-of-type{margin-top:0}

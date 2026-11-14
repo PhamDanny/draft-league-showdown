@@ -35,16 +35,19 @@ export interface PageOpts {
 	scripts?: string;
 	/** The league's current season status; the Draft tab shows only during setup, drafting and choosing Tera Captains; Playoffs once the schedule is made. */
 	seasonStatus?: string;
+	/** The league has trades or free agency on: shows the Transactions tab once the schedule is made. */
+	transactions?: boolean;
 	/** Header Play button: the viewer's next unfinished series. Absent when there is none. */
 	play?: { href: string, label: string };
 }
 
-function tabsFor(seasonStatus?: string, commissioner?: boolean): [string, string][] {
+function tabsFor(seasonStatus?: string, commissioner?: boolean, transactions?: boolean): [string, string][] {
 	const drafting = seasonStatus === 'setup' || seasonStatus === 'drafting' || seasonStatus === 'captains';
 	return [
 		['', 'Home'], ['schedule', 'Schedule'],
 		...(seasonStatus === 'regular' ? [['playoffs', 'Playoffs'] as [string, string]] : []),
 		['teams', 'Teams'],
+		...(seasonStatus === 'regular' && transactions ? [['moves', 'Transactions'] as [string, string]] : []),
 		...(drafting ? [['draft', 'Draft'] as [string, string]] : []),
 		['builder', 'Teambuilder'], ['rules', 'Rules'],
 		...(commissioner ? [['admin', 'Admin'] as [string, string]] : []),
@@ -96,7 +99,7 @@ export function page(o: PageOpts) {
 				<form method="post" action="/signout"><button type="submit">Sign out</button></form>
 			</div></details></div>
 	</div>
-	${o.league ? `<nav class="tabs">${tabsFor(o.seasonStatus, o.league.role === 'commissioner')
+	${o.league ? `<nav class="tabs">${tabsFor(o.seasonStatus, o.league.role === 'commissioner', o.transactions)
 		.map(([t, label]) => `<a href="/l/${o.league!.id}${t ? '/' + t : ''}" class="${(o.tab ?? '') === t ? 'on' : ''}" ${(o.tab ?? '') === t ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : ''}
 </div></header>` : '';
 	return `<!doctype html>

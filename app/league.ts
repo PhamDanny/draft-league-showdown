@@ -869,14 +869,14 @@ export function tradeProblem(season: Season, settings: Settings, from: number, t
 	return null;
 }
 
-export function offerTrade(season: Season, settings: Settings, from: number, to: number, give: string[], get: string[], note = '') {
+export function offerTrade(season: Season, settings: Settings, from: number, to: number, give: string[], get: string[], note = '', byUserId = from) {
 	return tx(() => {
 		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
 		const problem = tradeProblem(fresh, settings, from, to, give, get);
 		if (problem) return problem;
 		const r = run('INSERT INTO trade_offers (season_id, from_user, to_user, give, get, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
 			season.id, from, to, JSON.stringify(give), JSON.stringify(get), note.trim().slice(0, 200) || null, now());
-		audit(season.league_id, from, 'trade.offer', `offer ${r.lastInsertRowid}: ${give.join(',')} for ${get.join(',')} with user ${to}`);
+		audit(season.league_id, byUserId, 'trade.offer', `offer ${r.lastInsertRowid}: ${give.join(',')} for ${get.join(',')} with user ${to}`);
 		return null;
 	});
 }
@@ -885,7 +885,7 @@ export function offerTrade(season: Season, settings: Settings, from: number, to:
  * Answers an offer: the other player accepts or declines, the player who made it withdraws it, or a
  * commissioner cancels it. Accepting checks the trade again and leaves the offer pending if it fails.
  */
-export function answerTrade(season: Season, settings: Settings, offerId: number, userId: number, action: string, asCommissioner = false) {
+export function answerTrade(season: Season, settings: Settings, offerId: number, userId: number, action: string, asCommissioner = false, byUserId = userId) {
 	return tx(() => {
 		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
 		const o = one<TradeOffer>('SELECT * FROM trade_offers WHERE id = ? AND season_id = ?', offerId, season.id);
@@ -916,12 +916,12 @@ export function answerTrade(season: Season, settings: Settings, offerId: number,
 			move(get, o.from_user);
 			close('accepted');
 			run(`INSERT INTO transactions (season_id, kind, user_id, other_id, gave, got, made_by, at) VALUES (?, 'trade', ?, ?, ?, ?, ?, ?)`,
-				season.id, o.from_user, o.to_user, o.give, o.get, userId, t);
+				season.id, o.from_user, o.to_user, o.give, o.get, byUserId, t);
 			cancelOffersWith(season.id, [...give, ...get]);
 		} else {
 			return 'Unknown action.';
 		}
-		audit(season.league_id, userId, `trade.${action}`, `offer ${o.id}`);
+		audit(season.league_id, byUserId, `trade.${action}`, `offer ${o.id}`);
 		return null;
 	});
 }

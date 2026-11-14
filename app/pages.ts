@@ -76,6 +76,22 @@ document.addEventListener('change', e => {
 if (document.getElementById('pool-afford')) window.filterPool();
 </script>`;
 
+// The trade form's "after" line: both rosters' size and points if the ticked Pokémon change hands.
+// The server checks every offer; this only saves a round trip.
+const TRADE_SCRIPT = `<script>
+window.updateTrade = f => {
+	const d = f.dataset;
+	const sum = name => [...f.querySelectorAll('input[name=' + name + ']:checked')].reduce((a, b) => [a[0] + 1, a[1] + Number(b.dataset.cost)], [0, 0]);
+	const [gn, gp] = sum('give'), [tn, tp] = sum('get');
+	const mine = [Number(d.mine) - gn + tn, Number(d.points) - gp + tp], theirs = [Number(d.theirCount) - tn + gn, Number(d.theirPoints) - tp + gp];
+	const bad = ([n, p]) => n < Number(d.min) || n > Number(d.max) || p > Number(d.budget);
+	const el = f.querySelector('[data-after]');
+	el.textContent = gn || tn ? 'After: ' + mine[0] + ' Pokémon, ' + mine[1] + '/' + d.budget + ' points · them ' + theirs[0] + ' Pokémon, ' + theirs[1] + '/' + d.budget : '';
+	el.style.color = bad(mine) || bad(theirs) ? 'var(--bad)' : '';
+};
+document.addEventListener('change', e => { const f = e.target.closest('form.trade-form'); if (f) window.updateTrade(f); });
+</script>`;
+
 // Confirms a draft pick. The dialog lives outside #draft-root (which live updates replace) and posts
 // its own form, so an update arriving mid-decision neither closes it nor detaches the form it submits.
 const PICK_DIALOG = (leagueId: number) => `<dialog id="pick-dialog" class="panel bt-dialog">
@@ -205,6 +221,7 @@ function render(req: Request, res: Response, o: Omit<Parameters<typeof page>[0],
 	res.send(page({
 		...o, user: req.user, leagues: req.user ? L.leaguesFor(req.user.id) : [], league: o.league ?? lr.league,
 		seasonStatus: lr.season?.status, play: playButton(req),
+		transactions: !!lr.settings && (lr.settings.trades || lr.settings.freeAgency),
 	}));
 }
 /** Header Play button: names the week of the viewer's next unfinished series, or is absent. */
@@ -474,8 +491,11 @@ export function pageRoutes(app: Express) {
 					<label class="f">Opponent<select name="opponent">${p.options.map(o => `<option value="${o.userId}">${o.seed}. ${esc(n.get(o.userId))}</option>`).join('')}</select></label>
 					<button class="btn primary" type="submit" style="align-self:flex-end">${p.picker.userId === me ? 'Pick' : `Pick for ${esc(n.get(p.picker.userId))}`}</button></form>` :
 					'<p class="muted" style="margin:0">The round is made once every pick is in.</p>'}</section>` : '';
+			// Seeds still level with a neighbour in the standings: a coin flip decides if they still are at the end
+			const tiedSeeds = br.projected ? L.standings(season.id).filter(r => r.tied && br.seeds.some(s => s.userId === r.userId)) : [];
 			body = `${champ ? `<section class="panel your-match champion"><p class="eyebrow">Season ${season.number} champion</p><h2 style="margin:0">${esc(n.get(champ))}</h2></section>` : ''}
-				${br.projected ? `<p class="muted" style="margin:0 0 12px">Projected: the bracket if the season ended today. ${esc(L.RESEED[settings.playoffReseed].rule)}.</p>` :
+				${br.projected ? `<p class="muted" style="margin:0 0 12px">Projected: the bracket if the season ended today. ${esc(L.RESEED[settings.playoffReseed].rule)}.
+					${tiedSeeds.length ? ` ${esc(tiedSeeds.map(r => n.get(r.userId)).join(', '))} ${tiedSeeds.length === 1 ? 'is' : 'are'} tied with a neighbour in the standings; if that's still true when the season ends, a coin flip decides.` : ''}</p>` :
 					`<p class="muted" style="margin:0 0 12px">${esc(L.RESEED[settings.playoffReseed].rule)}. Best of ${settings.playoffBestOf}.</p>`}
 				${pickPanel}
 				<section class="panel"><div class="table-wrap"><div class="bracket">${br.rounds.map(r => `<div class="bk-round"><h3>${esc(r.label)}</h3>
@@ -495,6 +515,169 @@ export function pageRoutes(app: Express) {
 		const err = L.playoffPick(season, settings, me, forUser, Number(req.body.opponent));
 		if (!err) notify(league.id);
 		res.redirect(`/l/${league.id}/playoffs${err ? '?msg=' + encodeURIComponent(err) : ''}`);
+	});
+
+	// ----- transactions: free agency and trades -----
+
+	/** Who a page about moves is about: yourself, or for a commissioner any player in the season (`?for=`). */
+	function movesFor(req: Request) {
+		const { league, season } = req as LReq;
+		const players = L.draftPlayers(season.id);
+		const asked = Number(req.query.for ?? req.body?.for);
+		if (league.role === 'commissioner' && players.some(p => p.user_id === asked)) return asked;
+		return req.user!.id;
+	}
+	/** One logged move in words: "A added X, dropped Y" or "A traded X to B for Y". */
+	function moveLine(t: L.Transaction, n: Map<number, string>, monName: (id: string) => string) {
+		const gave: string[] = JSON.parse(t.gave), got: string[] = JSON.parse(t.got);
+		const list = (ids: string[]) => ids.map(id => `<b>${esc(monName(id))}</b>`).join(', ');
+		const what = t.kind === 'trade' ? `${esc(n.get(t.user_id))} traded ${list(gave)} to ${esc(n.get(t.other_id!))} for ${list(got)}` :
+			`${esc(n.get(t.user_id))} ${[got.length ? `added ${list(got)}` : '', gave.length ? `dropped ${list(gave)}` : ''].filter(Boolean).join(', ')}`;
+		return `<div class="row log-row"><span class="num muted">${new Date(t.at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' })}</span><span>${what}</span></div>`;
+	}
+	const poolNames = (seasonId: number) => {
+		const map = new Map(all<{ species_id: string, name: string }>('SELECT species_id, name FROM pool WHERE season_id = ?', seasonId).map(p => [p.species_id, p.name] as [string, string]));
+		return (id: string) => map.get(id) || id;
+	};
+
+	lg.get('/moves', (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const n = names(league.id);
+		const me = req.user!.id;
+		const isComm = league.role === 'commissioner';
+		const players = season.status === 'regular' ? L.draftPlayers(season.id) : [];
+		const who = movesFor(req);
+		const self = who === me;
+		const monName = poolNames(season.id);
+		const forQ = self ? '' : `<input type="hidden" name="for" value="${who}">`;
+		const mine = players.some(p => p.user_id === who) ? L.roster(season.id, who) : [];
+		const points = mine.reduce((a, r) => a + r.cost, 0);
+		const sections: string[] = [];
+		const facts: string[] = [];
+		if (!players.length) {
+			sections.push('<p class="muted">Trades and free agency open once the draft is over and the schedule is made.</p>');
+		} else {
+			const tradeClosed = L.tradesClosed(season, settings);
+			const deadline = L.tradeDeadlineWeek(season.id, settings);
+			if (settings.freeAgency) facts.push(settings.faLimit ? `Free agent moves: ${L.movesUsed(season.id, who)} of ${settings.faLimit} used` : 'Unlimited free agent moves');
+			if (settings.trades) facts.push(tradeClosed && L.phase(season, settings) !== 'draft' ? 'Trades are closed' : `Trades close after week ${deadline}`);
+			const live = L.seriesInProgress(season.id, who);
+			const frozen = L.phase(season, settings) !== 'regular';
+			const blocked = frozen ? 'Rosters are frozen for the playoffs.' : live ? `${self ? 'Finish your' : `${esc(n.get(who))} has a`} ${esc(L.matchLabel(live).toLowerCase())} series ${self ? 'first' : 'in progress'}: no roster moves until it's final.` : '';
+			const off = blocked ? 'disabled' : '';
+			if (blocked) sections.push(`<div class="flash warn">${blocked}</div>`);
+
+			if (isComm) {
+				sections.push(`<form method="get" class="row" style="gap:8px;margin:0 0 4px"><label class="f" style="min-width:220px">Moves for<select name="for" onchange="this.form.submit()">${players.map(p =>
+					`<option value="${p.user_id}" ${p.user_id === who ? 'selected' : ''}>${esc(p.showdown_name)}${p.user_id === me ? ' (you)' : ''}</option>`).join('')}</select></label>
+					<noscript><button class="btn sm" type="submit">Show</button></noscript></form>`);
+			}
+
+			// Trade offers: the ones to and from this player, and for a commissioner every pending one
+			const offers = isComm ? L.pendingOffers(season.id) : L.pendingOffers(season.id, who);
+			if (settings.trades && offers.length) {
+				const offerRow = (o: L.TradeOffer) => {
+					const give: string[] = JSON.parse(o.give), get: string[] = JSON.parse(o.get);
+					const names2 = (ids: string[]) => ids.map(id => `<b>${esc(monName(id))}</b>`).join(' + ');
+					const btn = (action: string, label: string, primary = false, q = '') =>
+						`<form method="post" action="/l/${league.id}/moves/answer" class="inline" ${q ? confirmAttr(q) : ''}>${forQ}<input type="hidden" name="offer" value="${o.id}"><input type="hidden" name="action" value="${action}">
+							<button class="btn sm ${primary ? 'primary' : ''}" type="submit" ${action === 'accept' ? off : ''}>${label}</button></form>`;
+					const desc = o.to_user === who ? `From ${esc(n.get(o.from_user))}: their ${names2(give)} for your ${names2(get)}` :
+						o.from_user === who ? `To ${esc(n.get(o.to_user))}: your ${names2(give)} for their ${names2(get)}` :
+						`${esc(n.get(o.from_user))} offers ${names2(give)} to ${esc(n.get(o.to_user))} for ${names2(get)}`;
+					const acts = [
+						o.to_user === who ? btn('decline', 'Decline') + btn('accept', 'Accept', true, `Trade your ${get.map(monName).join(' + ')} for ${n.get(o.from_user)}'s ${give.map(monName).join(' + ')}? This happens right away.`) : '',
+						o.from_user === who ? btn('withdraw', 'Withdraw') : '',
+						isComm && o.from_user !== who && o.to_user !== who ? btn('cancel', 'Cancel', false, 'Cancel this offer?') : '',
+					].join('');
+					return `<div class="row offer"><span>${desc}${o.note ? ` <span class="muted">“${esc(o.note)}”</span>` : ''}</span><span class="spacer"></span>${acts}</div>`;
+				};
+				sections.push(`<section class="panel"><h2>Trade offers</h2><div class="list">${offers.map(offerRow).join('')}</div></section>`);
+			}
+
+			const cols: string[] = [];
+			if (settings.trades) {
+				const others = players.filter(p => p.user_id !== who);
+				const withId = Number(req.query.with) && others.some(p => p.user_id === Number(req.query.with)) ? Number(req.query.with) : others[0]?.user_id;
+				const theirs = withId ? L.roster(season.id, withId) : [];
+				const theirPoints = theirs.reduce((a, r) => a + r.cost, 0);
+				const box = (name: string, r: typeof mine[number]) => `<label class="row cap"><input type="checkbox" name="${name}" value="${esc(r.species_id)}" data-cost="${r.cost}" ${tradeClosed ? 'disabled' : ''}>
+					${sprite(r.species_id, 'sm')}<span class="nm">${esc(r.name)}</span><span class="spacer"></span><span class="num muted">${r.cost}</span></label>`;
+				cols.push(`<section class="panel"><h2>Propose a trade</h2>
+					${tradeClosed ? `<p class="muted" style="margin:0">${esc(tradeClosed)}</p>` : `
+					<form method="get" class="row" style="gap:8px;margin:0 0 10px">${self ? '' : `<input type="hidden" name="for" value="${who}">`}<label class="f" style="flex:1">With<select name="with" onchange="this.form.submit()">${others.map(p =>
+						`<option value="${p.user_id}" ${p.user_id === withId ? 'selected' : ''}>${esc(p.showdown_name)}</option>`).join('')}</select></label><noscript><button class="btn sm" type="submit">Show</button></noscript></form>
+					<form method="post" action="/l/${league.id}/moves/offer" class="trade-form" data-mine="${mine.length}" data-points="${points}" data-their-count="${theirs.length}" data-their-points="${theirPoints}"
+						data-min="${settings.rosterMin}" data-max="${settings.rosterMax}" data-budget="${settings.budget}">${forQ}<input type="hidden" name="with" value="${withId}">
+						<h3>${self ? 'You give' : `${esc(n.get(who))} gives`}</h3><div class="my-picks cap-list">${mine.map(r => box('give', r)).join('')}</div>
+						<h3>${self ? 'You get' : `${esc(n.get(who))} gets`}</h3><div class="my-picks cap-list">${theirs.map(r => box('get', r)).join('')}</div>
+						<label class="f" style="margin-top:10px">Note<input class="inp" name="note" maxlength="200" placeholder="Optional"></label>
+						<div class="row" style="margin-top:10px"><span class="muted" data-after style="font-size:13px"></span><span class="spacer"></span><button class="btn primary" type="submit" ${off}>Send offer</button></div>
+					</form>`}</section>`);
+			}
+			if (settings.freeAgency) {
+				const agents = L.freeAgents(season.id);
+				const usedUp = settings.faLimit && L.movesUsed(season.id, who) >= settings.faLimit;
+				cols.push(`<section class="panel"><div class="row panel-head"><h2>Free agents</h2><span class="spacer"></span>
+						<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
+					${usedUp ? `<p class="muted" style="margin:0 0 10px">All ${settings.faLimit} free agent moves this season are used.</p>` : ''}
+					<form method="post" action="/l/${league.id}/moves/fa" onsubmit="const b = event.submitter, d = this.drop.selectedOptions[0]; return confirm((b.value ? 'Add ' + b.dataset.name + ' for ' + b.dataset.cost + ' points' : 'Drop ' + d.dataset.name) + (b.value && this.drop.value ? ' and drop ' + d.dataset.name : '') + '? This uses a free agent move.')">${forQ}
+						<div class="row" style="gap:8px;margin:0 0 10px"><label class="f" style="flex:1">Drop<select name="drop"><option value="">Nothing</option>${mine.map(r =>
+							`<option value="${esc(r.species_id)}" data-name="${esc(r.name)}">${esc(r.name)} (${r.cost})</option>`).join('')}</select></label>
+							<button class="btn" type="submit" name="add" value="" style="align-self:flex-end" ${off || (usedUp ? 'disabled' : '')}>Drop only</button></div>
+						<p class="muted field-help" style="margin:0 0 10px">${points} of ${settings.budget} points used, ${mine.length} of ${settings.rosterMax} Pokémon. Choosing a drop frees its points for the pickup.</p>
+						<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search free agents" autocomplete="off">
+						<div class="pool-list">${agents.map(p => `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(mon(p.species_id, settings.mod).types.join(','))}">
+							${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>
+							<button class="btn sm" type="submit" name="add" value="${esc(p.species_id)}" data-name="${esc(p.name)}" data-cost="${p.cost}" ${off || (usedUp ? 'disabled' : '')} aria-label="Add ${esc(p.name)} for ${p.cost} points">${p.cost} pts</button></div>`).join('') ||
+							'<p class="muted" style="margin:0">No free agents left.</p>'}</div>
+					</form></section>`);
+			}
+			if (cols.length) sections.push(`<div class="grid g2 top">${cols.join('')}</div>`);
+			const log = L.transactions(season.id);
+			sections.push(`<section class="panel"><h2>League log</h2><div class="list">${log.map(t => moveLine(t, n, monName)).join('') || '<div class="muted">No moves yet.</div>'}</div></section>`);
+		}
+		render(req, res, {
+			title: 'Transactions', tab: 'moves', flash: req.query.msg as string,
+			body: `<div class="row" style="margin-bottom:16px"><h1 style="margin:0">Transactions</h1><span class="spacer"></span>${facts.map(f => `<span class="pill">${esc(f)}</span>`).join('')}</div>
+				<div class="stack" id="live">${sections.join('')}</div>`,
+			scripts: POOL_FILTER_SCRIPT + TRADE_SCRIPT + LIVE_SCRIPT(league.id, 'live'),
+		});
+	});
+
+	const movesBack = (req: Request, res: Response, err: string | null, extra = '') => {
+		const { league } = req as LReq;
+		const who = movesFor(req);
+		const q = [who !== req.user!.id ? `for=${who}` : '', extra, err ? `msg=${encodeURIComponent(err)}` : ''].filter(Boolean).join('&');
+		res.redirect(`/l/${league.id}/moves${q ? '?' + q : ''}`);
+	};
+	const list = (v: unknown) => (Array.isArray(v) ? v : v ? [v] : []).map((x: string) => toID(x));
+
+	lg.post('/moves/fa', form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const err = L.faMove(season, settings, req.user!.id, movesFor(req), toID(req.body.add) || null, toID(req.body.drop) || null);
+		if (!err) {
+			syncShowdown();
+			notify(league.id);
+		}
+		movesBack(req, res, err);
+	});
+	lg.post('/moves/offer', form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const to = Number(req.body.with);
+		const err = L.offerTrade(season, settings, movesFor(req), to, list(req.body.give), list(req.body.get), String(req.body.note || ''), req.user!.id);
+		if (!err) notify(league.id);
+		movesBack(req, res, err, err ? `with=${to}` : '');
+	});
+	lg.post('/moves/answer', form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const isComm = league.role === 'commissioner';
+		const err = L.answerTrade(season, settings, Number(req.body.offer), movesFor(req), String(req.body.action), isComm, req.user!.id);
+		if (!err) {
+			syncShowdown();
+			notify(league.id);
+		}
+		movesBack(req, res, err);
 	});
 
 	// Standings live on Home now
@@ -638,6 +821,7 @@ export function pageRoutes(app: Express) {
 		const st = L.standings(season.id);
 		const rec = st.find(x => x.userId === uid);
 		const ms = L.matches(season.id).filter(m => m.p1 === uid || m.p2 === uid);
+		const moves = L.transactions(season.id, uid);
 		// Set history: every set from a final series, grouped by Pokémon
 		const history = new Map<string, Map<string, any>>();
 		for (const b of all<any>(`SELECT battles.* FROM battles JOIN matches ON matches.id = battles.match_id
@@ -658,8 +842,9 @@ export function pageRoutes(app: Express) {
 			${ms.length ? `<section class="panel"><h2>Series</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
 				const res2 = m.status === 'final' ? (m.winner === uid ? '<span class="pill w">W</span>' : '<span class="pill l">L</span>') : statusPill(m.status);
-				return `<div class="row"><span class="num muted">Wk ${m.week}</span><a href="/l/${league.id}/series/${m.id}">vs ${esc(n.get(opp))}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
+				return `<div class="row"><span class="num muted">${m.stage === 'regular' ? `Wk ${m.week}` : esc(L.matchLabel(m))}</span><a href="/l/${league.id}/series/${m.id}">vs ${esc(n.get(opp))}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
 			}).join('')}</div></section>` : ''}
+			${moves.length ? `<section class="panel"><h2>Transactions</h2><div class="list">${moves.map(t => moveLine(t, n, poolNames(season.id))).join('')}</div></section>` : ''}
 			${history.size ? `<section class="panel">${setList([...history.values()].flatMap(sets => [...sets].map(([text, set]) => ({ set, text }))), '', 'Sets')}</section>` : ''}`,
 		});
 	});
@@ -851,8 +1036,8 @@ export function pageRoutes(app: Express) {
 			['Clauses', settings.clauses.join(', ') || 'None'],
 			...Object.entries(f.banned).filter(([, list]) => list.length).map(([kind, list]) => [`Banned ${kind}`, list.join(', ')] as [string, string]),
 			...(f.other.length ? [['Other rules', f.other.join('. ') + '.'] as [string, string]] : []),
-			['Trades', settings.trades ? 'On' : 'Off'],
-			['Free agency', settings.freeAgency ? 'On' : 'Off'],
+			['Trades', !settings.trades ? 'Off' : `On, until every series through week ${L.captainsRevealed((req as LReq).season) ? L.tradeDeadlineWeek((req as LReq).season.id, settings) : settings.tradeDeadline || 'halfway'}${settings.tradeDeadline ? '' : ' (halfway)'} is final. Each roster has to stay within the roster limits and budget, and a traded Tera Captain stops being one`],
+			['Free agency', !settings.freeAgency ? 'Off' : `On until the playoffs, ${settings.faLimit ? `${settings.faLimit} moves per season` : 'unlimited moves'}. Free agents cost their pool price, and a dropped Pokémon becomes a free agent`],
 		];
 		render(req, res, {
 			title: 'Rules', tab: 'rules',
@@ -998,6 +1183,11 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					<label class="f">Format${formatOpen ? formatSelect(settings.format) : `<input value="${esc(L.presetOf(settings.format).label)}" disabled>`}</label></div>
 				<p class="muted field-help">${formatOpen ? 'Changing the format replaces every setting below with that format\'s and resets the draft pool.' : 'The format is fixed once the first draft has started.'}</p>
 				<div class="row">${check('trades', 'Trades')}${check('freeAgency', 'Free agency')}</div>
+				<div class="form">
+					<label class="f">Trade deadline (week)<input type="number" name="tradeDeadline" min="1" max="52" value="${settings.tradeDeadline || ''}" placeholder="Halfway"></label>
+					${num('faLimit', 'Free agent moves per season', 0, 99)}
+				</div>
+				<p class="muted field-help">Trades close once every series through the deadline week is final; blank means halfway${L.captainsRevealed(season) ? ` (week ${Math.ceil(L.regularWeeks(season.id) / 2)})` : ''}. Free agent moves: 0 means unlimited.</p>
 				<h3>Draft</h3>
 				<div class="form">
 					<label class="f">Draft${sel('draftType', settings.draftType, [['snake', 'Snake'], ['linear', 'Linear']])}</label>
@@ -1056,6 +1246,8 @@ document.querySelector('[name=playoffReseed]').addEventListener('change', e => {
 		'draft.end': 'ended the draft', 'captains.set': 'set Tera Captains',
 		'season.schedule': 'ended the draft and made the schedule', 'pool.edit': 'edited the pool', 'result.override': 'overrode a series result',
 		'playoffs.start': 'started the playoffs', 'playoffs.pick': 'picked a playoff opponent',
+		'fa.move': 'made a free agent move', 'trade.offer': 'offered a trade', 'trade.accept': 'accepted a trade', 'trade.decline': 'declined a trade',
+		'trade.withdraw': 'withdrew a trade offer', 'trade.cancel': 'cancelled a trade offer',
 		'discord.unlink': 'unlinked Discord', 'remake.request': 'asked for a remake', 'remake.accept': 'accepted a remake', 'remake.decline': 'declined a remake', 'remake.cancel': 'withdrew a remake request',
 	};
 	lg.get('/admin/log', commissioner, (req, res) => {
@@ -1075,6 +1267,16 @@ document.querySelector('[name=playoffReseed]').addEventListener('change', e => {
 			const caps = /^(\S+) for user (\d+)$/.exec(d);
 			if (a.action === 'captains.set' && caps) return `<span>${caps[1] === 'none' ? 'No captains' : esc(caps[1].split(',').map(monName).join(', '))} for ${esc(userName(caps[2]) || 'user ' + caps[2])}</span>`;
 			if (a.action === 'draft.pick' && pick) return `<span>${esc(monName(pick[1]))}${pick[2] ? ' (Tera Captain)' : ''} for ${esc(userName(pick[3]) || 'user ' + pick[3])}</span>`;
+			// Ids in the newer entries' details: "user 12", "seeds 3,1,2", "coin flips 3>1"
+			if (['playoffs.start', 'playoffs.pick', 'fa.move', 'trade.offer'].includes(a.action)) {
+				const users = (ids: string) => ids.replace(/\d+/g, id => userName(id) || `user ${id}`);
+				const mons = (ids: string) => ids.split(',').map(monName).join(', ');
+				let named = d.replace(/(seeds |coin flips )([\d,>]+)/g, (_, k: string, ids: string) => k + users(ids).replace(/>/g, ' > ').replace(/,/g, ', '))
+					.replace(/user (\d+)/g, (_, id: string) => users(id));
+				if (a.action === 'fa.move') named = named.replace(/(add|drop) ([a-z0-9]+)/g, (_, k: string, id: string) => `${k} ${monName(id)}`);
+				if (a.action === 'trade.offer') named = named.replace(/^offer \d+: ([a-z0-9,]+) for ([a-z0-9,]+) with/, (_, give: string, get: string) => `${mons(give)} for ${mons(get)} with`);
+				return `<span class="muted">${esc(named)}</span>`;
+			}
 			const pool = /^(\S+) (.+)$/.exec(d);
 			if (a.action === 'pool.edit' && pool) return `<span>${esc(monName(pool[1]))} <span class="muted">${esc(pool[2])}</span></span>`;
 			return d ? `<span class="muted">${esc(d)}</span>` : '';
@@ -1119,10 +1321,16 @@ document.querySelector('[name=playoffReseed]').addEventListener('change', e => {
 			teamPreview: Object.hasOwn(L.TEAM_PREVIEW, String(b.teamPreview)) ? b.teamPreview : settings.teamPreview,
 			trades: b.trades === '1',
 			freeAgency: b.freeAgency === '1',
+			faLimit: int(b.faLimit, settings.faLimit, 0, 99),
+			tradeDeadline: String(b.tradeDeadline ?? '').trim() === '' ? 0 : int(b.tradeDeadline, settings.tradeDeadline, 1, 52),
 			clauses: ([] as string[]).concat(b.clauses || []).filter(c => L.CLAUSES.includes(c)),
 		};
 		if (next.rosterMin > next.rosterMax) next.rosterMin = next.rosterMax;
 		if (L.genOf(next.mod) !== 9) next.teraMode = 'none';
+		// A deadline can't be moved to a week that's already over
+		if (next.tradeDeadline !== settings.tradeDeadline && next.tradeDeadline && L.phase(season, settings) === 'regular' && next.tradeDeadline < L.currentWeek(season.id)) {
+			return res.redirect(`/l/${league.id}/admin/settings?msg=${encodeURIComponent(`Week ${next.tradeDeadline} is already over, so it can't be the trade deadline.`)}`);
+		}
 		run('UPDATE leagues SET name = ?, format_name = ?, settings = ? WHERE id = ?', name, L.formatNameFor(name, next, league.id), JSON.stringify(next), league.id);
 		audit(league.id, req.user!.id, 'settings.update', JSON.stringify(next));
 		syncShowdown();

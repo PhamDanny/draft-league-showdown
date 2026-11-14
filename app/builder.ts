@@ -169,6 +169,7 @@ function render(req: Request, res: Response, title: string, tab: string, body: s
 	res.send(page({
 		title, tab, body, scripts, wide, user: req.user, leagues: L.leaguesFor(req.user!.id), league: lr.league,
 		seasonStatus: lr.season?.status, play: playButton(req, matchId),
+		transactions: !!lr.settings && (lr.settings.trades || lr.settings.freeAgency),
 	}));
 }
 
