@@ -405,11 +405,12 @@ function distance(a: string, b: string) {
 	}
 	return d[b.length];
 }
-/** The pool names closest to a misspelling: only ones still up for grabs, unless `whole`. */
+/** The pool names closest to a misspelling: only ones still up for grabs (not on a team now), unless `whole`. */
 function closest(seasonId: number, text: unknown, n = 5, whole = false) {
 	const id = toID(text);
-	return all<{ species_id: string, name: string }>(`SELECT species_id, name FROM pool WHERE season_id = ?${whole ? '' : ` AND banned = 0
-		AND species_id NOT IN (SELECT species_id FROM picks WHERE season_id = ?)`}`, seasonId, ...(whole ? [] : [seasonId]))
+	const taken = whole ? new Map() : L.owners(seasonId);
+	return all<{ species_id: string, name: string }>(`SELECT species_id, name FROM pool WHERE season_id = ?${whole ? '' : ' AND banned = 0'}`, seasonId)
+		.filter(p => !taken.has(p.species_id))
 		.map(p => ({ ...p, d: p.species_id.startsWith(id) ? 0 : distance(id, p.species_id) }))
 		.sort((a, b) => a.d - b.d || a.name.localeCompare(b.name)).slice(0, n);
 }
@@ -433,10 +434,10 @@ function recapBaseline(season: L.Season | undefined): [number | null, number | n
 	const weeks = finalWeeks(season.id);
 	return weeks ? [season.id, weeks] : [null, null];
 }
-/** How many weeks from week 1 on have every series final. */
+/** How many regular-season weeks from week 1 on have every series final. Playoff rounds aren't recapped. */
 export function finalWeeks(seasonId: number) {
 	const byWeek = new Map<number, boolean>();
-	for (const m of L.matches(seasonId)) byWeek.set(m.week, (byWeek.get(m.week) ?? true) && m.status === 'final');
+	for (const m of L.matches(seasonId).filter(m => m.stage === 'regular')) byWeek.set(m.week, (byWeek.get(m.week) ?? true) && m.status === 'final');
 	let w = 0;
 	while (byWeek.get(w + 1)) w++;
 	return w;

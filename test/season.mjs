@@ -1,0 +1,451 @@
+// After the draft: standings and tiebreakers, playoffs.
+// Usage: node --test test/season.mjs
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-season-'));
+const L = await import('../app/league.ts');
+const { run, one, all } = await import('../app/db.ts');
+
+let nextUser = 1;
+function user(name) {
+	const id = nextUser++;
+	run(`INSERT INTO users (id, discord_id, display_name, showdown_name, showdown_id, created_at) VALUES (?, ?, ?, ?, ?, 0)`,
+		id, 'd' + id, name, name, name.toLowerCase() + id);
+	return id;
+}
+
+/**
+ * A league whose draft is done and schedule made: each player drafted one Pokémon, and the pool holds
+ * two more per player. `overrides` are settings, saved to the league so every code path sees them.
+ */
+function season(names, overrides = {}) {
+	const ids = names.map(user);
+	const leagueId = L.createLeague('S' + ids[0], ids[0]);
+	for (const id of ids.slice(1)) run('INSERT INTO league_members (league_id, user_id, role, joined_at) VALUES (?, ?, ?, 0)', leagueId, id, 'member');
+	const league = one('SELECT * FROM leagues WHERE id = ?', leagueId);
+	const settings = { ...L.settingsOf(league), teraMode: 'none', draftType: 'linear', budget: 100, rosterMin: 1, rosterMax: 3, ...overrides };
+	run('UPDATE leagues SET settings = ? WHERE id = ?', JSON.stringify(settings), leagueId);
+	const s = L.currentSeason(leagueId);
+	run('DELETE FROM pool WHERE season_id = ?', s.id);
+	for (let i = 0; i < ids.length * 3; i++) run('INSERT INTO pool (season_id, species_id, name, cost) VALUES (?, ?, ?, ?)', s.id, 'mon' + i, 'Mon ' + i, 10);
+	L.startDraft(s, ids[0], ids);
+	ids.forEach((uid, i) => assert.equal(L.makePick(L.currentSeason(leagueId), settings, uid, uid, 'mon' + i), null));
+	L.completeDraft(L.currentSeason(leagueId), ids[0]);
+	const fresh = () => L.currentSeason(leagueId);
+	const between = (a, b, playoff = false) => all('SELECT * FROM matches WHERE season_id = ? AND ((p1 = ? AND p2 = ?) OR (p1 = ? AND p2 = ?))', fresh().id, a, b, b, a)
+		.find(m => (m.stage !== 'regular') === playoff);
+	/** Sets a's score against b (a's wins first): their regular-season series, or their playoff series if `playoff`. */
+	const result = (a, b, aw, bw, playoff = false) => {
+		const m = between(a, b, playoff);
+		assert.ok(m, `a ${playoff ? 'playoff' : 'regular'} series between ${a} and ${b}`);
+		return L.setResult(m.id, m.p1 === a ? aw : bw, m.p1 === a ? bw : aw, settings, ids[0], leagueId);
+	};
+	const playoffs = () => all("SELECT * FROM matches WHERE season_id = ? AND stage != 'regular' ORDER BY week, bracket_slot", fresh().id);
+	return { ids, settings, leagueId, fresh, result, between, playoffs, order: () => L.standings(fresh().id).map(r => r.userId) };
+}
+
+/** Plays every regular-season series: the player listed first in `names` order wins (a strict ranking). */
+function playOut(s) {
+	for (const m of L.matches(s.fresh().id).filter(m => m.stage === 'regular' && m.status !== 'final')) {
+		const [w, l] = s.ids.indexOf(m.p1) < s.ids.indexOf(m.p2) ? [m.p1, m.p2] : [m.p2, m.p1];
+		assert.equal(s.result(w, l, Math.ceil(s.settings.bestOf / 2), 0), '');
+	}
+}
+
+// ---------- standings ----------
+
+test('players level on everything are marked tied', () => {
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 2 });
+	const [a, b, c, d] = s.ids;
+	s.result(a, b, 1, 0);
+	s.result(c, d, 1, 0);
+	const rows = L.standings(s.fresh().id);
+	assert.deepEqual(rows.map(r => r.tied), [true, true, true, true], 'two 1–0s level on everything, and two 0–1s');
+	assert.deepEqual(new Set(rows.slice(0, 2).map(r => r.userId)), new Set([a, c]));
+});
+
+test('a three-way head-to-head cycle in Bo1 goes to a coin flip when the playoffs start', () => {
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 2 });
+	const [a, b, c, d] = s.ids;
+	s.result(a, b, 1, 0);
+	s.result(b, c, 1, 0);
+	s.result(c, a, 1, 0);
+	s.result(a, d, 1, 0);
+	s.result(b, d, 1, 0);
+	assert.equal(s.fresh().final_order, null, 'not started with a series left');
+	s.result(c, d, 1, 0);
+	const rows = L.standings(s.fresh().id);
+	assert.deepEqual(new Set(rows.slice(0, 3).map(r => r.userId)), new Set([a, b, c]));
+	assert.deepEqual(rows.map(r => r.flip), [true, true, true, false], 'the three were placed by the coin flip');
+	assert.deepEqual(rows.map(r => r.tied), [false, false, false, false]);
+	assert.equal(rows[3].userId, d);
+	assert.match(one("SELECT detail FROM audit WHERE action = 'playoffs.start' ORDER BY id DESC").detail, /coin flips/);
+	const [final] = s.playoffs();
+	assert.equal(final.stage, 'final');
+	assert.deepEqual([final.p1, final.p2], rows.slice(0, 2).map(r => r.userId), 'seed 1 is p1');
+});
+
+test('head-to-head among the tied players comes before game win %', () => {
+	// A beats B and C but loses to D; B and C beat D; B beats C. A, B and C all finish 2–1
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 3, playoffTeams: 0 });
+	const [a, b, c, d] = s.ids;
+	s.result(a, b, 2, 1);
+	s.result(a, c, 2, 1);
+	s.result(d, a, 2, 0);
+	s.result(b, d, 2, 0);
+	s.result(c, d, 2, 0);
+	s.result(b, c, 2, 0);
+	// A, B, C are 2–1. Head-to-head within the three: A 2, B 1, C 0, though B has the best game win % (5–2)
+	assert.deepEqual(s.order().slice(0, 3), [a, b, c]);
+});
+
+test('a head-to-head cycle falls to game win %', () => {
+	const s = season(['A', 'B', 'C'], { bestOf: 3, playoffTeams: 0 });
+	const [a, b, c] = s.ids;
+	s.result(a, b, 2, 1);
+	s.result(b, c, 2, 0);
+	s.result(c, a, 2, 0);
+	// A 2–3 (40%), B 3–2 (60%), C 2–2 (50%)
+	assert.deepEqual(s.order(), [b, c, a]);
+});
+
+test('playoff series never count in the standings', () => {
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 4 });
+	const [a, b, c, d] = s.ids;
+	playOut(s);
+	assert.deepEqual(s.order(), [a, b, c, d]);
+	s.result(d, a, 1, 0, true);
+	s.result(c, b, 1, 0, true);
+	assert.deepEqual(s.order(), [a, b, c, d]);
+	assert.equal(L.standings(s.fresh().id).find(r => r.userId === d).sw, 0);
+});
+
+// ---------- the bracket (pure) ----------
+
+const seeds = n => Array.from({ length: n }, (_, i) => ({ userId: 100 + i + 1, seed: i + 1 }));
+const pairs = round => round.slots.map(s => s.bye ? `${s.a.seed} bye` : s.a && s.b ? `${s.a.seed}v${s.b.seed}` : '?');
+const game = (week, slot, p1, p2, winner) => ({ week, bracket_slot: slot, p1, p2, status: winner ? 'final' : 'scheduled', winner: winner ?? null, stage: 'x' });
+
+test('a fixed bracket gives the top seeds the byes and pairs 1 v 8, 4 v 5, 2 v 7, 3 v 6', () => {
+	assert.deepEqual(pairs(L.planBracket(seeds(8), 'fixed', 7, [], []).rounds[0]), ['1v8', '4v5', '2v7', '3v6']);
+	const six = L.planBracket(seeds(6), 'fixed', 7, [], []);
+	assert.deepEqual(pairs(six.rounds[0]), ['1 bye', '4v5', '2 bye', '3v6']);
+	assert.equal(six.rounds[0].week, 8);
+	assert.equal(six.rounds[0].stage, 'quarterfinals');
+	assert.deepEqual(six.rounds[1].slots.map(s => s.waiting), [['', 'Winner of 4 v 5'], ['', 'Winner of 3 v 6']]);
+	assert.deepEqual(pairs(L.planBracket(seeds(3), 'fixed', 2, [], []).rounds[0]), ['1 bye', '2v3']);
+	assert.deepEqual(pairs(L.planBracket(seeds(2), 'fixed', 2, [], []).rounds[0]), ['1v2']);
+	assert.equal(L.planBracket(seeds(12), 'fixed', 11, [], []).rounds[0].stage, 'round-of-16');
+});
+
+test('fixed: winners meet in bracket order, even after an upset', () => {
+	// 6 upsets 3, 4 beats 5: 1 v 4 and 2 v 6
+	const b = L.planBracket(seeds(6), 'fixed', 7, [game(8, 1, 104, 105, 104), game(8, 3, 103, 106, 106)], []);
+	assert.deepEqual(pairs(b.rounds[1]), ['1v4', '2v6']);
+});
+
+test('re-seed: the best seed left plays the worst seed left, byes included', () => {
+	const b = L.planBracket(seeds(6), 'reseed', 7, [game(8, 1, 104, 105, 104), game(8, 3, 103, 106, 106)], []);
+	assert.deepEqual(pairs(b.rounds[1]), ['1v6', '2v4']);
+	const waiting = L.planBracket(seeds(6), 'reseed', 7, [game(8, 1, 104, 105, 104)], []);
+	assert.deepEqual(pairs(waiting.rounds[1]), ['?', '?'], 'nothing until the whole round is final');
+	assert.match(waiting.rounds[1].note, /Re-seeded/);
+});
+
+test('higher seed picks: seeds pick in order, and the last two are paired', () => {
+	const open = L.planBracket(seeds(4), 'choose', 3, [], []);
+	assert.equal(open.picking.picker.seed, 1);
+	assert.deepEqual(open.picking.options.map(o => o.seed), [2, 3, 4]);
+	const picked = L.planBracket(seeds(4), 'choose', 3, [], [{ round: 1, picker: 101, opponent: 103 }]);
+	assert.equal(picked.picking, null);
+	assert.deepEqual(pairs(picked.rounds[0]), ['1v3', '2v4']);
+	// 6 teams: 1 and 2 have byes, 3 picks from 4–6
+	const six = L.planBracket(seeds(6), 'choose', 3, [], []);
+	assert.equal(six.picking.picker.seed, 3);
+	assert.deepEqual(six.picking.options.map(o => o.seed), [4, 5, 6]);
+});
+
+test('a projected bracket has no picks, matches or champion', () => {
+	const b = L.planBracket(seeds(4), 'choose', 3, [], [], true);
+	assert.equal(b.picking, null);
+	assert.equal(b.champion, null);
+	assert.match(b.rounds[0].note, /Seed 1 picks/);
+});
+
+// ---------- playoffs in a season ----------
+
+test('the playoffs start when the last regular series is final, and each round follows', () => {
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 4, playoffBestOf: 3 });
+	const [a, b, c, d] = s.ids;
+	assert.equal(L.phase(s.fresh(), s.settings), 'regular');
+	assert.equal(L.bracket(s.fresh(), s.settings).projected, true);
+	playOut(s);
+	assert.equal(L.phase(s.fresh(), s.settings), 'playoffs');
+	const semis = s.playoffs();
+	assert.deepEqual(semis.map(m => [m.stage, m.week, m.p1, m.p2]), [['semifinals', 4, a, d], ['semifinals', 4, b, c]]);
+	assert.equal(L.bestOfFor(s.settings, semis[0]), 3);
+	assert.equal(s.result(a, d, 1, 0, true), '', 'one win of the two needed');
+	assert.equal(s.result(a, d, 2, 0, true), '');
+	assert.equal(s.playoffs().length, 2, 'no final until both semis are done');
+	assert.equal(s.result(c, b, 2, 1, true), '');
+	const final = s.playoffs().at(-1);
+	assert.deepEqual([final.stage, final.week, final.p1, final.p2], ['final', 5, a, c]);
+
+	// Changing a semi while the final hasn't started moves the final's player
+	assert.equal(s.result(b, c, 2, 1, true), '');
+	assert.deepEqual([s.playoffs().at(-1).p1, s.playoffs().at(-1).p2], [a, b]);
+	// Once the final has a game, the semi can't change
+	assert.equal(s.result(a, b, 1, 0, true), '');
+	assert.equal(s.result(c, b, 2, 0, true), 'The next round has started. Remake it first.');
+	assert.equal(s.result(b, a, 2, 1, true), '');
+	assert.equal(L.phase(s.fresh(), s.settings), 'complete');
+	assert.equal(L.champion(s.fresh(), s.settings), b);
+});
+
+test('changing a regular-season result after the playoffs start keeps the seeds', () => {
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 2 });
+	const [a, b, c, d] = s.ids;
+	playOut(s);
+	const order = s.fresh().final_order;
+	s.result(d, a, 1, 0);
+	s.result(d, b, 1, 0);
+	assert.equal(s.fresh().final_order, order);
+	assert.deepEqual([s.playoffs()[0].p1, s.playoffs()[0].p2], [a, b]);
+	assert.notDeepEqual(s.order().slice(0, 2), [a, b], 'the table itself does change');
+});
+
+test('without playoffs the season is complete when the regular season is', () => {
+	const s = season(['A', 'B', 'C'], { bestOf: 1, playoffTeams: 0 });
+	playOut(s);
+	assert.equal(L.phase(s.fresh(), s.settings), 'complete');
+	assert.equal(L.champion(s.fresh(), s.settings), s.ids[0]);
+	assert.equal(s.playoffs().length, 0);
+});
+
+test('more playoff teams than players means everyone is in', () => {
+	const s = season(['A', 'B', 'C'], { bestOf: 1, playoffTeams: 8 });
+	playOut(s);
+	assert.deepEqual(s.playoffs().map(m => [m.stage, m.p1, m.p2]), [['semifinals', s.ids[1], s.ids[2]]], 'seed 1 has a bye');
+});
+
+test('higher seed picks: only the seed on the clock picks, and the round is made once paired', () => {
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 4, playoffReseed: 'choose' });
+	const [a, b, c, d] = s.ids;
+	playOut(s);
+	assert.equal(s.playoffs().length, 0, 'waiting on seed 1');
+	assert.equal(L.playoffPick(s.fresh(), s.settings, b, b, d), "It's not your pick.");
+	assert.equal(L.playoffPick(s.fresh(), s.settings, a, a, a), "That player can't be picked.");
+	assert.equal(L.playoffPick(s.fresh(), s.settings, a, a, b), null);
+	assert.deepEqual(s.playoffs().map(m => [m.p1, m.p2]), [[a, b], [c, d]]);
+	assert.equal(L.playoffPick(s.fresh(), s.settings, a, a, c), 'Nobody is picking an opponent right now.');
+});
+
+// ---------- rosters ----------
+
+test('making the schedule copies the picks into the roster table, and old seasons are copied on startup', async () => {
+	const { migrateRosters } = await import('../app/db.ts');
+	const s = season(['A', 'B']);
+	const id = s.fresh().id;
+	assert.deepEqual(all('SELECT species_id, user_id, via FROM roster WHERE season_id = ? ORDER BY species_id', id).map(r => ({ ...r })),
+		[{ species_id: 'mon0', user_id: s.ids[0], via: 'draft' }, { species_id: 'mon1', user_id: s.ids[1], via: 'draft' }]);
+	assert.equal(L.rosterTable(id), 'roster');
+	// A season from before the roster table
+	run('DELETE FROM roster WHERE season_id = ?', id);
+	assert.deepEqual(L.roster(id, s.ids[0]), []);
+	migrateRosters();
+	assert.deepEqual(L.roster(id, s.ids[0]).map(r => r.species_id), ['mon0']);
+	// Changing the roster table changes what Showdown is sent; the draft history stays
+	run('UPDATE roster SET user_id = ? WHERE season_id = ? AND species_id = ?', s.ids[1], id, 'mon0');
+	const league = one('SELECT * FROM leagues WHERE id = ?', s.leagueId);
+	const sent = L.showdownData().rosters[league.format_name.toLowerCase().replace(/[^a-z0-9]/g, '')];
+	const bob = one('SELECT showdown_id FROM users WHERE id = ?', s.ids[1]).showdown_id;
+	assert.deepEqual(Object.keys(sent), [bob], 'A has nothing left');
+	assert.equal(sent[bob].species.length, 2);
+	assert.equal(L.owners(id).get('mon0'), s.ids[1]);
+	assert.equal(L.picks(id).find(p => p.species_id === 'mon0').user_id, s.ids[0]);
+});
+
+// ---------- free agency ----------
+
+test('free agency: add, drop, or swap in one step, within the roster limits and budget', () => {
+	// Each player drafted one 10-pointer; mon2 to mon5 are free agents
+	const s = season(['A', 'B'], { budget: 25, rosterMin: 1, rosterMax: 2, faLimit: 0 });
+	const [a, b] = s.ids;
+	const fa = (add, drop, who = a) => L.faMove(s.fresh(), s.settings, who, who, add, drop);
+	run('UPDATE pool SET cost = 20 WHERE season_id = ? AND species_id = ?', s.fresh().id, 'mon5');
+	assert.equal(fa(null, null), 'Choose a Pokémon to add or drop.');
+	assert.equal(fa('mon1', null), 'Mon 1 is on another team.');
+	assert.equal(fa('mon5', null), 'That would put the team over budget: 30 of 25 points.');
+	assert.equal(fa(null, 'mon0'), 'That would leave the team 0 Pokémon; the fewest is 1.');
+	assert.equal(fa(null, 'mon1'), "Mon 1 isn't on this team.");
+	assert.equal(fa('mon2', null), null);
+	assert.equal(fa('mon3', null), 'That would give the team 3 Pokémon; the most is 2.');
+	// Swapping mon0 (10) for mon5 (20) is checked as a whole: mon2 (10) + mon5 (20) is still over
+	assert.equal(fa('mon5', 'mon0'), 'That would put the team over budget: 30 of 25 points.');
+	assert.equal(fa('mon3', 'mon0'), null);
+	assert.deepEqual(L.roster(s.fresh().id, a).map(r => [r.species_id, r.via]).sort(), [['mon2', 'fa'], ['mon3', 'fa']]);
+	assert.ok(L.freeAgents(s.fresh().id).some(p => p.species_id === 'mon0'), 'a dropped Pokémon is a free agent again');
+	assert.equal(fa('mon0', null, b), null, 'and someone else can pick it up');
+	assert.equal(L.movesUsed(s.fresh().id, a), 2);
+	assert.equal(L.transactions(s.fresh().id).length, 3);
+});
+
+test('free agency: the move limit, a series in progress, the playoffs, and the setting', () => {
+	const s = season(['A', 'B'], { budget: 100, rosterMin: 1, rosterMax: 3, faLimit: 1, bestOf: 3, playoffTeams: 2 });
+	const [a, b] = s.ids;
+	const fa = (add, drop) => L.faMove(s.fresh(), s.settings, a, a, add, drop);
+	run("UPDATE matches SET status = 'live', p1_wins = 1 WHERE id = ?", s.between(a, b).id);
+	assert.equal(fa('mon2', null), 'Finish the week 1 series first.');
+	run("UPDATE matches SET status = 'scheduled', p1_wins = 0 WHERE id = ?", s.between(a, b).id);
+	assert.equal(fa('mon2', null), null);
+	assert.equal(fa('mon3', null), 'All 1 free agent moves this season are used.');
+	assert.equal(L.faMove(s.fresh(), { ...s.settings, freeAgency: false }, b, b, 'mon3', null), 'Free agency is off in this league.');
+	s.result(a, b, 2, 0);
+	assert.equal(L.phase(s.fresh(), s.settings), 'playoffs');
+	assert.equal(L.faMove(s.fresh(), s.settings, b, b, 'mon3', null), 'Rosters are frozen for the playoffs.');
+});
+
+test('dropping a Tera Captain frees its Tera points; a pickup is never a captain', () => {
+	const s = season(['A', 'B'], { budget: 100, rosterMin: 1, rosterMax: 3, teraMode: 'captains', maxCaptains: 1, tcBudget: 20 });
+	const [a] = s.ids;
+	run('UPDATE pool SET tc_cost = 10 WHERE season_id = ?', s.fresh().id);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon0'], true), null);
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon2', 'mon0'), null);
+	assert.deepEqual(L.roster(s.fresh().id, a).map(r => [r.species_id, r.captain]), [['mon2', 0]]);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon2'], true), null, 'a commissioner can make the pickup a captain');
+});
+
+// ---------- trades ----------
+
+/** Four players with two Pokémon each (mon0–mon7, 10 points), Bo1, three weeks: the deadline is week 2. */
+function tradeSeason(overrides = {}) {
+	const s = season(['A', 'B', 'C', 'D'], { budget: 100, rosterMin: 1, rosterMax: 3, bestOf: 1, faLimit: 0, ...overrides });
+	s.ids.forEach((uid, i) => assert.equal(L.faMove(s.fresh(), s.settings, uid, uid, 'mon' + (4 + i), null), null));
+	const offer = (from, to, give, get, settings = s.settings) => L.offerTrade(s.fresh(), settings, from, to, give, get);
+	const answer = (uid, action, offerId = L.pendingOffers(s.fresh().id)[0].id, comm = false) => L.answerTrade(s.fresh(), s.settings, offerId, uid, action, comm);
+	const mons = uid => L.roster(s.fresh().id, uid).map(r => r.species_id).sort();
+	/** Finishes every regular series in weeks 1..w. */
+	const finishWeeks = w => {
+		for (const m of L.matches(s.fresh().id).filter(m => m.week <= w && m.status !== 'final')) L.setResult(m.id, 1, 0, s.settings, s.ids[0], s.leagueId);
+	};
+	return { ...s, offer, answer, mons, finishWeeks };
+}
+
+test('a trade offered and accepted swaps the Pokémon, and a traded Tera Captain stops being one', () => {
+	const s = tradeSeason({ teraMode: 'captains', maxCaptains: 1, tcBudget: 20 });
+	const [a, b] = s.ids;
+	run('UPDATE pool SET tc_cost = 10 WHERE season_id = ?', s.fresh().id);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon0'], true), null);
+	assert.equal(s.offer(a, b, ['mon0', 'mon4'], ['mon1']), null);
+	assert.equal(s.answer(a, 'accept'), 'Only the player it was offered to can accept it.');
+	assert.equal(s.answer(b, 'accept'), null);
+	assert.deepEqual(s.mons(a), ['mon1']);
+	assert.deepEqual(s.mons(b), ['mon0', 'mon4', 'mon5']);
+	assert.deepEqual(L.roster(s.fresh().id, b).filter(r => r.captain), []);
+	assert.deepEqual(L.roster(s.fresh().id, b).map(r => [r.species_id, r.via]).sort(), [['mon0', 'trade'], ['mon4', 'trade'], ['mon5', 'fa']]);
+	const [t] = L.transactions(s.fresh().id);
+	assert.deepEqual([t.kind, t.user_id, t.other_id, JSON.parse(t.gave), JSON.parse(t.got)], ['trade', a, b, ['mon0', 'mon4'], ['mon1']]);
+	assert.equal(L.movesUsed(s.fresh().id, a), 1, "trades don't use free agent moves");
+});
+
+test('trades are checked when offered and again when accepted', () => {
+	const s = tradeSeason({ rosterMax: 2 });
+	const [a, b, c] = s.ids;
+	assert.equal(s.offer(a, a, ['mon0'], ['mon0']), 'Choose another player to trade with.');
+	assert.equal(s.offer(a, b, ['mon0'], []), 'Each side has to give at least one Pokémon.');
+	assert.equal(s.offer(a, b, ['mon1'], ['mon0']), "A doesn't have Mon 1.");
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1', 'mon5']), 'That would give A 3 Pokémon; the most is 2.');
+	// Two offers for the same Pokémon: accepting one cancels the other
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), null);
+	assert.equal(s.offer(c, b, ['mon2'], ['mon1']), null);
+	assert.equal(s.answer(b, 'accept', L.pendingOffers(s.fresh().id).find(o => o.from_user === a).id), null);
+	assert.equal(L.pendingOffers(s.fresh().id).length, 0);
+	// Prices that changed since the offer: accepting fails and the offer stays open
+	assert.equal(s.offer(a, c, ['mon1'], ['mon2']), null);
+	run('UPDATE roster SET cost = 95 WHERE season_id = ? AND species_id = ?', s.fresh().id, 'mon2');
+	assert.equal(s.answer(c, 'accept'), 'That would put A over budget: 105 of 100 points.');
+	assert.equal(L.pendingOffers(s.fresh().id).length, 1);
+	// Dropping a Pokémon in an offer cancels it
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, null, 'mon1'), null);
+	assert.equal(L.pendingOffers(s.fresh().id).length, 0);
+});
+
+test('withdraw, decline, and a commissioner cancel', () => {
+	const s = tradeSeason();
+	const [a, b] = s.ids;
+	s.offer(a, b, ['mon0'], ['mon1']);
+	assert.equal(s.answer(b, 'withdraw'), 'Only the player who made the offer can withdraw it.');
+	assert.equal(s.answer(a, 'withdraw'), null);
+	s.offer(a, b, ['mon0'], ['mon1']);
+	assert.equal(s.answer(a, 'decline'), 'Only the player it was offered to can decline it.');
+	assert.equal(s.answer(b, 'decline'), null);
+	s.offer(a, b, ['mon0'], ['mon1']);
+	const id = L.pendingOffers(s.fresh().id)[0].id;
+	assert.equal(s.answer(b, 'cancel', id), 'Only a commissioner can cancel an offer.');
+	assert.equal(s.answer(b, 'cancel', id, true), null);
+	assert.equal(s.answer(b, 'accept', id), 'This offer is no longer open.');
+});
+
+test('no trades while either player has a series in progress', () => {
+	const s = tradeSeason();
+	const [a, b] = s.ids;
+	const m = L.matches(s.fresh().id).find(m => m.p1 === b || m.p2 === b);
+	run("UPDATE matches SET status = 'live' WHERE id = ?", m.id);
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'B has a week 1 series in progress. Trades wait until it\'s final.');
+});
+
+test('the trade deadline is halfway by default, closes trades once its week is final, and cancels offers', () => {
+	const s = tradeSeason();
+	const [a, b] = s.ids;
+	assert.equal(L.tradeDeadlineWeek(s.fresh().id, s.settings), 2);
+	assert.equal(L.tradeDeadlineWeek(s.fresh().id, { ...s.settings, tradeDeadline: 1 }), 1);
+	assert.equal(L.tradeDeadlineWeek(s.fresh().id, { ...s.settings, tradeDeadline: 9 }), 3, 'never past the regular season');
+	s.finishWeeks(1);
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), null);
+	s.finishWeeks(2);
+	assert.equal(L.tradesClosed(s.fresh(), s.settings), 'The trade deadline (after week 2) has passed.');
+	assert.equal(L.pendingOffers(s.fresh().id).length, 0, 'the pending offer was cancelled');
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'The trade deadline (after week 2) has passed.');
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon8', null), null, 'free agency stays open');
+});
+
+// ---------- the Discord bot's view ----------
+
+test('Discord: recaps and week counts cover the regular season only', async () => {
+	const R = await import('../app/discord-render.ts');
+	const { finalWeeks } = await import('../app/discord.ts');
+	const s = season(['A', 'B', 'C', 'D'], { bestOf: 1, playoffTeams: 4 });
+	playOut(s);
+	assert.equal(L.phase(s.fresh(), s.settings), 'playoffs');
+	assert.equal(R.weeksIn(s.fresh().id), 3);
+	assert.equal(finalWeeks(s.fresh().id), 3);
+	// Finishing a semifinal doesn't make it a recapped week
+	s.result(s.ids[0], s.ids[3], 1, 0, true);
+	s.result(s.ids[1], s.ids[2], 1, 0, true);
+	assert.equal(finalWeeks(s.fresh().id), 3);
+	const league = one('SELECT * FROM leagues WHERE id = ?', s.leagueId);
+	assert.match(R.recap(league, s.fresh(), 3).content, /Regular season complete/);
+});
+
+test('Discord: /pokemon names the current owner after a trade or drop', async () => {
+	const R = await import('../app/discord-render.ts');
+	const s = season(['A', 'B'], { budget: 100, rosterMin: 1, rosterMax: 3, faLimit: 0 });
+	const [a, b] = s.ids;
+	const league = one('SELECT * FROM leagues WHERE id = ?', s.leagueId);
+	const entry = id => one('SELECT * FROM pool WHERE season_id = ? AND species_id = ?', s.fresh().id, id);
+	const text = id => R.pokemonEmbed(league, s.fresh(), s.settings, entry(id)).description;
+	assert.match(text('mon0'), /Drafted by \*\*A\*\* in round 1/);
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon2', null), null);
+	assert.equal(L.faMove(s.fresh(), s.settings, b, b, 'mon3', null), null);
+	assert.match(text('mon2'), /On the team of \*\*A\*\* \(free agent pickup\)/);
+	assert.equal(L.offerTrade(s.fresh(), s.settings, a, b, ['mon0'], ['mon1']), null);
+	assert.equal(L.answerTrade(s.fresh(), s.settings, L.pendingOffers(s.fresh().id)[0].id, b, 'accept'), null);
+	assert.match(text('mon0'), /On the team of \*\*B\*\* \(drafted by \*\*A\*\*\)/);
+	assert.equal(L.faMove(s.fresh(), s.settings, b, b, null, 'mon0'), null);
+	assert.match(text('mon0'), /Free agent \(drafted by \*\*A\*\*, since dropped\)/);
+	assert.match(text('mon5'), /Available/);
+});

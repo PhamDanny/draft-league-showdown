@@ -1,6 +1,6 @@
 # Draft League Showdown
 
-A private Pokémon Showdown server with draft league features built in: Discord sign-in, leagues, an async draft room with Tera Captains chosen after the draft, schedules, standings, and battles that record themselves. Teams stay secret until each series is final.
+A private Pokémon Showdown server with draft league features built in: Discord sign-in, leagues, an async draft room with Tera Captains chosen after the draft, schedules, standings, trades and free agency, playoffs, and battles that record themselves. Teams stay secret until each series is final.
 
 ## Run it
 

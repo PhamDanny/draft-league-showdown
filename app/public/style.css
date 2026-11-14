@@ -717,3 +717,32 @@ label.chk{gap:6px;font-size:14px}
 .bt-head{align-items:flex-end}
 .bt-head .pips{margin-bottom:7px}
 .bt-head > .btn,.bt-head > .menu{margin-bottom:2px}
+
+/* Standings: the playoff cut line */
+.standings tr.cut td{border-bottom:2px dashed var(--line)}
+.standings .pill{margin-left:6px;vertical-align:1px}
+.your-match.champion{border-color:var(--warn);background:linear-gradient(var(--warn-soft),var(--surface) 70%)}
+
+/* Playoff bracket: one column per round, series cards spaced to line up with the round before */
+.bracket{display:flex;gap:16px;min-width:min-content}
+.bk-round{display:flex;flex-direction:column;min-width:200px;flex:1}
+.bk-round h3{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.bk-note{font-size:12px;margin:0 0 8px}
+.bk-slots{display:flex;flex-direction:column;justify-content:space-around;gap:12px;flex:1}
+.bk-card{display:block;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:inherit;text-decoration:none;overflow:hidden}
+a.bk-card:hover{border-color:color-mix(in srgb,var(--fg) 28%,var(--line))}
+.bk-card.bye{opacity:.7}
+.bk-side{display:flex;align-items:center;gap:8px;padding:6px 10px;min-height:34px}
+.bk-side+.bk-side{border-top:1px solid var(--line)}
+.bk-side .seed{color:var(--muted);font-size:12px;min-width:16px}
+.bk-side .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bk-side.wait{color:var(--muted);font-size:13px}
+.bk-side.won{font-weight:600}
+.bk-side.won .num:last-child{color:var(--good)}
+.bk-side.lost{color:var(--muted)}
+.bk-side.me .nm{color:var(--sel)}
+
+/* Transactions */
+.offer{gap:8px;flex-wrap:wrap}
+.trade-form h3{margin:12px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.trade-form h3:first-of-type{margin-top:0}

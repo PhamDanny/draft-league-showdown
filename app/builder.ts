@@ -14,7 +14,8 @@ type LReq = Request & { league: L.League & { role: string }, season: L.Season, s
 
 const dexCache = new Map<string, string>();
 function dexJson(seasonId: number, settings: L.Settings) {
-	const picks = all<{ species_id: string }>('SELECT species_id FROM picks WHERE season_id = ?', seasonId);
+	// Drafted Pokémon, and free agents picked up since
+	const picks = all<{ species_id: string }>('SELECT species_id FROM picks WHERE season_id = ? UNION SELECT species_id FROM roster WHERE season_id = ?', seasonId, seasonId);
 	const rules = L.ruleset(settings);
 	const key = `${seasonId}:${settings.mod}:${rules.join(',')}:${picks.map(p => p.species_id).sort().join(',')}`;
 	const hit = dexCache.get(key);
@@ -135,7 +136,7 @@ function builderContext(req: Request) {
 				.map(x => ({ week: x.week, sets: revealedSets(x.id, opp, settings.mod) })).filter(x => x.sets.length);
 		}
 		return {
-			week: m.week, stage: m.stage, matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?', oppTeam: teamNames.get(opp) || n.get(opp) || '?',
+			week: m.week, stage: m.stage, label: L.matchLabel(m), matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?', oppTeam: teamNames.get(opp) || n.get(opp) || '?',
 			score: m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins],
 			played: m.status === 'final' ? revealedSets(m.id, me, settings.mod) : null,
 		};
@@ -168,6 +169,7 @@ function render(req: Request, res: Response, title: string, tab: string, body: s
 	res.send(page({
 		title, tab, body, scripts, wide, user: req.user, leagues: L.leaguesFor(req.user!.id), league: lr.league,
 		seasonStatus: lr.season?.status, play: playButton(req, matchId),
+		transactions: !!lr.settings && (lr.settings.trades || lr.settings.freeAgency),
 	}));
 }
 
@@ -222,7 +224,7 @@ export function builderRoutes(lg: Router) {
 	lg.get('/battle/:matchId/state', (req, res) => {
 		const m = myMatch(req);
 		if (!m) return res.status(404).json({ error: 'Not found' });
-		res.set('cache-control', 'no-store').json(seriesState(m, req.user!.id, (req as LReq).settings.bestOf));
+		res.set('cache-control', 'no-store').json(seriesState(m, req.user!.id, L.bestOfFor((req as LReq).settings, m)));
 	});
 
 	lg.post('/battle/:matchId/remake', (req, res) => {
@@ -233,7 +235,7 @@ export function builderRoutes(lg: Router) {
 		if (error) return res.status(400).json({ error });
 		notify(league.id);
 		const fresh = one<L.Match>('SELECT * FROM matches WHERE id = ?', m.id)!;
-		res.json(seriesState(fresh, req.user!.id, settings.bestOf));
+		res.json(seriesState(fresh, req.user!.id, L.bestOfFor(settings, fresh)));
 	});
 
 	lg.get('/battle/:matchId', (req, res) => {
@@ -246,11 +248,11 @@ export function builderRoutes(lg: Router) {
 		const roster = rosterOf(season.id, me, settings.mod);
 		const oppUser = one<{ showdown_id: string, showdown_name: string }>('SELECT showdown_id, showdown_name FROM users WHERE id = ?', opp)!;
 		const ctx = {
-			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, format: toID(league.format_name),
+			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, label: L.matchLabel(m), format: toID(league.format_name),
 			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id, myName: req.user!.showdown_name,
 			roster, teraMode: settings.teraMode, ...gameOf(settings),
 			teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, roster.length),
-			state: seriesState(m, me, settings.bestOf),
+			state: seriesState(m, me, L.bestOfFor(settings, m)),
 		};
 		render(req, res, `vs ${oppUser.showdown_name}`, 'schedule', '<div id="battle"></div>',
 			`<script>window.BATTLE = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/battle.js"></script>`, true, m.id);

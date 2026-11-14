@@ -26,6 +26,7 @@
 	// With no week in the address the builder opens on its home view: every week's matchup as a card
 	let home = !hashWeek && location.hash !== '#build';
 	let slot = 0;
+	let gone = [];
 	let data = load();
 	let C = null; // calc state, per week
 	let pick = '', q = '', hi = 0, rows = []; // browse list: which field, filter text, highlighted row, current rows
@@ -33,6 +34,8 @@
 
 	function load() {
 		const d = Sets.load(B.leagueId, B.seasonId, week ? week.week : 0);
+		// Sets for Pokémon that have left the roster (traded or dropped) come off the team; say which
+		gone = d.team.filter(s => s && D.species[s.species] && !allowed.has(s.species)).map(s => D.species[s.species].name);
 		d.team = d.team.slice(0, SIZE).map(s => (s && D.species[s.species] && allowed.has(s.species) ? s : null));
 		while (d.team.length < SIZE) d.team.push(null);
 		return d;
@@ -67,7 +70,7 @@
 	const weekLabel = w => {
 		const done = w.status === 'final';
 		const tag = done ? `${w.score[0] > w.score[1] ? 'W' : 'L'} ${w.score[0]}–${w.score[1]}` : w.status === 'live' ? 'Live' : w.week === B.current ? 'Next' : '';
-		return `Week ${w.week} · vs ${w.oppName}${tag ? ` (${tag})` : ''}`;
+		return `${w.label || `Week ${w.week}`} · vs ${w.oppName}${tag ? ` (${tag})` : ''}`;
 	};
 
 	// ---------- page ----------
@@ -88,13 +91,14 @@
 			<button class="btn" type="button" data-act="import">Import</button>
 			<button class="btn" type="button" data-act="export">Export</button>
 			${B.weeks.length > 1 ? `<select class="inp" data-act="copy" aria-label="Copy a team from another week"><option value="">Copy from…</option>${B.weeks.filter(w => w !== week).map(w =>
-				`<option value="${w.week}">Week ${w.week} · ${esc(w.oppName)}</option>`).join('')}</select>` : ''}
-			${week ? `<a class="btn primary" href="/l/${B.leagueId}/battle/${week.matchId}">Play week ${week.week}</a>` : ''}`;
+				`<option value="${w.week}">${esc(w.label || `Week ${w.week}`)} · ${esc(w.oppName)}</option>`).join('')}</select>` : ''}
+			${week ? `<a class="btn primary" href="/l/${B.leagueId}/battle/${week.matchId}">Play ${esc(week.label && !week.label.startsWith('Week') ? week.label.toLowerCase() : `week ${week.week}`)}</a>` : ''}`;
 		root.innerHTML = `
 			<h1 class="sr-only">Teambuilder</h1>
-			${ro ? `<div class="panel tb-banner"><b>Week ${week.week} vs ${esc(week.oppName)} · ${result} ${week.score[0]}–${week.score[1]}.</b>
+			${ro ? `<div class="panel tb-banner"><b>${esc(week.label || `Week ${week.week}`)} vs ${esc(week.oppName)} · ${result} ${week.score[0]}–${week.score[1]}.</b>
 				<span>This is the team you played; it can't be edited.</span>
 				${week.played?.length ? '' : '<span class="muted">No revealed team, showing what you saved.</span>'}</div>` : ''}
+			${gone.length && !ro ? `<div class="flash warn">${esc(gone.join(', '))} ${gone.length === 1 ? 'is' : 'are'} no longer on your roster (traded or dropped), so ${gone.length === 1 ? 'its set was' : 'their sets were'} taken off this team.</div>` : ''}
 			<div class="tb3 ${right ? '' : 'two'}">
 				<aside class="tb-l">
 					<section class="panel tb-teampanel">
@@ -120,7 +124,7 @@
 
 	const spriteOf = r => D.species[r.formes.find(f => D.species[f]) || r.id]?.sprite || '';
 	const rosterImg = r => `<img class="spr ${r.captain && B.teraMode === 'captains' ? 'cap' : ''}" src="${esc(spriteOf(r))}" alt="${esc(nameOf(r.formes.find(f => D.species[f]) || r.id))}" title="${esc(nameOf(r.formes.find(f => D.species[f]) || r.id))}${r.captain && B.teraMode === 'captains' ? ' (Tera Captain)' : ''}" loading="lazy">`;
-	const stageLabel = w => !w.stage || w.stage === 'regular' ? `Week ${w.week}` : w.stage.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+	const stageLabel = w => w.label || (!w.stage || w.stage === 'regular' ? `Week ${w.week}` : w.stage.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
 	function renderHome() {
 		const r = B.record;
 		const diff = r ? (r.diff > 0 ? `+${r.diff}` : r.diff < 0 ? `−${-r.diff}` : '0') : '';
