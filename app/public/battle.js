@@ -106,7 +106,7 @@
 		const gameNo = r ? r.game : nextGameNo();
 		return `<div class="bt-head">
 			<div class="bt-title">
-				<a class="eyebrow back" href="/l/${C.leagueId}/series/${C.matchId}">← Series · Week ${C.week} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</a>
+				<a class="eyebrow back" href="/l/${C.leagueId}/series/${C.matchId}">← Series · ${esc(C.label || 'Week ' + C.week)} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</a>
 				<h1><span>${esc(C.myName)}</span> <span class="bt-score num">${S.series.mine}–${S.series.theirs}</span> <span>${esc(C.oppName)}</span></h1>
 			</div>
 			${pips()}
@@ -126,10 +126,10 @@
 			status = '<span class="muted">Connecting…</span>';
 			action = '';
 		} else if (!prepared().length) {
-			status = `<span>No ${PICKING ? 'sets' : 'team'} for week ${C.week} yet.</span>`;
+			status = `<span>No ${PICKING ? 'sets' : 'team'} for ${esc((C.label || 'Week ' + C.week).replace(/^Week/, 'week'))} yet.</span>`;
 			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Build your team</a>`;
 		} else if (!teamReady() && lockedIn()) {
-			status = `<span>One of your locked-in Pokémon has no set saved for week ${C.week}. Restore it in the teambuilder.</span>`;
+			status = `<span>One of your locked-in Pokémon has no set saved for ${esc((C.label || 'Week ' + C.week).replace(/^Week/, 'week'))}. Restore it in the teambuilder.</span>`;
 			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Open teambuilder</a>`;
 		} else if (!teamReady()) {
 			status = `<span>Pick ${pickSize()} to bring to game ${g}. ${esc(C.oppName)} won't see them until the battle starts.</span>`;

@@ -20,6 +20,9 @@ export interface Settings {
 	rosterMax: number;
 	bestOf: number;
 	playoffTeams: number;
+	/** Series length in the playoffs; see bestOfFor. */
+	playoffBestOf: number;
+	playoffReseed: Reseed;
 	teraPreview: boolean;
 	/** When each player's 6 are chosen; see TEAM_PREVIEW. */
 	teamPreview: TeamPreview;
@@ -38,6 +41,14 @@ export const TEAM_PREVIEW: { [k in TeamPreview]: { label: string, rule: string }
 	game: { label: 'Each game', rule: 'Prep sets for the whole roster, pick 6 before every game' },
 	match: { label: 'Each match', rule: 'Prep sets for the whole roster, pick 6 before game 1 and keep them for the series' },
 };
+// How each playoff round after the first is paired.
+export type Reseed = 'fixed' | 'reseed' | 'choose';
+export const RESEED: { [k in Reseed]: { label: string, rule: string } } = {
+	fixed: { label: 'No re-seed', rule: 'The bracket is set when the playoffs start' },
+	reseed: { label: 'Re-seed', rule: 'After each round, the best seed left plays the worst seed left' },
+	choose: { label: 'Higher seed picks', rule: 'Before each round, the best seed left picks their opponent, then the next best seed left, and so on' },
+};
+
 /** How many sets a player preps for a week. */
 export function teamSize(settings: Settings, rosterSize: number) {
 	return settings.teamPreview === 'preselect' ? 6 : Math.max(6, rosterSize);
@@ -68,7 +79,7 @@ function preset(format: string, label: string, mod: string, o: {
 		settings: {
 			format, mod, gameType: o.gameType || 'singles', teraMode: o.tera || 'none', maxCaptains: 2, tcBudget: 28,
 			draftType: 'snake', budget: o.budget, rosterMin: o.roster[0], rosterMax: o.roster[1], bestOf: o.bestOf || 1, playoffTeams: 6,
-			teraPreview: true, teamPreview: 'preselect', clauses: o.clauses || ALL_CLAUSES, trades: true, freeAgency: true,
+			playoffBestOf: o.bestOf || 1, playoffReseed: 'fixed', teraPreview: true, teamPreview: 'preselect', clauses: o.clauses || ALL_CLAUSES, trades: true, freeAgency: true,
 		},
 	};
 }
@@ -158,10 +169,14 @@ export interface League {
 }
 export interface Season {
 	id: number; league_id: number; number: number; status: string; current_pick: number;
+	/** JSON user ids in final regular-season order (coin flips settled), set when the playoffs start. */
+	final_order: string | null;
 }
 export interface Match {
 	id: number; season_id: number; week: number; stage: string; p1: number; p2: number; status: string;
 	p1_wins: number; p2_wins: number; winner: number | null; revealed_at: number | null;
+	/** Position within its playoff round; NULL in the regular season. */
+	bracket_slot: number | null;
 }
 
 /** A league's settings: its format's preset under what the league stored. Leagues from before formats are SV. */
@@ -171,6 +186,8 @@ export function settingsOf(league: League): Settings {
 	// Captain pricing settings from before Tera budgets
 	delete stored.tcMaxCost;
 	delete stored.tcExtra;
+	// Leagues from before the playoff series setting play their playoffs at the regular length
+	if (stored.playoffBestOf == null && stored.bestOf != null) stored.playoffBestOf = stored.bestOf;
 	return { ...p.settings, ...stored, format: p.settings.format, mod: p.settings.mod, gameType: p.settings.gameType };
 }
 
@@ -693,14 +710,58 @@ export function currentWeek(seasonId: number) {
 	return one<{ w: number }>('SELECT MAX(week) AS w FROM matches WHERE season_id = ?', seasonId)?.w || 0;
 }
 
+/** The last week of the regular season (playoff rounds come after it). */
+export function regularWeeks(seasonId: number) {
+	return one<{ w: number | null }>("SELECT MAX(week) AS w FROM matches WHERE season_id = ? AND stage = 'regular'", seasonId)?.w || 0;
+}
+
 export interface Standing {
 	userId: number; sw: number; sl: number; gw: number; gl: number;
+	/** Strength of victory: the combined series win % of the players this one beat. */
+	sov: number;
+	/** Level with a neighbour after every tiebreaker (before the playoffs settle it with a coin flip). */
+	tied: boolean;
+	/** Placed by the coin flip drawn when the playoffs started. */
+	flip: boolean;
 }
+
+/** Fractions compared exactly enough that 4/6 and 6/9 are equal. */
+const ratio = (a: number, b: number) => b ? Math.round(a / b * 1e9) : 0;
+const TIEBREAKS: ((group: Standing[], won: Set<string>) => (s: Standing) => number)[] = [
+	// Head-to-head among everyone in the tie: series won against the others
+	(group, won) => s => group.reduce((a, o) => a + (won.has(`${s.userId}>${o.userId}`) ? 1 : 0), 0),
+	() => s => ratio(s.gw, s.gw + s.gl),
+	() => s => s.gw - s.gl,
+	() => s => s.sov,
+];
+/**
+ * Splits players level on series wins into ordered groups. Each tiebreaker that separates some of them
+ * starts again from head-to-head for those still level; a group of more than one is a tie nothing breaks.
+ */
+function breakTies(group: Standing[], won: Set<string>, k = 0): Standing[][] {
+	if (group.length < 2 || k >= TIEBREAKS.length) return [group];
+	const f = TIEBREAKS[k](group, won);
+	const vals = new Map(group.map(s => [s, f(s)]));
+	const distinct = [...new Set(vals.values())].sort((a, b) => b - a);
+	if (distinct.length === 1) return breakTies(group, won, k + 1);
+	return distinct.flatMap(v => breakTies(group.filter(s => vals.get(s) === v), won, 0));
+}
+
+/**
+ * Regular-season standings: series wins, then head-to-head among all the tied players, game win %,
+ * game differential and strength of victory. Players still level are `tied` until the playoffs start,
+ * when a coin flip (stored in `final_order`) places them.
+ */
 export function standings(seasonId: number): Standing[] {
+	return standingGroups(seasonId).flat();
+}
+function standingGroups(seasonId: number, ignoreFlips = false): Standing[][] {
 	const players = draftPlayers(seasonId);
-	const table = new Map<number, Standing>(players.map(p => [p.user_id, { userId: p.user_id, sw: 0, sl: 0, gw: 0, gl: 0 }]));
-	const h2h = new Map<string, number>();
+	const table = new Map<number, Standing>(players.map(p => [p.user_id, { userId: p.user_id, sw: 0, sl: 0, gw: 0, gl: 0, sov: 0, tied: false, flip: false }]));
+	const won = new Set<string>();
+	const beat = new Map<number, number[]>();
 	for (const m of matches(seasonId)) {
+		if (m.stage !== 'regular') continue;
 		const a = table.get(m.p1), b = table.get(m.p2);
 		if (!a || !b) continue;
 		a.gw += m.p1_wins; a.gl += m.p2_wins;
@@ -708,14 +769,30 @@ export function standings(seasonId: number): Standing[] {
 		if (m.status === 'final' && m.winner) {
 			const [w, l] = m.winner === m.p1 ? [a, b] : [b, a];
 			w.sw++; l.sl++;
-			h2h.set(`${w.userId}>${l.userId}`, (h2h.get(`${w.userId}>${l.userId}`) || 0) + 1);
+			won.add(`${w.userId}>${l.userId}`);
+			beat.set(w.userId, [...beat.get(w.userId) || [], l.userId]);
 		}
 	}
-	return [...table.values()].sort((x, y) =>
-		y.sw - x.sw ||
-		(h2h.get(`${y.userId}>${x.userId}`) || 0) - (h2h.get(`${x.userId}>${y.userId}`) || 0) ||
-		(y.gw / Math.max(1, y.gw + y.gl)) - (x.gw / Math.max(1, x.gw + x.gl)) ||
-		(y.gw - y.gl) - (x.gw - x.gl));
+	for (const s of table.values()) {
+		const beaten = (beat.get(s.userId) || []).map(id => table.get(id)!);
+		s.sov = ratio(beaten.reduce((a, o) => a + o.sw, 0), beaten.reduce((a, o) => a + o.sw + o.sl, 0));
+	}
+	const rows = [...table.values()];
+	const bySeries = [...new Set(rows.map(s => s.sw))].sort((a, b) => b - a);
+	const groups = bySeries.flatMap(sw => breakTies(rows.filter(s => s.sw === sw), won));
+	const settled = ignoreFlips ? null : one<{ final_order: string | null }>('SELECT final_order FROM seasons WHERE id = ?', seasonId)?.final_order;
+	const order: number[] = settled ? JSON.parse(settled) : [];
+	for (const g of groups) {
+		if (g.length < 2) continue;
+		if (order.length) {
+			const at = (s: Standing) => order.includes(s.userId) ? order.indexOf(s.userId) : order.length;
+			g.sort((a, b) => at(a) - at(b));
+			for (const s of g) s.flip = true;
+		} else {
+			for (const s of g) s.tied = true;
+		}
+	}
+	return groups;
 }
 
 export function battlesFor(matchId: number) {
@@ -765,15 +842,23 @@ export function recordBattleEnd(leagueId: number, users: [number, number], winne
 		let p1w = match.p1_wins, p2w = match.p2_wins;
 		if (winnerId === match.p1) p1w++;
 		else if (winnerId === match.p2) p2w++;
-		const need = Math.ceil(settings.bestOf / 2);
+		const need = Math.ceil(bestOfFor(settings, match) / 2);
 		// Both can be at the mark if the series length was shortened mid-series; the leader takes it
 		const winner = p1w < need && p2w < need ? null :
 			p1w > p2w ? match.p1 : p2w > p1w ? match.p2 : (winnerId === match.p2 ? match.p2 : match.p1);
 		run('UPDATE matches SET p1_wins = ?, p2_wins = ?, status = ?, winner = ? WHERE id = ?',
 			p1w, p2w, winner ? 'final' : 'live', winner, match.id);
-		if (winner) revealSeries(match.id);
+		if (winner) {
+			revealSeries(match.id);
+			afterResult(match.season_id, settings, leagueId);
+		}
 		return match.id;
 	});
+}
+
+/** Series length for a series: the playoff length for playoff rounds. */
+export function bestOfFor(settings: Settings, match: { stage: string }) {
+	return match.stage === 'regular' ? settings.bestOf : settings.playoffBestOf;
 }
 
 // ---------- remakes ----------
@@ -840,17 +925,299 @@ export function revealSeries(matchId: number) {
 
 /** Commissioner override. Returns an error message for a score the series length can't produce, or ''. */
 export function setResult(matchId: number, p1Wins: number, p2Wins: number, settings: Settings, userId: number, leagueId: number) {
-	const match = one<Match>('SELECT * FROM matches WHERE id = ?', matchId)!;
-	const need = Math.ceil(settings.bestOf / 2);
-	if (p1Wins > need || p2Wins > need || (p1Wins >= need && p2Wins >= need)) {
-		return `A best of ${settings.bestOf} ends when one player has ${need} win${need === 1 ? '' : 's'}, so ${p1Wins}–${p2Wins} isn't a possible score.`;
+	return tx(() => {
+		const match = one<Match>('SELECT * FROM matches WHERE id = ?', matchId)!;
+		const bestOf = bestOfFor(settings, match);
+		const need = Math.ceil(bestOf / 2);
+		if (p1Wins > need || p2Wins > need || (p1Wins >= need && p2Wins >= need)) {
+			return `A best of ${bestOf} ends when one player has ${need} win${need === 1 ? '' : 's'}, so ${p1Wins}–${p2Wins} isn't a possible score.`;
+		}
+		const winner = p1Wins >= need ? match.p1 : p2Wins >= need ? match.p2 : null;
+		// A playoff winner can only change while the rounds after it haven't started
+		if (match.stage !== 'regular' && winner !== match.winner &&
+			one("SELECT 1 FROM matches WHERE season_id = ? AND stage != 'regular' AND week > ? AND status != 'scheduled'", match.season_id, match.week)) {
+			return 'The next round has started. Remake it first.';
+		}
+		run('UPDATE matches SET p1_wins = ?, p2_wins = ?, winner = ?, status = ? WHERE id = ?',
+			p1Wins, p2Wins, winner, winner ? 'final' : (p1Wins + p2Wins ? 'live' : 'scheduled'), matchId);
+		if (winner && !match.revealed_at) revealSeries(matchId);
+		audit(leagueId, userId, 'result.override', `match ${matchId}: ${p1Wins}-${p2Wins}`);
+		afterResult(match.season_id, settings, leagueId);
+		return '';
+	});
+}
+
+// ---------- playoffs ----------
+// Seeds come from the regular-season standings. The playoffs start by themselves when the last regular
+// series goes final (startPlayoffs), and each round's series are made once their players are known (syncBracket).
+
+export const ROUND_LABEL: { [stage: string]: string } = {
+	'final': 'Final', 'semifinals': 'Semifinals', 'quarterfinals': 'Quarterfinals', 'round-of-16': 'Round of 16',
+};
+/** "Week 3", or a playoff round's name. */
+export function matchLabel(m: { stage: string, week: number }) {
+	return m.stage === 'regular' ? `Week ${m.week}` : ROUND_LABEL[m.stage] || m.stage;
+}
+function stageOf(round: number, size: number) {
+	return ({ 2: 'final', 4: 'semifinals', 8: 'quarterfinals', 16: 'round-of-16' } as { [n: number]: string })[size >> (round - 1)] || `round-${round}`;
+}
+/** Standard bracket order: for 8, seeds 1 8 4 5 2 7 3 6, so 1 and 2 can only meet in the final. */
+function seedPositions(size: number): number[] {
+	let pos = [1];
+	while (pos.length < size) {
+		const n = pos.length * 2;
+		pos = pos.flatMap(p => [p, n + 1 - p]);
 	}
-	const winner = p1Wins >= need ? match.p1 : p2Wins >= need ? match.p2 : null;
-	run('UPDATE matches SET p1_wins = ?, p2_wins = ?, winner = ?, status = ? WHERE id = ?',
-		p1Wins, p2Wins, winner, winner ? 'final' : (p1Wins + p2Wins ? 'live' : 'scheduled'), matchId);
-	if (winner && !match.revealed_at) revealSeries(matchId);
-	audit(leagueId, userId, 'result.override', `match ${matchId}: ${p1Wins}-${p2Wins}`);
-	return '';
+	return pos;
+}
+
+export interface Side { userId: number; seed: number }
+export interface Slot {
+	slot: number;
+	a: Side | null;
+	b: Side | null;
+	/** A seed that skips this round. */
+	bye: boolean;
+	match: Match | null;
+	/** What fills a side that isn't known yet: "Winner of 4 v 5", "Seed 1's pick". */
+	waiting: [string, string];
+}
+export interface Round { round: number; stage: string; label: string; week: number; slots: Slot[]; note: string }
+export interface Bracket {
+	/** Seeded from today's standings, before the playoffs start. */
+	projected: boolean;
+	seeds: Side[];
+	rounds: Round[];
+	/** With 'choose': the seed picking an opponent now, and who they can pick. */
+	picking: { round: number, picker: Side, options: Side[] } | null;
+	champion: number | null;
+}
+
+/** Number of playoff teams, or 0 when there are no playoffs. */
+export function playoffSize(settings: Settings, players: number) {
+	const n = Math.min(settings.playoffTeams, players);
+	return n >= 2 ? n : 0;
+}
+
+/**
+ * The playoff bracket: the real one once the playoffs have started, otherwise the one the standings would
+ * give today. Null when the league has no playoffs or the season is still drafting.
+ */
+export function bracket(season: Season, settings: Settings): Bracket | null {
+	if (!captainsRevealed(season)) return null;
+	const projected = !season.final_order;
+	const order: number[] = projected ? standings(season.id).map(s => s.userId) : JSON.parse(season.final_order!);
+	const size = playoffSize(settings, order.length);
+	if (!size) return null;
+	const seeds = order.slice(0, size).map((userId, i) => ({ userId, seed: i + 1 }));
+	const games = projected ? [] : all<Match>("SELECT * FROM matches WHERE season_id = ? AND stage != 'regular'", season.id);
+	const picks = projected ? [] : all<{ round: number, picker: number, opponent: number }>(
+		'SELECT round, picker, opponent FROM playoff_picks WHERE season_id = ? ORDER BY id', season.id);
+	return planBracket(seeds, settings.playoffReseed, regularWeeks(season.id), games, picks, projected);
+}
+
+/** The bracket as a pure function of the seeds, the playoff series so far and (with 'choose') the picks. */
+export function planBracket(seeds: Side[], mode: Reseed, lastWeek: number, games: Match[],
+	picks: { round: number, picker: number, opponent: number }[], projected = false): Bracket {
+	const n = seeds.length;
+	let size = 1;
+	while (size < n) size *= 2;
+	const roundsCount = Math.log2(size);
+	const byes = size - n;
+	const winnerOf = (s: Slot) => s.bye ? s.a : s.match?.status === 'final' && s.match.winner ?
+		[s.a, s.b].find(x => x?.userId === s.match!.winner) || null : null;
+	const sideName = (s: Side | null) => s ? String(s.seed) : '?';
+	let picking: Bracket['picking'] = null;
+	const rounds: Round[] = [];
+	for (let r = 1; r <= roundsCount; r++) {
+		const week = lastWeek + r;
+		const stage = stageOf(r, size);
+		const count = size >> r;
+		const found = (slot: number) => games.find(g => g.week === week && g.bracket_slot === slot) || null;
+		const slot = (i: number, a: Side | null, b: Side | null, waiting: [string, string] = ['', ''], bye = false): Slot => {
+			if (a && b && b.seed < a.seed) [a, b] = [b, a];
+			return { slot: i, a, b, bye, match: a && b ? found(i) : null, waiting };
+		};
+		const prev = rounds.at(-1);
+		let slots: Slot[] = [];
+		let note = '';
+		const pairByPicks = (players: Side[], offset: number) => {
+			const left = [...players];
+			const pairs: [Side, Side][] = [];
+			for (const p of picks.filter(x => x.round === r)) {
+				const opp = left.findIndex(x => x.userId === p.opponent);
+				if (left[0]?.userId !== p.picker || opp < 1) break;
+				pairs.push([left[0], left[opp]]);
+				left.splice(opp, 1);
+				left.shift();
+			}
+			if (left.length === 2) pairs.push([left[0], left[1]]), left.length = 0;
+			if (left.length && !projected) picking = { round: r, picker: left[0], options: left.slice(1) };
+			const out = pairs.map(([a, b], i) => slot(offset + i, a, b));
+			for (let i = pairs.length; i < players.length / 2; i++) {
+				out.push(slot(offset + i, null, null, i === pairs.length && left.length ? [`Seed ${left[0].seed}`, `Seed ${left[0].seed}'s pick`] : ['TBD', 'TBD']));
+			}
+			return out;
+		};
+		if (r === 1) {
+			if (mode === 'choose') {
+				slots = seeds.slice(0, byes).map((s, i) => slot(i, s, null, ['', 'Bye'], true));
+				const playing = seeds.slice(byes);
+				if (projected) {
+					slots.push(...Array.from({ length: playing.length / 2 }, (_, i) =>
+						slot(byes + i, null, null, i ? ['TBD', 'TBD'] : [`Seed ${playing[0].seed}`, 'their pick'])));
+					note = `Seed ${playing[0]?.seed} picks their opponent`;
+				} else {
+					slots.push(...pairByPicks(playing, byes));
+				}
+			} else {
+				const pos = seedPositions(size);
+				for (let i = 0; i < count; i++) {
+					const a = seeds[pos[2 * i] - 1], b = pos[2 * i + 1] <= n ? seeds[pos[2 * i + 1] - 1] : null;
+					slots.push(slot(i, a, b, ['', 'Bye'], !b));
+				}
+			}
+		} else if (mode === 'fixed') {
+			for (let i = 0; i < count; i++) {
+				const fa = prev!.slots[2 * i], fb = prev!.slots[2 * i + 1];
+				const wa = winnerOf(fa), wb = winnerOf(fb);
+				const waitFor = (f: Slot) => f.a && f.b ? `Winner of ${sideName(f.a)} v ${sideName(f.b)}` : 'TBD';
+				slots.push(slot(i, wa, wb, [wa ? '' : waitFor(fa), wb ? '' : waitFor(fb)]));
+			}
+		} else {
+			const winners = prev!.slots.map(winnerOf);
+			if (winners.every(Boolean)) {
+				const players = (winners as Side[]).sort((x, y) => x.seed - y.seed);
+				if (mode === 'reseed') {
+					for (let i = 0; i < count; i++) slots.push(slot(i, players[i], players[players.length - 1 - i]));
+				} else {
+					slots = pairByPicks(players, 0);
+				}
+			} else {
+				note = mode === 'reseed' ? `Re-seeded after the ${ROUND_LABEL[prev!.stage]?.toLowerCase() || 'last round'}` :
+					`Seeds pick their opponents after the ${ROUND_LABEL[prev!.stage]?.toLowerCase() || 'last round'}`;
+				for (let i = 0; i < count; i++) slots.push(slot(i, null, null, ['TBD', 'TBD']));
+			}
+		}
+		rounds.push({ round: r, stage, label: ROUND_LABEL[stage] || stage, week, slots, note });
+		if (picking) break;
+	}
+	// Rounds after a pick that's still open are drawn empty
+	for (let r = rounds.length + 1; r <= roundsCount; r++) {
+		rounds.push({
+			round: r, stage: stageOf(r, size), label: ROUND_LABEL[stageOf(r, size)] || stageOf(r, size), week: lastWeek + r, note: '',
+			slots: Array.from({ length: size >> r }, (_, i) => ({ slot: i, a: null, b: null, bye: false, match: null, waiting: ['TBD', 'TBD'] as [string, string] })),
+		});
+	}
+	const last = rounds.at(-1)!.slots[0];
+	return { projected, seeds, rounds, picking, champion: winnerOf(last)?.userId ?? null };
+}
+
+export type Phase = 'draft' | 'regular' | 'playoffs' | 'complete';
+export function phase(season: Season, settings: Settings): Phase {
+	if (!captainsRevealed(season)) return 'draft';
+	if (!season.final_order) return 'regular';
+	const b = bracket(season, settings);
+	return b && !b.champion ? 'playoffs' : 'complete';
+}
+/** The season's winner once it's complete: the playoff champion, or first place without playoffs. */
+export function champion(season: Season, settings: Settings) {
+	if (!season.final_order) return null;
+	const b = bracket(season, settings);
+	return b ? b.champion : JSON.parse(season.final_order)[0] ?? null;
+}
+
+/** Run inside the transaction that changed a series result. */
+function afterResult(seasonId: number, settings: Settings, leagueId: number) {
+	startPlayoffs(seasonId, settings, leagueId);
+	syncBracket(seasonId, settings);
+}
+
+/**
+ * Starts the playoffs once every regular-season series is final: settles any tie left after every tiebreaker
+ * with a coin flip and stores the final order. Runs inside a transaction; does nothing otherwise.
+ */
+export function startPlayoffs(seasonId: number, settings: Settings, leagueId: number, userId: number | null = null) {
+	const season = one<Season>('SELECT * FROM seasons WHERE id = ?', seasonId)!;
+	if (season.status !== 'regular' || season.final_order) return false;
+	const regular = all<{ status: string }>("SELECT status FROM matches WHERE season_id = ? AND stage = 'regular'", seasonId);
+	if (!regular.length || regular.some(m => m.status !== 'final')) return false;
+	const flips: number[][] = [];
+	const order = standingGroups(seasonId, true).flatMap(g => {
+		const ids = g.map(s => s.userId);
+		if (ids.length < 2) return ids;
+		for (let i = ids.length - 1; i > 0; i--) {
+			const j = crypto.randomInt(i + 1);
+			[ids[i], ids[j]] = [ids[j], ids[i]];
+		}
+		flips.push(ids);
+		return ids;
+	});
+	run('UPDATE seasons SET final_order = ? WHERE id = ?', JSON.stringify(order), seasonId);
+	const size = playoffSize(settings, order.length);
+	audit(leagueId, userId, 'playoffs.start', `${size ? `seeds ${order.slice(0, size).join(',')}` : 'no playoffs'}` +
+		(flips.length ? `; coin flips ${flips.map(f => f.join('>')).join(' ')}` : ''));
+	return true;
+}
+
+/**
+ * Makes the playoff series the bracket says should exist: creates series whose players are known, moves the
+ * players of a series that hasn't started when an override changed who's in it, and removes series and
+ * picks that no longer apply. Runs inside a transaction.
+ */
+export function syncBracket(seasonId: number, settings: Settings) {
+	const season = one<Season>('SELECT * FROM seasons WHERE id = ?', seasonId)!;
+	if (!season.final_order) return;
+	const b = bracket(season, settings);
+	if (!b) return;
+	const kept = new Set<number>();
+	for (const round of b.rounds) {
+		for (const s of round.slots) {
+			if (s.bye || !s.a || !s.b) continue;
+			const at = one<Match>('SELECT * FROM matches WHERE season_id = ? AND week = ? AND bracket_slot = ?', seasonId, round.week, s.slot);
+			if (!at) {
+				const r = run('INSERT INTO matches (season_id, week, stage, p1, p2, bracket_slot) VALUES (?, ?, ?, ?, ?, ?)',
+					seasonId, round.week, round.stage, s.a.userId, s.b.userId, s.slot);
+				kept.add(Number(r.lastInsertRowid));
+			} else {
+				if ((at.p1 !== s.a.userId || at.p2 !== s.b.userId) && at.status === 'scheduled' && !one('SELECT 1 FROM battles WHERE match_id = ?', at.id)) {
+					run('UPDATE matches SET p1 = ?, p2 = ? WHERE id = ?', s.a.userId, s.b.userId, at.id);
+				}
+				kept.add(at.id);
+			}
+		}
+	}
+	for (const m of all<Match>("SELECT * FROM matches WHERE season_id = ? AND stage != 'regular'", seasonId)) {
+		if (!kept.has(m.id) && m.status === 'scheduled' && !one('SELECT 1 FROM battles WHERE match_id = ?', m.id)) {
+			run('DELETE FROM matches WHERE id = ?', m.id);
+		}
+	}
+	// Picks for a round that isn't open yet, or that no longer fit the round's players, are dropped
+	if (settings.playoffReseed === 'choose') {
+		const fresh = bracket(season, settings)!;
+		for (const p of all<{ id: number, round: number, picker: number, opponent: number }>('SELECT * FROM playoff_picks WHERE season_id = ?', seasonId)) {
+			const round = fresh.rounds.find(r => r.round === p.round);
+			const used = round?.slots.some(s => s.a && s.b && [s.a.userId, s.b.userId].includes(p.picker) && [s.a.userId, s.b.userId].includes(p.opponent));
+			if (!used) run('DELETE FROM playoff_picks WHERE id = ?', p.id);
+		}
+	}
+}
+
+/** With 'choose': the seed on the clock (or a commissioner for them) picks their opponent. */
+export function playoffPick(season: Season, settings: Settings, byUserId: number, forUserId: number, opponentId: number) {
+	return tx(() => {
+		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
+		const b = bracket(fresh, settings);
+		const p = b?.picking;
+		if (!p || b.projected) return 'Nobody is picking an opponent right now.';
+		if (p.picker.userId !== forUserId) return "It's not your pick.";
+		if (!p.options.some(o => o.userId === opponentId)) return "That player can't be picked.";
+		run('INSERT INTO playoff_picks (season_id, round, picker, opponent, made_by, at) VALUES (?, ?, ?, ?, ?, ?)',
+			season.id, p.round, forUserId, opponentId, byUserId, now());
+		audit(season.league_id, byUserId, 'playoffs.pick', `user ${forUserId} picked user ${opponentId}`);
+		syncBracket(season.id, settings);
+		return null;
+	});
 }
 
 export function userIdByShowdownId(showdownId: string) {

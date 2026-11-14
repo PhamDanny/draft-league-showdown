@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
-import { all, audit, one, run } from './db.ts';
+import { all, audit, one, run, tx } from './db.ts';
 import { DEV_LOGIN, DISCORD_CLIENT_ID, PUBLIC_URL } from './config.ts';
 import { devUsers, requireUser, setShowdownName } from './auth.ts';
 import { exportSet, itemSprites, mon, pickSpecies, toID, TYPES } from './dex.ts';
@@ -213,7 +213,11 @@ export function playButton(req: Request, exceptMatchId?: number) {
 	if (!req.user || !lr.league || !lr.season) return undefined;
 	const m = L.nextMatchFor(lr.season.id, req.user.id);
 	if (!m || m.id === exceptMatchId) return undefined;
-	return { href: `/l/${lr.league.id}/battle/${m.id}`, label: `Play week ${m.week}` };
+	return { href: `/l/${lr.league.id}/battle/${m.id}`, label: playLabel(m) };
+}
+/** "Play week 3", or "Play semifinals" in the playoffs. */
+export function playLabel(m: L.Match) {
+	return m.stage === 'regular' ? `Play week ${m.week}` : `Play ${L.matchLabel(m).toLowerCase()}`;
 }
 function back(req: Request, res: Response, fallback: string, flash?: string) {
 	const url = new URL(req.get('referer') || fallback, PUBLIC_URL);
@@ -372,44 +376,126 @@ export function pageRoutes(app: Express) {
 					'The draft is over. Players are choosing their Tera Captains; the schedule is made once the commissioner locks them.'}</p>
 				<a class="btn primary" href="/l/${league.id}/draft">${playing ? 'Choose Tera Captains' : 'Draft room'}</a></section>`;
 		} else {
+			const settings = (req as LReq).settings;
+			const ph = L.phase(season, settings);
+			const br = L.bracket(season, settings);
+			const champ = ph === 'complete' ? L.champion(season, settings) : null;
 			const my = ms.find(m => m.p1 === me || m.p2 === me);
+			const weekLabel = ms[0] ? L.matchLabel(ms[0]) : `Week ${week}`;
 			let card;
-			if (my) {
+			if (champ) {
+				card = `<section class="panel your-match champion"><p class="eyebrow">Season ${season.number} champion</p>
+					<div class="row"><h2 style="margin:0">${esc(n.get(champ))}</h2><span class="spacer"></span>
+					${br ? `<a class="btn" href="/l/${league.id}/playoffs">Bracket</a>` : ''}</div></section>`;
+			} else if (my) {
 				const opp = my.p1 === me ? my.p2 : my.p1;
 				const [a, b] = my.p1 === me ? [my.p1_wins, my.p2_wins] : [my.p2_wins, my.p1_wins];
 				const final = my.status === 'final';
-				card = `<section class="panel your-match"><p class="eyebrow">Week ${my.week} · Your match</p>
+				card = `<section class="panel your-match"><p class="eyebrow">${esc(L.matchLabel(my))} · Your match</p>
 					<div class="row"><h2 style="margin:0">vs ${esc(n.get(opp))}</h2>${statusPill(my.status)}<span class="num">${my.status === 'scheduled' ? '' : `${a}–${b}`}</span>
 						<span class="spacer"></span>
 						${final ? `<a class="btn primary" href="/l/${league.id}/series/${my.id}">View series</a>` :
-							`<a class="btn" href="/l/${league.id}/builder#week-${my.week}">Build team</a><a class="btn primary" href="/l/${league.id}/battle/${my.id}">Play week ${my.week}</a>`}</div></section>`;
+							`<a class="btn" href="/l/${league.id}/builder#week-${my.week}">Build team</a><a class="btn primary" href="/l/${league.id}/battle/${my.id}">${esc(playLabel(my))}</a>`}</div></section>`;
+			} else if (ph === 'playoffs' && br) {
+				const picking = br.picking?.picker.userId === me;
+				const alive = br.seeds.some(s => s.userId === me) && !L.matches(season.id).some(m => m.stage !== 'regular' && m.status === 'final' && (m.p1 === me || m.p2 === me) && m.winner !== me);
+				card = `<section class="panel your-match"><p class="eyebrow">Playoffs · Your match</p>
+					${picking ? `<div class="callout"><b>You pick your ${esc(br.rounds[br.picking!.round - 1].label.toLowerCase())} opponent.</b></div>` : ''}
+					<div class="row"><p style="margin:4px 0 0">${picking ? 'Choose from the teams still in.' : alive ? 'Waiting for your next opponent.' : 'Your season is over.'}</p><span class="spacer"></span>
+					<a class="btn ${picking ? 'primary' : ''}" href="/l/${league.id}/playoffs">${picking ? 'Pick opponent' : 'Bracket'}</a></div></section>`;
 			} else {
-				card = `<section class="panel your-match"><p class="eyebrow">Week ${week} · Your match</p><p style="margin:4px 0 0">${ms.length ? 'No match this week.' : 'No matches this week.'}</p></section>`;
+				card = `<section class="panel your-match"><p class="eyebrow">${esc(weekLabel)} · Your match</p><p style="margin:4px 0 0">${ms.length ? 'No match this week.' : 'No matches this week.'}</p></section>`;
 			}
-			const others = ms.filter(m => m !== my);
+			const others = champ ? [] : ms.filter(m => m !== my);
+			const cut = br ? br.seeds.length : 0;
 			main = `${card}<div class="grid g2 top" style="margin-top:16px">
-				${others.length ? `<section class="panel"><h2>Week ${week}</h2><div class="list">${others.map(m => `<a class="rowlink" href="/l/${league.id}/series/${m.id}">
+				${others.length ? `<section class="panel"><h2>${esc(weekLabel)}</h2><div class="list">${others.map(m => `<a class="rowlink" href="/l/${league.id}/series/${m.id}">
 					<div class="match"><span class="p">${esc(n.get(m.p1))}</span><span class="score num">${score(m)}</span><span class="p r">${esc(n.get(m.p2))}</span></div>
 					${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>` : ''}
-				<section class="panel" id="standings"><h2>Standings</h2>${standingsTable(league.id, st, n, me, st)}</section>
+				<section class="panel" id="standings"><div class="row panel-head"><h2>Standings</h2><span class="spacer"></span>
+					${br ? `<a href="/l/${league.id}/playoffs">${br.projected ? 'Projected bracket' : 'Bracket'} →</a>` : ''}</div>
+					${standingsTable(league.id, st, n, me, st, cut)}
+					${cut && ph === 'regular' ? `<p class="muted field-help" style="margin:8px 0 0">The top ${cut} make the playoffs.</p>` : ''}</section>
 			</div>`;
 		}
+		const ph = season.status === 'regular' ? L.phase(season, (req as LReq).settings) : 'draft';
+		const eyebrow = ph === 'regular' ? ` · Week ${week} of ${L.regularWeeks(season.id)}` : ph === 'playoffs' ? ` · Playoffs` : ph === 'complete' ? ' · Complete' : '';
 		render(req, res, {
 			title: league.name, tab: '',
-			body: `<p class="eyebrow">Season ${season.number}${season.status === 'regular' ? ` · Week ${week} of ${L.matches(season.id).reduce((a, m) => Math.max(a, m.week), 0)}` : ''}</p>
+			body: `<p class="eyebrow">Season ${season.number}${eyebrow}</p>
 				<h1>${esc(league.name)}</h1><div id="live">${main}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
 		});
 	});
 
-	function standingsTable(leagueId: number, rows: L.Standing[], n: Map<number, string>, me: number, full: L.Standing[]) {
+	/** `cut`: draw a line under that many rows (the playoff spots). */
+	function standingsTable(leagueId: number, rows: L.Standing[], n: Map<number, string>, me: number, full: L.Standing[], cut = 0) {
+		const mark = (r: L.Standing) => r.tied ? ' <span class="pill" title="Level after every tiebreaker. A coin flip settles it when the playoffs start.">Tied</span>' :
+			r.flip ? ' <span class="pill" title="Placed by a coin flip when the playoffs started">Coin flip</span>' : '';
 		return `<div class="table-wrap"><table class="standings"><thead><tr><th>#</th><th>Player</th><th class="r">Series</th><th class="r hide-sm">Games</th><th class="r">Diff</th></tr></thead><tbody>
-		${rows.map(r => `<tr class="${r.userId === me ? 'me' : ''}"><td class="num">${full.indexOf(r) + 1}</td>
-			<td><a href="/l/${leagueId}/team/${r.userId}">${esc(n.get(r.userId))}</a></td>
+		${rows.map(r => `<tr class="${r.userId === me ? 'me' : ''} ${cut && full.indexOf(r) === cut - 1 && cut < full.length ? 'cut' : ''}"><td class="num">${full.indexOf(r) + 1}</td>
+			<td><a href="/l/${leagueId}/team/${r.userId}">${esc(n.get(r.userId))}</a>${mark(r)}</td>
 			<td class="r num">${r.sw}–${r.sl}</td><td class="r num hide-sm">${r.gw}–${r.gl}</td>
 			<td class="r num">${r.gw - r.gl > 0 ? '+' : ''}${r.gw - r.gl}</td></tr>`).join('')}
 		</tbody></table></div>`;
 	}
+
+	// ----- playoffs -----
+
+	lg.get('/playoffs', (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const n = names(league.id);
+		const me = req.user!.id;
+		const isComm = league.role === 'commissioner';
+		const br = L.bracket(season, settings);
+		const champ = L.phase(season, settings) === 'complete' ? L.champion(season, settings) : null;
+		let body: string;
+		if (!br) {
+			body = `<p class="muted">${!L.captainsRevealed(season) ? 'The bracket appears once the schedule is made.' :
+				`This league has no playoffs${champ ? `. ${esc(n.get(champ))} won the regular season` : ''}.`}</p>`;
+		} else {
+			const side = (s: L.Side | null, wait: string, m: L.Match | null) => {
+				if (!s) return `<div class="bk-side wait">${esc(wait || 'TBD')}</div>`;
+				const won = m?.status === 'final' && m.winner === s.userId;
+				const lost = m?.status === 'final' && m.winner && m.winner !== s.userId;
+				const wins = m && m.status !== 'scheduled' ? (m.p1 === s.userId ? m.p1_wins : m.p2_wins) : '';
+				return `<div class="bk-side ${won ? 'won' : ''} ${lost ? 'lost' : ''} ${s.userId === me ? 'me' : ''}"><span class="seed num">${s.seed}</span>
+					<span class="nm">${esc(n.get(s.userId))}</span><span class="spacer"></span><span class="num">${wins}</span></div>`;
+			};
+			const card = (s: L.Slot) => {
+				const inner = s.bye ? `${side(s.a, '', null)}<div class="bk-side wait">Bye</div>` : `${side(s.a, s.waiting[0], s.match)}${side(s.b, s.waiting[1], s.match)}`;
+				return s.match ? `<a class="bk-card" href="/l/${league.id}/series/${s.match.id}">${inner}</a>` : `<div class="bk-card ${s.bye ? 'bye' : ''}">${inner}</div>`;
+			};
+			const p = br.picking;
+			const canPick = p && (p.picker.userId === me || isComm);
+			const pickPanel = p ? `<section class="panel"><h2>${p.picker.userId === me ? `Pick your ${esc(br.rounds[p.round - 1].label.toLowerCase())} opponent` : `${esc(n.get(p.picker.userId))} (seed ${p.picker.seed}) is picking an opponent`}</h2>
+				${canPick ? `<form method="post" action="/l/${league.id}/playoffs/pick" class="row" ${confirmAttr('Pick this opponent? It can\'t be changed afterwards.')}>
+					<input type="hidden" name="for" value="${p.picker.userId}">
+					<label class="f">Opponent<select name="opponent">${p.options.map(o => `<option value="${o.userId}">${o.seed}. ${esc(n.get(o.userId))}</option>`).join('')}</select></label>
+					<button class="btn primary" type="submit" style="align-self:flex-end">${p.picker.userId === me ? 'Pick' : `Pick for ${esc(n.get(p.picker.userId))}`}</button></form>` :
+					'<p class="muted" style="margin:0">The round is made once every pick is in.</p>'}</section>` : '';
+			body = `${champ ? `<section class="panel your-match champion"><p class="eyebrow">Season ${season.number} champion</p><h2 style="margin:0">${esc(n.get(champ))}</h2></section>` : ''}
+				${br.projected ? `<p class="muted" style="margin:0 0 12px">Projected: the bracket if the season ended today. ${esc(L.RESEED[settings.playoffReseed].rule)}.</p>` :
+					`<p class="muted" style="margin:0 0 12px">${esc(L.RESEED[settings.playoffReseed].rule)}. Best of ${settings.playoffBestOf}.</p>`}
+				${pickPanel}
+				<section class="panel"><div class="table-wrap"><div class="bracket">${br.rounds.map(r => `<div class="bk-round"><h3>${esc(r.label)}</h3>
+					${r.note ? `<p class="muted bk-note">${esc(r.note)}</p>` : ''}<div class="bk-slots">${r.slots.map(card).join('')}</div></div>`).join('')}</div></div></section>`;
+		}
+		render(req, res, {
+			title: 'Playoffs', tab: 'playoffs', flash: req.query.msg as string,
+			body: `<h1>Playoffs</h1><div id="live">${body}</div>`,
+			scripts: LIVE_SCRIPT(league.id, 'live'),
+		});
+	});
+
+	lg.post('/playoffs/pick', form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		const me = req.user!.id;
+		const forUser = league.role === 'commissioner' && Number(req.body.for) ? Number(req.body.for) : me;
+		const err = L.playoffPick(season, settings, me, forUser, Number(req.body.opponent));
+		if (!err) notify(league.id);
+		res.redirect(`/l/${league.id}/playoffs${err ? '?msg=' + encodeURIComponent(err) : ''}`);
+	});
 
 	// Standings live on Home now
 	lg.get('/standings', (req, res) => {
@@ -429,7 +515,7 @@ export function pageRoutes(app: Express) {
 		render(req, res, {
 			title: 'Schedule', tab: 'schedule',
 			body: `<h1>Schedule</h1>
-			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row panel-head"><h2>Week ${w}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
+			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row panel-head"><h2>${esc(L.matchLabel(ms[0]))}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
 				<div class="list">${ms.map(m => `<a class="rowlink sched ${m.p1 === me || m.p2 === me ? 'me' : ''}" href="/l/${league.id}/series/${m.id}">
 					<span class="p">${esc(n.get(m.p1))} vs ${esc(n.get(m.p2))}</span><span class="num">${score(m)}</span>${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>`).join('') ||
 				'<p class="muted">The schedule is made when the draft ends.</p>'}</div>`,
@@ -468,9 +554,12 @@ export function pageRoutes(app: Express) {
 				${changed ? '<p class="flash warn" style="margin:12px 0 0">Brought a different 6 in different games of this series. This league locks each player\'s 6 for the whole series.</p>' : ''}</section>`;
 		};
 		const mine = m.p1 === req.user!.id || m.p2 === req.user!.id;
+		const bestOf = L.bestOfFor(settings, m);
+		// Changing a regular-season result once the playoffs have started doesn't move the seeds
+		const seedsNote = m.stage === 'regular' && season.final_order ? " The playoffs have started, so this won't change the seeds." : '';
 		render(req, res, {
 			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule', flash: req.query.msg as string,
-			body: `<a class="eyebrow back" href="/l/${league.id}/schedule#wk${m.week}">← Schedule · Week ${m.week} · Bo${settings.bestOf}</a>
+			body: `<a class="eyebrow back" href="/l/${league.id}/schedule#wk${m.week}">← Schedule · ${esc(L.matchLabel(m))} · Bo${bestOf}</a>
 			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">${esc(n.get(m.p1))} ${score(m)} ${esc(n.get(m.p2))}</h1>${statusPill(m.status)}<span class="spacer"></span>
 				${!final && mine ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Play game ${games.length + 1}</a>` : ''}</div>
 
@@ -483,9 +572,9 @@ export function pageRoutes(app: Express) {
 			<div class="grid g2">${teamCol(m.p1)}${teamCol(m.p2)}</div></div>
 			${league.role === 'commissioner' ? `<details class="panel fold override"><summary><h3>Override result (commissioner)</h3></summary>
 				<form method="post" action="/l/${league.id}/admin/result/${m.id}" class="row" style="margin-top:10px" data-p1="${esc(n.get(m.p1))}" data-p2="${esc(n.get(m.p2))}"
-					onsubmit="return confirm('Save the result ' + this.dataset.p1 + ' ' + this.p1.value + '–' + this.p2.value + ' ' + this.dataset.p2 + '? This replaces the recorded score.')">
-					<label class="f">${esc(n.get(m.p1))}<input class="inp" name="p1" type="number" min="0" max="${Math.ceil(settings.bestOf / 2)}" value="${m.p1_wins}" style="width:80px"></label>
-					<label class="f">${esc(n.get(m.p2))}<input class="inp" name="p2" type="number" min="0" max="${Math.ceil(settings.bestOf / 2)}" value="${m.p2_wins}" style="width:80px"></label>
+					data-note="${esc(seedsNote)}" onsubmit="return confirm('Save the result ' + this.dataset.p1 + ' ' + this.p1.value + '–' + this.p2.value + ' ' + this.dataset.p2 + '? This replaces the recorded score.' + this.dataset.note)">
+					<label class="f">${esc(n.get(m.p1))}<input class="inp" name="p1" type="number" min="0" max="${Math.ceil(bestOf / 2)}" value="${m.p1_wins}" style="width:80px"></label>
+					<label class="f">${esc(n.get(m.p2))}<input class="inp" name="p2" type="number" min="0" max="${Math.ceil(bestOf / 2)}" value="${m.p2_wins}" style="width:80px"></label>
 					<button class="btn" type="submit" style="align-self:flex-end">Save result</button>
 				</form></details>` : ''}`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
@@ -503,7 +592,7 @@ export function pageRoutes(app: Express) {
 		const games = L.battlesFor(m.id).filter(g => g.played_at).map(g => ({ id: g.id, no: g.game_no, winner: n.get(g.winner) || null }));
 		const teams = b.teams ? JSON.parse(b.teams) : null;
 		const data = {
-			leagueId: league.id, matchId: m.id, week: m.week, game: b.game_no, bestOf: settings.bestOf, ...gameOf(settings),
+			leagueId: league.id, matchId: m.id, week: m.week, label: L.matchLabel(m), game: b.game_no, bestOf: L.bestOfFor(settings, m), ...gameOf(settings),
 			series: { p1: n.get(m.p1), p2: n.get(m.p2), score: [m.p1_wins, m.p2_wins] },
 			players: { p1: n.get(b.p1), p2: n.get(b.p2) }, winner: n.get(b.winner) || null, turns: b.turns,
 			games, fullLog: b.full_log || '', publicLog: b.public_log || '', teams,
@@ -750,6 +839,8 @@ export function pageRoutes(app: Express) {
 		const rows: [string, string][] = [
 			['Format', `${f.label}: ${f.game}`],
 			['Series', `Best of ${settings.bestOf}`],
+			['Playoffs', settings.playoffTeams >= 2 ? `Top ${settings.playoffTeams}, best of ${settings.playoffBestOf}. ${L.RESEED[settings.playoffReseed].label}: ${L.RESEED[settings.playoffReseed].rule.toLowerCase()}` : 'None'],
+			['Standings', 'Series wins, then head-to-head among the tied players, game win %, game differential, strength of victory (the combined series win % of the players you beat), then a coin flip when the playoffs start'],
 			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
 			...(hasTera ? [
@@ -825,7 +916,7 @@ export function pageRoutes(app: Express) {
 						<a class="btn sm" href="/l/${league.id}/draft?for=${p.user_id}">Choose for them</a></div>`).join('')}</div>
 					<div class="row"><span class="spacer"></span>${undo}
 					<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`Lock everyone's Tera Captains and generate the schedule? Picks can't be changed afterwards.${lockNote}`)}><button class="btn primary" type="submit">Lock captains and make schedule</button></form></div>` : ''}
-				${season.status === 'regular' ? `<p class="muted" style="margin:0">Regular season. Best of ${settings.bestOf}.</p>` : ''}
+				${season.status === 'regular' ? seasonPanel(req) : ''}
 			</section>
 			${discord.enabled ? discordPanel(league.id) : ''}
 		</div>`, `<script>
@@ -837,6 +928,29 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 });
 </script>`);
 	});
+
+	/** Admin's Season panel once the schedule is made: regular season, playoffs, or done. */
+	function seasonPanel(req: Request) {
+		const { league, season, settings } = req as LReq;
+		const n = names(league.id);
+		const ph = L.phase(season, settings);
+		if (ph === 'regular') {
+			const left = L.matches(season.id).filter(m => m.status !== 'final').length;
+			const size = L.playoffSize(settings, L.draftPlayers(season.id).length);
+			return `<p class="muted" style="margin:0">Regular season, best of ${settings.bestOf}. ${size ? `The top ${size} make the playoffs (best of ${settings.playoffBestOf}), which start by themselves when the last series is final.` : 'No playoffs: the season ends with the regular season.'}</p>
+				${!left ? `<form method="post" action="/l/${league.id}/admin/start-playoffs" style="margin-top:12px" ${confirmAttr(size ? 'Start the playoffs from the current standings?' : 'End the season?')}>
+					<button class="btn primary" type="submit">${size ? 'Start playoffs' : 'End season'}</button></form>` : ''}`;
+		}
+		if (ph === 'playoffs') {
+			const br = L.bracket(season, settings)!;
+			const round = br.rounds.find(r => r.slots.some(s => !s.bye && !(s.match?.status === 'final'))) || br.rounds[0];
+			const p = br.picking;
+			return `<p style="margin:0">Playoffs: ${esc(round.label.toLowerCase())}.${p ? ` ${esc(n.get(p.picker.userId))} (seed ${p.picker.seed}) is picking an opponent.` : ''}</p>
+				<p style="margin:12px 0 0"><a class="btn sm ${p ? 'primary' : ''}" href="/l/${league.id}/playoffs">${p ? 'Pick for them' : 'Bracket'}</a></p>`;
+		}
+		const champ = L.champion(season, settings);
+		return `<p style="margin:0">Season complete.${champ ? ` Champion: <b>${esc(n.get(champ))}</b>.` : ''}</p>`;
+	}
 
 	/** The Discord bot's state for this league; shown only when the site runs the bot. */
 	function discordPanel(leagueId: number) {
@@ -868,8 +982,9 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 
 	lg.get('/admin/settings', commissioner, (req, res) => {
 		const { league, season, settings } = req as LReq;
-		const sel = (name: string, value: string, opts: [string, string][]) =>
-			`<select name="${name}">${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+		const sel = (name: string, value: string, opts: [string, string][], locked = false) =>
+			`<select name="${name}" ${locked ? 'disabled' : ''}>${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+		const playoffsOn = !!season.final_order;
 		const num = (name: keyof L.Settings, label: string, min = 0, max = 999, locked = false) =>
 			`<label class="f">${label}<input type="number" name="${name}" min="${min}" max="${max}" value="${settings[name]}" ${locked ? 'disabled' : ''}></label>`;
 		const check = (name: keyof L.Settings, label: string) =>
@@ -905,9 +1020,15 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 				<div class="form">
 					<label class="f">Series${sel('bestOf', String(settings.bestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']])}</label>
 					<label class="f">Team preview${sel('teamPreview', settings.teamPreview, Object.entries(L.TEAM_PREVIEW).map(([v, o]) => [v, o.label] as [string, string]))}</label>
-					${num('playoffTeams', 'Playoff teams', 0, 12)}
 				</div>
 				<p class="muted field-help" id="tp-help">${esc(L.TEAM_PREVIEW[settings.teamPreview].rule)}.</p>
+				<h3>Playoffs</h3>
+				<div class="form">
+					${num('playoffTeams', 'Playoff teams', 0, 12, playoffsOn)}
+					<label class="f">Playoff series${sel('playoffBestOf', String(settings.playoffBestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']], playoffsOn)}</label>
+					<label class="f">Re-seeding${sel('playoffReseed', settings.playoffReseed, Object.entries(L.RESEED).map(([v, o]) => [v, o.label] as [string, string]), playoffsOn)}</label>
+				</div>
+				<p class="muted field-help" id="rs-help">${playoffsOn ? 'Fixed once the playoffs have started. ' : ''}${esc(L.RESEED[settings.playoffReseed].rule)}.</p>
 				<h3>Clauses</h3>
 				<div class="row">${L.CLAUSES.map(c => `<label class="row chk"><input type="checkbox" name="clauses" value="${esc(c)}" ${settings.clauses.includes(c) ? 'checked' : ''}>${esc(c)}</label>`).join('')}</div>
 				<div><button class="btn primary" type="submit">Save</button></div>
@@ -921,6 +1042,10 @@ const TP = ${JSON.stringify(Object.fromEntries(Object.entries(L.TEAM_PREVIEW).ma
 document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 	document.getElementById('tp-help').textContent = TP[e.target.value] + '.';
 });
+const RS = ${JSON.stringify(Object.fromEntries(Object.entries(L.RESEED).map(([k, o]) => [k, o.rule]))).replace(/</g, '\\u003c')};
+document.querySelector('[name=playoffReseed]').addEventListener('change', e => {
+	document.getElementById('rs-help').textContent = RS[e.target.value] + '.';
+});
 </script>`);
 	});
 
@@ -930,6 +1055,7 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		'draft.start': 'started the draft', 'draft.pick': 'made a draft pick', 'draft.undo': 'undid the last pick', 'draft.finish': 'finished drafting',
 		'draft.end': 'ended the draft', 'captains.set': 'set Tera Captains',
 		'season.schedule': 'ended the draft and made the schedule', 'pool.edit': 'edited the pool', 'result.override': 'overrode a series result',
+		'playoffs.start': 'started the playoffs', 'playoffs.pick': 'picked a playoff opponent',
 		'discord.unlink': 'unlinked Discord', 'remake.request': 'asked for a remake', 'remake.accept': 'accepted a remake', 'remake.decline': 'declined a remake', 'remake.cancel': 'withdrew a remake request',
 	};
 	lg.get('/admin/log', commissioner, (req, res) => {
@@ -985,7 +1111,10 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 			rosterMin: int(b.rosterMin, settings.rosterMin, 1, 20),
 			rosterMax: int(b.rosterMax, settings.rosterMax, 1, 20),
 			bestOf: [1, 3, 5].includes(Number(b.bestOf)) ? Number(b.bestOf) : settings.bestOf,
-			playoffTeams: int(b.playoffTeams, settings.playoffTeams, 0, 12),
+			// The playoff format is fixed once the playoffs start (disabled fields aren't submitted)
+			playoffTeams: season.final_order ? settings.playoffTeams : int(b.playoffTeams, settings.playoffTeams, 0, 12),
+			playoffBestOf: season.final_order ? settings.playoffBestOf : [1, 3, 5].includes(Number(b.playoffBestOf)) ? Number(b.playoffBestOf) : settings.playoffBestOf,
+			playoffReseed: season.final_order || !Object.hasOwn(L.RESEED, String(b.playoffReseed)) ? settings.playoffReseed : b.playoffReseed,
 			teraPreview: b.teraPreview === '1',
 			teamPreview: Object.hasOwn(L.TEAM_PREVIEW, String(b.teamPreview)) ? b.teamPreview : settings.teamPreview,
 			trades: b.trades === '1',
@@ -1059,12 +1188,22 @@ document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 		const { league, season, settings } = req as LReq;
 		const m = one<L.Match>('SELECT * FROM matches WHERE id = ? AND season_id = ?', Number(req.params.matchId), season.id);
 		if (m) {
-			const clamp = (v: unknown) => Math.max(0, Math.min(settings.bestOf, parseInt(String(v)) || 0));
+			const clamp = (v: unknown) => Math.max(0, Math.min(L.bestOfFor(settings, m), parseInt(String(v)) || 0));
 			const err = L.setResult(m.id, clamp(req.body.p1), clamp(req.body.p2), settings, req.user!.id, league.id);
 			if (err) return res.redirect(`/l/${league.id}/series/${m.id}?msg=${encodeURIComponent(err)}`);
 			notify(league.id);
 		}
 		res.redirect(`/l/${league.id}/series/${Number(req.params.matchId)}`);
+	});
+
+	// Normally the playoffs start by themselves; this covers a season whose last series went final before they existed
+	lg.post('/admin/start-playoffs', commissioner, form, (req, res) => {
+		const { league, season, settings } = req as LReq;
+		tx(() => {
+			if (L.startPlayoffs(season.id, settings, league.id, req.user!.id)) L.syncBracket(season.id, settings);
+		});
+		notify(league.id);
+		res.redirect(`/l/${league.id}/playoffs`);
 	});
 
 	lg.get('/admin/pool', commissioner, (req, res) => {

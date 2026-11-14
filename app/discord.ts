@@ -433,10 +433,10 @@ function recapBaseline(season: L.Season | undefined): [number | null, number | n
 	const weeks = finalWeeks(season.id);
 	return weeks ? [season.id, weeks] : [null, null];
 }
-/** How many weeks from week 1 on have every series final. */
+/** How many regular-season weeks from week 1 on have every series final. Playoff rounds aren't recapped. */
 export function finalWeeks(seasonId: number) {
 	const byWeek = new Map<number, boolean>();
-	for (const m of L.matches(seasonId)) byWeek.set(m.week, (byWeek.get(m.week) ?? true) && m.status === 'final');
+	for (const m of L.matches(seasonId).filter(m => m.stage === 'regular')) byWeek.set(m.week, (byWeek.get(m.week) ?? true) && m.status === 'final');
 	let w = 0;
 	while (byWeek.get(w + 1)) w++;
 	return w;

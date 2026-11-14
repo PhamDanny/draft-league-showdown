@@ -321,8 +321,9 @@ export function pickConfirm(settings: L.Settings, state: L.DraftState, userId: n
 
 const seriesUrl = (leagueId: number, matchId: number) => `${PUBLIC_URL}/l/${leagueId}/series/${matchId}`;
 const inWeek = (seasonId: number, week: number) => L.matches(seasonId).filter(m => m.week === week);
+/** Regular-season weeks; playoff rounds come after them. */
 export function weeksIn(seasonId: number) {
-	return L.matches(seasonId).reduce((a, m) => Math.max(a, m.week), 0);
+	return L.regularWeeks(seasonId);
 }
 
 /** A series as "**A** 2–1 **B**" (or "**A** vs **B**" before it starts), linked to its page on the site. */

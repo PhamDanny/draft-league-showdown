@@ -153,6 +153,16 @@ CREATE TABLE IF NOT EXISTS discord_emojis (
 	name TEXT NOT NULL,
 	PRIMARY KEY (app_id, species_id)
 );
+-- With "higher seed picks" re-seeding: each playoff pick of an opponent (app/league.ts playoffPick)
+CREATE TABLE IF NOT EXISTS playoff_picks (
+	id INTEGER PRIMARY KEY,
+	season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+	round INTEGER NOT NULL,
+	picker INTEGER NOT NULL REFERENCES users(id),
+	opponent INTEGER NOT NULL REFERENCES users(id),
+	made_by INTEGER REFERENCES users(id),
+	at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
 	id INTEGER PRIMARY KEY,
 	league_id INTEGER REFERENCES leagues(id) ON DELETE CASCADE,
@@ -176,6 +186,10 @@ addColumn('season_players', 'captains_set', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('pool', 'covers', 'TEXT');
 // 0: the Discord bot writes this member's name instead of mentioning them (/pings off)
 addColumn('league_members', 'discord_pings', 'INTEGER NOT NULL DEFAULT 1');
+// JSON user ids in final regular-season order (ties settled by coin flip), set when the playoffs start
+addColumn('seasons', 'final_order', 'TEXT');
+// A playoff series' position within its round; NULL in the regular season
+addColumn('matches', 'bracket_slot', 'INTEGER');
 
 export function now() {
 	return Math.floor(Date.now() / 1000);

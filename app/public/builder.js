@@ -120,7 +120,7 @@
 
 	const spriteOf = r => D.species[r.formes.find(f => D.species[f]) || r.id]?.sprite || '';
 	const rosterImg = r => `<img class="spr ${r.captain && B.teraMode === 'captains' ? 'cap' : ''}" src="${esc(spriteOf(r))}" alt="${esc(nameOf(r.formes.find(f => D.species[f]) || r.id))}" title="${esc(nameOf(r.formes.find(f => D.species[f]) || r.id))}${r.captain && B.teraMode === 'captains' ? ' (Tera Captain)' : ''}" loading="lazy">`;
-	const stageLabel = w => !w.stage || w.stage === 'regular' ? `Week ${w.week}` : w.stage.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+	const stageLabel = w => w.label || (!w.stage || w.stage === 'regular' ? `Week ${w.week}` : w.stage.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
 	function renderHome() {
 		const r = B.record;
 		const diff = r ? (r.diff > 0 ? `+${r.diff}` : r.diff < 0 ? `−${-r.diff}` : '0') : '';
