@@ -380,12 +380,38 @@ img.spr.cap{border-radius:50%;background:radial-gradient(circle,color-mix(in srg
 .fold summary::before{content:"▸ ";color:var(--muted)}
 .fold[open] summary::before{content:"▾ "}
 .fold summary h3{display:inline;margin:0}
-.speedlist{display:flex;flex-direction:column;max-height:340px;overflow:auto;margin:6px -6px 0}
-.speedlist .row{flex-wrap:nowrap;padding:2px 6px;border-radius:6px}
-.speedlist .num{width:34px;font-weight:600}
-.speedlist .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.speedlist .mine{background:var(--sel-soft);font-weight:600}
-.speedlist .scouted{background:var(--tera-soft)}
+/* Speed tiers: base speeds on the left, actual speeds grouped into tiers on the right. Blue is you, orange is them. */
+.spt-bar{display:flex;align-items:center;gap:8px;margin:8px 0 6px;font-size:12px}
+.spt-key{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spt-key::before{content:"";width:10px;height:10px;border-radius:3px;flex:none}
+.spt-key.me::before{background:var(--sel)}.spt-key.opp::before{background:var(--warn)}
+.spt-filter{position:relative}
+.spt-filter summary{list-style:none;padding:4px 6px}
+.spt-filter summary::-webkit-details-marker{display:none}
+.fold .spt-filter summary::before{content:none}
+.spt-filter[open] summary{background:var(--surface-2)}
+.spt-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:4;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(20,26,51,.14);padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:170px}
+.spt-menu .eyebrow{margin-bottom:2px}
+.spt-menu label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap}
+.spt{display:grid;grid-template-columns:minmax(76px,.42fr) minmax(0,1fr);align-content:start;column-gap:6px;max-height:520px;overflow:auto;scrollbar-width:thin}
+.spt-h{position:sticky;top:0;z-index:1;background:var(--surface);display:flex;justify-content:space-between;gap:6px;font-family:var(--display);font-weight:600;font-size:15px;padding:0 4px 4px}
+.spt-col{display:flex;flex-direction:column;gap:3px;min-width:0}
+.spt-base,.spt-tier{display:flex;align-items:center;gap:4px;border-radius:8px;padding:2px 8px;min-height:32px;font-variant-numeric:tabular-nums}
+.spt-base.me,.spt-tier.me{background:var(--sel-soft)}
+.spt-base.opp,.spt-tier.opp{background:var(--warn-soft)}
+.spt-base{justify-content:space-between}
+.spt-base.me{justify-content:flex-start;gap:6px}.spt-base.opp{justify-content:flex-end;gap:6px}
+.spt-base.me .num,.spt-tier.me .num{color:var(--sel)}
+.spt-base.opp .num,.spt-tier.opp .num{color:var(--warn-fg)}
+.spt .num{font-weight:700;font-size:15px}
+.spt-base.me .num{margin-left:auto}
+.spt-tier{flex-wrap:wrap;row-gap:0}
+.spt-mons{display:flex;flex-wrap:wrap}
+.spt-tier .spr.xs{margin:-2px -2px}
+.spt-tier .num{display:flex;flex-direction:column;align-items:center;line-height:1.1;padding:2px 0}
+.spt-tier .num i{width:1px;height:6px;background:currentColor;opacity:.6;margin:1px 0}
+.spt-tag{font-size:11px;font-weight:600;border:1px solid currentColor;border-radius:999px;padding:0 7px;white-space:nowrap;opacity:.85}
+.spt-tier.me .spt-tag{color:var(--sel)}.spt-tier.opp .spt-tag{color:var(--warn-fg)}
 .itemicon{display:inline-block;width:24px;height:24px;flex:none;vertical-align:middle;background:url(/sprites/itemicons-sheet.png) no-repeat;image-rendering:pixelated}
 .spr.xs{width:28px;height:28px;margin:-4px 0}
 #tb-notes{resize:vertical}

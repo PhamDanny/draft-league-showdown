@@ -500,51 +500,97 @@
 
 	// ---------- speed tiers ----------
 
-	// Each opponent Pokémon is listed once, at the speed spread picked on its own row
+	// Left: every Pokémon by base speed. Right: actual speeds, with neighbouring entries from one side grouped into a tier.
+	// Your sets show at their real speed; the opponent's roster shows at each benchmark spread switched on in the filter menu.
 	const SPEED_OPP = {
-		max: { label: '252+', ev: 252, iv: 31, mult: 1.1 },
-		neutral: { label: '252', ev: 252, iv: 31, mult: 1 },
-		scarf: { label: '252+ Scarf', ev: 252, iv: 31, mult: 1.1, scarf: true },
-		none: { label: 'No investment', ev: 0, iv: 31, mult: 1 },
-		min: { label: 'Min (0 IV, −)', ev: 0, iv: 0, mult: 0.9 },
+		max: { label: '252+', ev: 252, iv: 31, mult: 1.1, on: true },
+		neutral: { label: '252', ev: 252, iv: 31, mult: 1, on: true },
+		none: { label: '', name: 'No investment', ev: 0, iv: 31, mult: 1, on: true },
+		min: { label: 'Min', name: 'Min (0 IV, −)', ev: 0, iv: 0, mult: 0.9, on: false },
+		scarf: { label: '252+ Scarf', ev: 252, iv: 31, mult: 1.1, scarf: true, on: false },
 	};
-	let speedOppDefault = 'max';
-	let speedOpp = {};
-	try { const v = localStorage.getItem('dls-speed-opp'); if (SPEED_OPP[v]) speedOppDefault = v; } catch {}
-	try { const m = JSON.parse(localStorage.getItem('dls-speed-opp-mons') || '{}'); if (m && typeof m === 'object') speedOpp = m; } catch {}
-	const oppSpread = id => (SPEED_OPP[speedOpp[id]] ? speedOpp[id] : speedOppDefault);
+	const SPEED_EXTRA = { abil: { name: 'Speed abilities', on: true }, scout: { name: 'Scouted sets', on: true } };
+	// Abilities that raise Speed with no setup beyond weather, terrain or an item (paradox boosts assume Speed is the top stat)
+	const SPEED_ABIL = { swiftswim: 2, chlorophyll: 2, sandrush: 2, slushrush: 2, surgesurfer: 2, unburden: 2, quarkdrive: 1.5, protosynthesis: 1.5 };
+	const speedShow = Object.fromEntries([...Object.entries(SPEED_OPP), ...Object.entries(SPEED_EXTRA)].map(([k, o]) => [k, o.on]));
+	try { const m = JSON.parse(localStorage.getItem('dls-speed-show') || 'null'); if (m && typeof m === 'object') for (const k in speedShow) if (typeof m[k] === 'boolean') speedShow[k] = m[k]; } catch {}
+	const speedAbil = id => (D.species[id]?.abilities || []).find(a => SPEED_ABIL[toID(a)]);
+
+	/** Short label for a set's Speed investment, like 252+ or 0−. */
+	function spreadLabel(s) {
+		const m = Sets.natureMult(D, s.nature, 'spe');
+		const iv = s.ivs?.spe ?? 31;
+		const lab = `${s.evs?.spe || 0}${m > 1 ? '+' : m < 1 ? '−' : ''}${iv < 31 ? ` ${iv} IV` : ''}`;
+		return lab === '0' ? '' : lab; // uninvested goes untagged, as on their side
+	}
 
 	function renderSpeed() {
 		const el = document.getElementById('tb-speed');
 		if (!el || !week) return;
-		const rws = [];
-		for (const s of data.team.filter(Boolean)) {
+		const lvl = D.fixedLevel || 100;
+		const opp = (B.rosters[week.opp] || []).map(r => r.id).filter(id => D.species[id]);
+		const mine = data.team.filter(s => s && D.species[s.species]);
+		const ents = []; // { spe, id, side: 'me' | 'opp', tags }
+		const add = (spe, id, side, tags) => ents.push({ spe, id, side, tags: tags.filter(Boolean) });
+		for (const s of mine) {
 			const scarf = toID(s.item) === 'choicescarf';
-			const spe = Sets.stats(D, s).spe;
-			rws.push({ spe: scarf ? Math.floor(spe * 1.5) : spe, id: s.species, mine: true, note: scarf ? 'Scarf' : '' });
+			const st = Sets.stats(D, s);
+			let spe = st.spe;
+			if (scarf) spe = Math.floor(spe * 1.5);
+			const lab = spreadLabel(s);
+			add(spe, s.species, 'me', [lab, scarf && 'Scarf']);
+			const boost = SPEED_ABIL[toID(s.ability)];
+			// A paradox boost lands on Speed only when it's the set's highest stat
+			const lands = boost === 2 || ['atk', 'def', 'spa', 'spd'].every(k => st.spe > st[k]);
+			if (speedShow.abil && boost && lands) add(Math.floor(spe * boost), s.species, 'me', [lab, scarf && 'Scarf', s.ability]);
 		}
-		for (const r of B.rosters[week.opp] || []) {
-			const sp = D.species[r.id];
-			if (!sp) continue;
-			const spread = oppSpread(r.id);
-			const o = SPEED_OPP[spread];
-			const spe = Sets.calcStat('spe', sp.stats.spe, o.ev, o.iv, 100, o.mult);
-			rws.push({ spe: o.scarf ? Math.floor(spe * 1.5) : spe, id: r.id, spread });
-		}
-		for (const past of B.scouting[week.opp] || []) {
-			for (const ps of past.sets) {
-				const s = fromShowdown(ps);
-				if (D.species[s.species]) rws.push({ spe: Sets.stats(D, s).spe, id: s.species, note: `Wk ${past.week}`, scouted: true });
+		for (const id of opp) {
+			const base = D.species[id].stats.spe;
+			const abil = speedShow.abil ? speedAbil(id) : null;
+			const boost = abil ? SPEED_ABIL[toID(abil)] : 0;
+			for (const [k, o] of Object.entries(SPEED_OPP)) {
+				if (!speedShow[k]) continue;
+				let spe = Sets.calcStat('spe', base, o.ev, o.iv, lvl, o.mult);
+				if (o.scarf) spe = Math.floor(spe * 1.5);
+				add(spe, id, 'opp', [o.label]);
+				// Doubling abilities only at max speed; paradox boosts at both 252 spreads
+				if (boost && !o.scarf && (k === 'max' || (k === 'neutral' && boost < 2))) add(Math.floor(spe * boost), id, 'opp', [o.label, abil]);
 			}
 		}
-		rws.sort((a, b) => b.spe - a.spe || (a.mine ? -1 : 1));
-		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed · vs ${esc(week.oppName)}</h3></summary>
-			<div class="speedlist">${rws.map(r => `
-			<div class="row ${r.mine ? 'mine' : ''} ${r.scouted ? 'scouted' : ''}"><span class="num">${r.spe}</span>${img(r.id, 'xs')}<span class="nm">${esc(nameOf(r.id))}</span><span class="spacer"></span>${r.spread
-				? `<select class="inp mini" data-act="speed-opp" data-id="${esc(r.id)}" aria-label="${esc(nameOf(r.id))} speed spread">${Object.entries(SPEED_OPP).map(([v, o]) =>
-					`<option value="${v}" ${v === r.spread ? 'selected' : ''}>${o.label}</option>`).join('')}</select>`
-				: `<small class="muted">${r.note}</small>`}</div>`).join('') ||
-			'<p class="muted">Add Pokémon to compare.</p>'}</div></details>`;
+		if (speedShow.scout) {
+			for (const past of B.scouting[week.opp] || []) {
+				for (const ps of past.sets) {
+					const s = fromShowdown(ps);
+					if (D.species[s.species]) add(Sets.stats(D, s).spe, s.species, 'opp', [`Wk ${past.week}`, spreadLabel(s)]);
+				}
+			}
+		}
+		ents.sort((a, b) => b.spe - a.spe || (a.side === 'me' ? -1 : 1));
+		// Neighbouring entries from one side with the same tags share a tier, up to four Pokémon
+		const groups = [];
+		for (const e of ents) {
+			const g = groups[groups.length - 1];
+			const key = e.side + '|' + e.tags.join('|');
+			if (g && g.key === key && g.ents.length < 4 && !g.ents.some(x => x.id === e.id)) g.ents.push(e);
+			else groups.push({ key, side: e.side, tags: e.tags, ents: [e] });
+		}
+		const bases = [...mine.map(s => ({ id: s.species, side: 'me' })), ...opp.map(id => ({ id, side: 'opp' }))]
+			.sort((a, b) => D.species[b.id].stats.spe - D.species[a.id].stats.spe || (a.side === 'me' ? -1 : 1));
+		const sprite = (id, tip) => `<img class="spr xs" src="${esc(D.species[id]?.sprite || '')}" alt="${esc(nameOf(id))}" title="${esc(tip)}" loading="lazy">`;
+		const whose = side => (side === 'me' ? 'Yours' : week.oppName);
+		const opts = [...Object.entries(SPEED_OPP).map(([k, o]) => [k, o.name || o.label]), ...Object.entries(SPEED_EXTRA).map(([k, o]) => [k, o.name])];
+		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed tiers · vs ${esc(week.oppName)}</h3></summary>
+			<div class="spt-bar"><span class="spt-key me">Yours</span><span class="spt-key opp">${esc(week.oppName)}</span><span class="spacer"></span>
+				<details class="spt-filter"><summary class="btn sm" title="Choose which of their speeds to show" aria-label="Filter speed tiers"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M4 8h8M6.5 12h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></summary>
+				<div class="spt-menu"><p class="eyebrow">Their speeds</p>${opts.map(([k, n]) => `<label><input type="checkbox" data-act="speed-show" data-k="${k}" ${speedShow[k] ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div></details></div>
+			${ents.length ? `<div class="spt">
+				<div class="spt-h">Base</div><div class="spt-h"><span>Speed tier groups</span><span>Lvl ${lvl}</span></div>
+				<div class="spt-col">${bases.map(b => `<div class="spt-base ${b.side}" title="${esc(whose(b.side))}: ${esc(nameOf(b.id))}">${b.side === 'me' ? sprite(b.id, nameOf(b.id)) : ''}<span class="num">${D.species[b.id].stats.spe}</span>${b.side === 'opp' ? sprite(b.id, nameOf(b.id)) : ''}</div>`).join('')}</div>
+				<div class="spt-col">${groups.map(g => {
+					const hi = g.ents[0].spe, lo = g.ents[g.ents.length - 1].spe;
+					return `<div class="spt-tier ${g.side}"><span class="spt-mons">${g.ents.map(e => sprite(e.id, `${whose(g.side)}: ${nameOf(e.id)} · ${e.spe}`)).join('')}</span>${g.tags.map(t => `<span class="spt-tag">${esc(t)}</span>`).join('')}<span class="spacer"></span><span class="num">${hi === lo ? hi : `<span>${hi}</span><i></i><span>${lo}</span>`}</span></div>`;
+				}).join('')}</div>
+			</div>` : '<p class="muted">Add Pokémon to compare.</p>'}</details>`;
 	}
 
 	// ---------- damage calc ----------
@@ -951,10 +997,11 @@
 	root.addEventListener('change', e => {
 		const t = e.target;
 		const d = t.dataset;
-		if (d.act === 'speed-opp') {
-			speedOpp[d.id] = t.value;
-			try { localStorage.setItem('dls-speed-opp-mons', JSON.stringify(speedOpp)); } catch {}
+		if (d.act === 'speed-show') {
+			speedShow[d.k] = t.checked;
+			try { localStorage.setItem('dls-speed-show', JSON.stringify(speedShow)); } catch {}
 			renderSpeed();
+			root.querySelector('#tb-speed .spt-filter')?.setAttribute('open', '');
 			return;
 		}
 		if (d.act === 'week') { goWeek(B.weeks.find(w => w.week === Number(t.value))); return; }
