@@ -267,3 +267,53 @@ test('making the schedule copies the picks into the roster table, and old season
 	assert.equal(L.owners(id).get('mon0'), s.ids[1]);
 	assert.equal(L.picks(id).find(p => p.species_id === 'mon0').user_id, s.ids[0]);
 });
+
+// ---------- free agency ----------
+
+test('free agency: add, drop, or swap in one step, within the roster limits and budget', () => {
+	// Each player drafted one 10-pointer; mon2 to mon5 are free agents
+	const s = season(['A', 'B'], { budget: 25, rosterMin: 1, rosterMax: 2, faLimit: 0 });
+	const [a, b] = s.ids;
+	const fa = (add, drop, who = a) => L.faMove(s.fresh(), s.settings, who, who, add, drop);
+	run('UPDATE pool SET cost = 20 WHERE season_id = ? AND species_id = ?', s.fresh().id, 'mon5');
+	assert.equal(fa(null, null), 'Choose a Pokémon to add or drop.');
+	assert.equal(fa('mon1', null), 'Mon 1 is on another team.');
+	assert.equal(fa('mon5', null), 'That would put the team over budget: 30 of 25 points.');
+	assert.equal(fa(null, 'mon0'), 'That would leave the team 0 Pokémon; the fewest is 1.');
+	assert.equal(fa(null, 'mon1'), "Mon 1 isn't on this team.");
+	assert.equal(fa('mon2', null), null);
+	assert.equal(fa('mon3', null), 'That would give the team 3 Pokémon; the most is 2.');
+	// Swapping mon0 (10) for mon5 (20) is checked as a whole: mon2 (10) + mon5 (20) is still over
+	assert.equal(fa('mon5', 'mon0'), 'That would put the team over budget: 30 of 25 points.');
+	assert.equal(fa('mon3', 'mon0'), null);
+	assert.deepEqual(L.roster(s.fresh().id, a).map(r => [r.species_id, r.via]).sort(), [['mon2', 'fa'], ['mon3', 'fa']]);
+	assert.ok(L.freeAgents(s.fresh().id).some(p => p.species_id === 'mon0'), 'a dropped Pokémon is a free agent again');
+	assert.equal(fa('mon0', null, b), null, 'and someone else can pick it up');
+	assert.equal(L.movesUsed(s.fresh().id, a), 2);
+	assert.equal(L.transactions(s.fresh().id).length, 3);
+});
+
+test('free agency: the move limit, a series in progress, the playoffs, and the setting', () => {
+	const s = season(['A', 'B'], { budget: 100, rosterMin: 1, rosterMax: 3, faLimit: 1, bestOf: 3, playoffTeams: 2 });
+	const [a, b] = s.ids;
+	const fa = (add, drop) => L.faMove(s.fresh(), s.settings, a, a, add, drop);
+	run("UPDATE matches SET status = 'live', p1_wins = 1 WHERE id = ?", s.between(a, b).id);
+	assert.equal(fa('mon2', null), 'Finish the week 1 series first.');
+	run("UPDATE matches SET status = 'scheduled', p1_wins = 0 WHERE id = ?", s.between(a, b).id);
+	assert.equal(fa('mon2', null), null);
+	assert.equal(fa('mon3', null), 'All 1 free agent moves this season are used.');
+	assert.equal(L.faMove(s.fresh(), { ...s.settings, freeAgency: false }, b, b, 'mon3', null), 'Free agency is off in this league.');
+	s.result(a, b, 2, 0);
+	assert.equal(L.phase(s.fresh(), s.settings), 'playoffs');
+	assert.equal(L.faMove(s.fresh(), s.settings, b, b, 'mon3', null), 'Rosters are frozen for the playoffs.');
+});
+
+test('dropping a Tera Captain frees its Tera points; a pickup is never a captain', () => {
+	const s = season(['A', 'B'], { budget: 100, rosterMin: 1, rosterMax: 3, teraMode: 'captains', maxCaptains: 1, tcBudget: 20 });
+	const [a] = s.ids;
+	run('UPDATE pool SET tc_cost = 10 WHERE season_id = ?', s.fresh().id);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon0'], true), null);
+	assert.equal(L.faMove(s.fresh(), s.settings, a, a, 'mon2', 'mon0'), null);
+	assert.deepEqual(L.roster(s.fresh().id, a).map(r => [r.species_id, r.captain]), [['mon2', 0]]);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon2'], true), null, 'a commissioner can make the pickup a captain');
+});

@@ -29,6 +29,10 @@ export interface Settings {
 	clauses: string[];
 	trades: boolean;
 	freeAgency: boolean;
+	/** Free agent moves each player gets per season; 0 is unlimited. */
+	faLimit: number;
+	/** Last week trades are allowed in; 0 is halfway through the regular season. See tradeDeadlineWeek. */
+	tradeDeadline: number;
 }
 
 // preselect: the 6 are set in the teambuilder before the match.
@@ -80,6 +84,7 @@ function preset(format: string, label: string, mod: string, o: {
 			format, mod, gameType: o.gameType || 'singles', teraMode: o.tera || 'none', maxCaptains: 2, tcBudget: 28,
 			draftType: 'snake', budget: o.budget, rosterMin: o.roster[0], rosterMax: o.roster[1], bestOf: o.bestOf || 1, playoffTeams: 6,
 			playoffBestOf: o.bestOf || 1, playoffReseed: 'fixed', teraPreview: true, teamPreview: 'preselect', clauses: o.clauses || ALL_CLAUSES, trades: true, freeAgency: true,
+			faLimit: 7, tradeDeadline: 0,
 		},
 	};
 }
@@ -717,6 +722,104 @@ export function rosterFormes(seasonId: number, userId: number, mod: string) {
 	const map = new Map<string, string>();
 	for (const r of roster(seasonId, userId)) for (const id of entryIds(index, r.species_id, mod)) map.set(id, r.species_id);
 	return map;
+}
+
+// ---------- free agency and trades ----------
+// Moves change the roster table only, take effect at once, and are open in the regular season. A player
+// with a series in progress can't make one, so a roster never changes between games of a series.
+
+export interface Transaction {
+	id: number; season_id: number; kind: 'fa' | 'trade'; user_id: number; other_id: number | null;
+	gave: string; got: string; made_by: number | null; at: number;
+}
+export function transactions(seasonId: number, userId?: number) {
+	return all<Transaction>(`SELECT * FROM transactions WHERE season_id = ?${userId ? ' AND (user_id = ? OR other_id = ?)' : ''} ORDER BY id DESC`,
+		seasonId, ...(userId ? [userId, userId] : []));
+}
+/** Free agent moves this player has made this season. */
+export function movesUsed(seasonId: number, userId: number) {
+	return one<{ n: number }>("SELECT COUNT(*) AS n FROM transactions WHERE season_id = ? AND kind = 'fa' AND user_id = ?", seasonId, userId)!.n;
+}
+/** Pool Pokémon on nobody's team. */
+export function freeAgents(seasonId: number) {
+	return all<{ species_id: string, name: string, cost: number, tc_cost: number | null }>(`SELECT species_id, name, cost, tc_cost FROM pool
+		WHERE season_id = ? AND banned = 0 AND species_id NOT IN (SELECT species_id FROM roster WHERE season_id = ?)
+		ORDER BY cost DESC, name`, seasonId, seasonId);
+}
+/** The player's series with a game played that isn't final, if any. */
+export function seriesInProgress(seasonId: number, userId: number) {
+	return one<Match>("SELECT * FROM matches WHERE season_id = ? AND status = 'live' AND (p1 = ? OR p2 = ?) ORDER BY week LIMIT 1", seasonId, userId, userId);
+}
+
+/** Why roster moves are closed for this player right now, or null. Shared by free agency and trades. */
+function moveWindowProblem(season: Season, settings: Settings, userId: number) {
+	const ph = phase(season, settings);
+	if (ph === 'draft') return 'Roster moves open when the schedule is made.';
+	if (ph !== 'regular') return 'Rosters are frozen for the playoffs.';
+	if (!draftPlayers(season.id).some(p => p.user_id === userId)) return "That player isn't in this season.";
+	const live = seriesInProgress(season.id, userId);
+	if (live) return `Finish the ${matchLabel(live).toLowerCase()} series first.`;
+	return null;
+}
+
+/** Why a roster of `count` Pokémon worth `points` isn't allowed, or null. */
+function rosterShapeProblem(settings: Settings, count: number, points: number, who: string) {
+	if (count > settings.rosterMax) return `That would give ${who} ${count} Pokémon; the most is ${settings.rosterMax}.`;
+	if (count < settings.rosterMin) return `That would leave ${who} ${count} Pokémon; the fewest is ${settings.rosterMin}.`;
+	if (points > settings.budget) return `That would put ${who} over budget: ${points} of ${settings.budget} points.`;
+	return null;
+}
+
+/** Why this free agent move isn't allowed, or null. `add` and `drop` are species ids (either can be empty). */
+export function faProblem(season: Season, settings: Settings, userId: number, add: string | null, drop: string | null): string | null {
+	if (!settings.freeAgency) return 'Free agency is off in this league.';
+	if (!add && !drop) return 'Choose a Pokémon to add or drop.';
+	const window = moveWindowProblem(season, settings, userId);
+	if (window) return window;
+	const mine = roster(season.id, userId);
+	const dropped = drop ? mine.find(r => r.species_id === drop) : null;
+	if (drop && !dropped) return `${one<{ name: string }>('SELECT name FROM pool WHERE season_id = ? AND species_id = ?', season.id, drop)?.name || drop} isn't on this team.`;
+	let addCost = 0;
+	if (add) {
+		const entry = one<{ name: string, cost: number, banned: number }>('SELECT * FROM pool WHERE season_id = ? AND species_id = ?', season.id, add);
+		if (!entry || entry.banned) return 'Not in the pool.';
+		const owner = owners(season.id).get(add);
+		if (owner != null) return `${entry.name} is on ${owner === userId ? 'this' : 'another'} team.`;
+		addCost = entry.cost;
+	}
+	if (settings.faLimit && movesUsed(season.id, userId) >= settings.faLimit) return `All ${settings.faLimit} free agent moves this season are used.`;
+	const points = mine.reduce((a, r) => a + r.cost, 0) - (dropped?.cost || 0) + addCost;
+	return rosterShapeProblem(settings, mine.length - (drop ? 1 : 0) + (add ? 1 : 0), points, 'the team');
+}
+
+/** Drops and/or adds a free agent in one step. Returns an error message or null. */
+export function faMove(season: Season, settings: Settings, byUserId: number, forUserId: number, add: string | null, drop: string | null) {
+	return tx(() => {
+		const fresh = one<Season>('SELECT * FROM seasons WHERE id = ?', season.id)!;
+		const problem = faProblem(fresh, settings, forUserId, add, drop);
+		if (problem) return problem;
+		const t = now();
+		// A dropped Tera Captain stops being one, and its Tera points come back
+		if (drop) run('DELETE FROM roster WHERE season_id = ? AND species_id = ?', season.id, drop);
+		if (add) {
+			run(`INSERT INTO roster (season_id, species_id, user_id, cost, captain, tc_cost, via, acquired_at)
+				SELECT season_id, species_id, ?, cost, 0, NULL, 'fa', ? FROM pool WHERE season_id = ? AND species_id = ?`, forUserId, t, season.id, add);
+		}
+		run(`INSERT INTO transactions (season_id, kind, user_id, gave, got, made_by, at) VALUES (?, 'fa', ?, ?, ?, ?, ?)`,
+			season.id, forUserId, JSON.stringify(drop ? [drop] : []), JSON.stringify(add ? [add] : []), byUserId, t);
+		if (drop) cancelOffersWith(season.id, [drop]);
+		audit(season.league_id, byUserId, 'fa.move', `${add ? `add ${add}` : ''}${add && drop ? ', ' : ''}${drop ? `drop ${drop}` : ''} for user ${forUserId}`);
+		return null;
+	});
+}
+
+/** Pending trade offers that include any of these Pokémon can no longer happen. */
+function cancelOffersWith(seasonId: number, speciesIds: string[]) {
+	for (const o of all<{ id: number, give: string, get: string }>("SELECT * FROM trade_offers WHERE season_id = ? AND status = 'pending'", seasonId)) {
+		if ([...JSON.parse(o.give), ...JSON.parse(o.get)].some((id: string) => speciesIds.includes(id))) {
+			run("UPDATE trade_offers SET status = 'cancelled', resolved_at = ? WHERE id = ?", now(), o.id);
+		}
+	}
 }
 
 // ---------- schedule and series ----------

@@ -166,6 +166,31 @@ CREATE TABLE IF NOT EXISTS roster (
 	acquired_at INTEGER NOT NULL,
 	PRIMARY KEY (season_id, species_id)
 );
+-- Completed roster moves after the draft: free agent pickups and drops, and trades (the public log)
+CREATE TABLE IF NOT EXISTS transactions (
+	id INTEGER PRIMARY KEY,
+	season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL,              -- 'fa' | 'trade'
+	user_id INTEGER NOT NULL REFERENCES users(id),   -- fa: the player; trade: who offered it
+	other_id INTEGER REFERENCES users(id),           -- trade: who accepted it
+	gave TEXT NOT NULL,              -- JSON species ids leaving user_id's team
+	got TEXT NOT NULL,               -- JSON species ids joining user_id's team
+	made_by INTEGER REFERENCES users(id),
+	at INTEGER NOT NULL
+);
+-- Trades offered between two players; accepting one moves roster rows (app/league.ts answerTrade)
+CREATE TABLE IF NOT EXISTS trade_offers (
+	id INTEGER PRIMARY KEY,
+	season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+	from_user INTEGER NOT NULL REFERENCES users(id),
+	to_user INTEGER NOT NULL REFERENCES users(id),
+	give TEXT NOT NULL,              -- JSON species ids from_user gives
+	get TEXT NOT NULL,               -- JSON species ids from_user gets
+	note TEXT,
+	status TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted | declined | withdrawn | cancelled
+	created_at INTEGER NOT NULL,
+	resolved_at INTEGER
+);
 -- With "higher seed picks" re-seeding: each playoff pick of an opponent (app/league.ts playoffPick)
 CREATE TABLE IF NOT EXISTS playoff_picks (
 	id INTEGER PRIMARY KEY,
