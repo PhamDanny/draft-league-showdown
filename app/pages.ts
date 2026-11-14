@@ -1266,6 +1266,7 @@ document.addEventListener('change', async e => {
 				players: L.draftPlayers(s.id),
 				pool: all('SELECT * FROM pool WHERE season_id = ?', s.id),
 				picks: L.picks(s.id),
+				roster: all('SELECT * FROM roster WHERE season_id = ? ORDER BY user_id, cost DESC', s.id),
 				matches: L.matches(s.id).map(m => ({
 					...m,
 					// Sealed games stay sealed in exports, and nothing from a game (not even what

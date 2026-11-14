@@ -403,11 +403,16 @@ export function rosterEmbed(league: L.League, season: L.Season, settings: L.Sett
 export function pokemonEmbed(league: L.League, season: L.Season, settings: L.Settings,
 	entry: { species_id: string, name: string, cost: number, tc_cost: number | null, banned: number }): Embed {
 	const pick = L.picks(season.id).find(p => p.species_id === entry.species_id);
+	const owner = L.owners(season.id).get(entry.species_id);
+	const names = who(league.id);
 	const lines = [`${entry.cost} points`];
 	if (settings.teraMode === 'captains') lines.push(entry.tc_cost == null ? "Can't be a Tera Captain" : `Can be a Tera Captain for ${plural(entry.tc_cost, 'Tera point')}`);
 	if (entry.banned) lines.push('Banned in this league');
-	else if (pick) lines.push(`Drafted by ${bold(who(league.id).get(pick.user_id))} in round ${pick.round + 1}${settings.teraMode === 'captains' && L.captainsRevealed(season) && pick.captain ? ' (Tera Captain)' : ''}`);
-	else lines.push('Available');
+	else if (owner != null) {
+		const captain = settings.teraMode === 'captains' && L.captainsRevealed(season) && L.roster(season.id, owner).find(r => r.species_id === entry.species_id)?.captain;
+		const drafted = pick && pick.user_id === owner ? ` in round ${pick.round + 1}` : pick ? ` (drafted by ${bold(names.get(pick.user_id))})` : ' (free agent pickup)';
+		lines.push(`${pick?.user_id === owner ? 'Drafted by' : 'On the team of'} ${bold(names.get(owner))}${drafted}${captain ? ' (Tera Captain)' : ''}`);
+	} else lines.push(pick ? `Free agent (drafted by ${bold(names.get(pick.user_id))}, since dropped)` : 'Available');
 	return { title: entry.name, color: COLOR, description: lines.join('\n'), thumbnail: { url: spriteUrl(entry.species_id, settings.mod) } };
 }
 

@@ -153,6 +153,19 @@ CREATE TABLE IF NOT EXISTS discord_emojis (
 	name TEXT NOT NULL,
 	PRIMARY KEY (app_id, species_id)
 );
+-- Who owns which Pokémon now. Filled from picks when the schedule is made; trades and free agency change
+-- this and never picks, which stays the draft's history (app/league.ts roster)
+CREATE TABLE IF NOT EXISTS roster (
+	season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+	species_id TEXT NOT NULL,
+	user_id INTEGER NOT NULL REFERENCES users(id),
+	cost INTEGER NOT NULL,           -- what this team paid: the draft cost, or the pool price when picked up
+	captain INTEGER NOT NULL DEFAULT 0,
+	tc_cost INTEGER,
+	via TEXT NOT NULL,               -- 'draft' | 'trade' | 'fa'
+	acquired_at INTEGER NOT NULL,
+	PRIMARY KEY (season_id, species_id)
+);
 -- With "higher seed picks" re-seeding: each playoff pick of an opponent (app/league.ts playoffPick)
 CREATE TABLE IF NOT EXISTS playoff_picks (
 	id INTEGER PRIMARY KEY,
@@ -190,6 +203,15 @@ addColumn('league_members', 'discord_pings', 'INTEGER NOT NULL DEFAULT 1');
 addColumn('seasons', 'final_order', 'TEXT');
 // A playoff series' position within its round; NULL in the regular season
 addColumn('matches', 'bracket_slot', 'INTEGER');
+/** Seasons scheduled before the roster table get their picks as their rosters. */
+export function migrateRosters() {
+	db.exec(`INSERT INTO roster (season_id, species_id, user_id, cost, captain, tc_cost, via, acquired_at)
+	SELECT picks.season_id, picks.species_id, picks.user_id, picks.cost, picks.captain, picks.tc_cost, 'draft', picks.made_at
+	FROM picks JOIN seasons ON seasons.id = picks.season_id
+	WHERE seasons.status NOT IN ('setup', 'drafting', 'captains')
+	AND NOT EXISTS (SELECT 1 FROM roster WHERE roster.season_id = picks.season_id)`);
+}
+migrateRosters();
 
 export function now() {
 	return Math.floor(Date.now() / 1000);

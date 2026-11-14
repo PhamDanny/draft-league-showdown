@@ -600,9 +600,11 @@ export function setCaptains(season: Season, settings: Settings, byUserId: number
 		const ids = [...new Set(speciesIds)];
 		const problem = captainProblem(fresh, settings, forUserId, ids);
 		if (problem) return problem;
-		run('UPDATE picks SET captain = 0, tc_cost = NULL WHERE season_id = ? AND user_id = ?', season.id, forUserId);
+		// After the lock this changes the current roster; the draft board keeps showing the captains as locked
+		const t = rosterTable(season.id);
+		run(`UPDATE ${t} SET captain = 0, tc_cost = NULL WHERE season_id = ? AND user_id = ?`, season.id, forUserId);
 		for (const id of ids) {
-			run(`UPDATE picks SET captain = 1, tc_cost = (SELECT tc_cost FROM pool WHERE pool.season_id = picks.season_id AND pool.species_id = picks.species_id)
+			run(`UPDATE ${t} SET captain = 1, tc_cost = (SELECT tc_cost FROM pool WHERE pool.season_id = ${t}.season_id AND pool.species_id = ${t}.species_id)
 				WHERE season_id = ? AND user_id = ? AND species_id = ?`, season.id, forUserId, id);
 		}
 		run('UPDATE season_players SET captains_set = 1 WHERE season_id = ? AND user_id = ?', season.id, forUserId);
@@ -628,6 +630,10 @@ export function endDraft(season: Season, settings: Settings, userId: number) {
 export function completeDraft(season: Season, userId: number) {
 	const players = draftPlayers(season.id).map(p => p.user_id);
 	tx(() => {
+		// From here on, rosters change only through the roster table (trades, free agency)
+		run('DELETE FROM roster WHERE season_id = ?', season.id);
+		run(`INSERT INTO roster (season_id, species_id, user_id, cost, captain, tc_cost, via, acquired_at)
+			SELECT season_id, species_id, user_id, cost, captain, tc_cost, 'draft', ? FROM picks WHERE season_id = ?`, now(), season.id);
 		run('DELETE FROM matches WHERE season_id = ?', season.id);
 		for (const [w, week] of roundRobin(players).entries()) {
 			for (const [a, b] of week) {
@@ -659,12 +665,31 @@ export function roundRobin(ids: number[]): [number, number][][] {
 
 // ---------- rosters ----------
 
-/** A player's picks. `tc_cost` is what a captain spent; `pool_tc_cost` is what it would cost as one (NULL: it can't be). */
+/** Whether a season's rosters live in the roster table: once the schedule is made. Before that they're the picks. */
+function rostersMade(seasonId: number) {
+	const s = one<{ status: string }>('SELECT status FROM seasons WHERE id = ?', seasonId);
+	return !!s && !['setup', 'drafting', 'captains'].includes(s.status);
+}
+/** The table that holds a season's current rosters (see rostersMade). */
+export function rosterTable(seasonId: number) {
+	return rostersMade(seasonId) ? 'roster' : 'picks';
+}
+
+/**
+ * A player's Pokémon: their picks during the draft, their current roster after it. `cost` is what they paid,
+ * `tc_cost` is what a captain spent, and `pool_tc_cost` is what it would cost as one (NULL: it can't be).
+ */
 export function roster(seasonId: number, userId: number) {
-	return all<{ species_id: string, name: string, cost: number, captain: number, tc_cost: number | null, pool_tc_cost: number | null }>(
-		`SELECT picks.species_id, pool.name, picks.cost, picks.captain, picks.tc_cost, pool.tc_cost AS pool_tc_cost FROM picks JOIN pool
-		ON pool.season_id = picks.season_id AND pool.species_id = picks.species_id
-		WHERE picks.season_id = ? AND picks.user_id = ? ORDER BY picks.cost DESC, pool.name`, seasonId, userId);
+	const t = rosterTable(seasonId);
+	return all<{ species_id: string, name: string, cost: number, captain: number, tc_cost: number | null, pool_tc_cost: number | null, via: string }>(
+		`SELECT ${t}.species_id, pool.name, ${t}.cost, ${t}.captain, ${t}.tc_cost, pool.tc_cost AS pool_tc_cost, ${t === 'roster' ? 'roster.via' : "'draft' AS via"}
+		FROM ${t} JOIN pool ON pool.season_id = ${t}.season_id AND pool.species_id = ${t}.species_id
+		WHERE ${t}.season_id = ? AND ${t}.user_id = ? ORDER BY ${t}.cost DESC, pool.name`, seasonId, userId);
+}
+/** Who has each Pokémon on their team now (species id → user id). */
+export function owners(seasonId: number) {
+	return new Map(all<{ species_id: string, user_id: number }>(`SELECT species_id, user_id FROM ${rosterTable(seasonId)} WHERE season_id = ?`, seasonId)
+		.map(r => [r.species_id, r.user_id] as [string, number]));
 }
 
 /** A season's pool ids (including ids an entry covers) and each entry's explicit `covers`. */
@@ -1241,8 +1266,9 @@ export function showdownData() {
 		// Captains chosen but not yet locked don't reach Showdown
 		const revealed = captainsRevealed(season);
 		const byUser: typeof rosters[string] = {};
-		for (const p of all<{ species_id: string, captain: number, showdown_id: string }>(`SELECT picks.species_id, picks.captain, users.showdown_id
-			FROM picks JOIN users ON users.id = picks.user_id WHERE picks.season_id = ?`, season.id)) {
+		const t = rosterTable(season.id);
+		for (const p of all<{ species_id: string, captain: number, showdown_id: string }>(`SELECT ${t}.species_id, ${t}.captain, users.showdown_id
+			FROM ${t} JOIN users ON users.id = ${t}.user_id WHERE ${t}.season_id = ?`, season.id)) {
 			const entry = (byUser[p.showdown_id] ||= { species: [], captains: [] });
 			const ids = entryIds(index, p.species_id, mod);
 			entry.species.push(...ids);

@@ -242,3 +242,28 @@ test('higher seed picks: only the seed on the clock picks, and the round is made
 	assert.deepEqual(s.playoffs().map(m => [m.p1, m.p2]), [[a, b], [c, d]]);
 	assert.equal(L.playoffPick(s.fresh(), s.settings, a, a, c), 'Nobody is picking an opponent right now.');
 });
+
+// ---------- rosters ----------
+
+test('making the schedule copies the picks into the roster table, and old seasons are copied on startup', async () => {
+	const { migrateRosters } = await import('../app/db.ts');
+	const s = season(['A', 'B']);
+	const id = s.fresh().id;
+	assert.deepEqual(all('SELECT species_id, user_id, via FROM roster WHERE season_id = ? ORDER BY species_id', id).map(r => ({ ...r })),
+		[{ species_id: 'mon0', user_id: s.ids[0], via: 'draft' }, { species_id: 'mon1', user_id: s.ids[1], via: 'draft' }]);
+	assert.equal(L.rosterTable(id), 'roster');
+	// A season from before the roster table
+	run('DELETE FROM roster WHERE season_id = ?', id);
+	assert.deepEqual(L.roster(id, s.ids[0]), []);
+	migrateRosters();
+	assert.deepEqual(L.roster(id, s.ids[0]).map(r => r.species_id), ['mon0']);
+	// Changing the roster table changes what Showdown is sent; the draft history stays
+	run('UPDATE roster SET user_id = ? WHERE season_id = ? AND species_id = ?', s.ids[1], id, 'mon0');
+	const league = one('SELECT * FROM leagues WHERE id = ?', s.leagueId);
+	const sent = L.showdownData().rosters[league.format_name.toLowerCase().replace(/[^a-z0-9]/g, '')];
+	const bob = one('SELECT showdown_id FROM users WHERE id = ?', s.ids[1]).showdown_id;
+	assert.deepEqual(Object.keys(sent), [bob], 'A has nothing left');
+	assert.equal(sent[bob].species.length, 2);
+	assert.equal(L.owners(id).get('mon0'), s.ids[1]);
+	assert.equal(L.picks(id).find(p => p.species_id === 'mon0').user_id, s.ids[0]);
+});

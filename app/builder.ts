@@ -14,7 +14,8 @@ type LReq = Request & { league: L.League & { role: string }, season: L.Season, s
 
 const dexCache = new Map<string, string>();
 function dexJson(seasonId: number, settings: L.Settings) {
-	const picks = all<{ species_id: string }>('SELECT species_id FROM picks WHERE season_id = ?', seasonId);
+	// Drafted Pokémon, and free agents picked up since
+	const picks = all<{ species_id: string }>('SELECT species_id FROM picks WHERE season_id = ? UNION SELECT species_id FROM roster WHERE season_id = ?', seasonId, seasonId);
 	const rules = L.ruleset(settings);
 	const key = `${seasonId}:${settings.mod}:${rules.join(',')}:${picks.map(p => p.species_id).sort().join(',')}`;
 	const hit = dexCache.get(key);
