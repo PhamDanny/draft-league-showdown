@@ -4,9 +4,10 @@ import type { Express, Request, Response, Router } from 'express';
 import { all, one } from './db.ts';
 import { builtAs, descs, dex, itemSprites, mon, pickSpecies, toID, TYPES } from './dex.ts';
 import * as L from './league.ts';
-import { esc, page } from './views/layout.ts';
+import { esc, page, spriteSrc } from './views/layout.ts';
 import { playButton } from './pages.ts';
 import { notify } from './events.ts';
+import { syncShowdown } from './showdown.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
 
@@ -17,7 +18,7 @@ function dexJson(seasonId: number, settings: L.Settings) {
 	// Drafted Pokémon, and free agents picked up since
 	const picks = all<{ species_id: string }>('SELECT species_id FROM picks WHERE season_id = ? UNION SELECT species_id FROM roster WHERE season_id = ?', seasonId, seasonId);
 	const rules = L.ruleset(settings);
-	const key = `${seasonId}:${settings.mod}:${rules.join(',')}:${picks.map(p => p.species_id).sort().join(',')}`;
+	const key = `${seasonId}:${settings.mod}:${spriteSrc('pikachu')}:${rules.join(',')}:${picks.map(p => p.species_id).sort().join(',')}`;
 	const hit = dexCache.get(key);
 	if (hit) return hit;
 	const d = dex(settings.mod);
@@ -60,7 +61,7 @@ function dexJson(seasonId: number, settings: L.Settings) {
 				// A Mega/Primal pick is sent as its base holding the stone (see builtAs)
 				...(built.species !== s.name ? { showdown: built.species, battleAbility: built.battleAbility } : {}),
 				abilities: anyAbility || built.abilities.filter(a => !banned(`ability:${toID(a)}`)),
-				moves: pool.sort(), sprite: mon(id, settings.mod).sprite,
+				moves: pool.sort(), sprite: spriteSrc(id),
 				item: s.requiredItem || (s.requiredItems ? s.requiredItems[0] : undefined),
 				genders: s.gender ? [] : ['M', 'F'],
 			};
@@ -146,7 +147,7 @@ function builderContext(req: Request) {
 	return {
 		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name, myTeam: teamNames.get(me) || req.user!.showdown_name,
 		leagueName: league.name, record: st ? { sw: st.sw, sl: st.sl, diff: st.gw - st.gl } : null,
-		format: toID(league.format_name), teraMode: settings.teraMode, ...gameOf(settings),
+		format: toID(league.format_name), teraMode: settings.teraMode, ...gameOf(settings), smogonDex: smogonDexOf(settings),
 		// While Tera Captains are being chosen after the draft, the builder points players at the draft room
 		choosingCaptains: season.status === 'captains',
 		roster: myRoster, rosters, scouting, weeks,
@@ -158,6 +159,18 @@ function builderContext(req: Request) {
 /** Generation, singles or doubles, and level, for the damage calc in the browser. */
 export function gameOf(settings: L.Settings) {
 	return { gen: L.genOf(settings.mod), gameType: settings.gameType, level: settings.gameType === 'doubles' ? 50 : 100 };
+}
+
+/** Where a Pokémon's page lives in Smogon's dex for this league's format: its generation's dex, opened on the matching metagame. */
+export function smogonDexOf(settings: L.Settings) {
+	const GENS = ['', 'rb', 'gs', 'rs', 'dp', 'bw', 'xy', 'sm', 'ss', 'sv'];
+	const gen = GENS[L.genOf(settings.mod)] || 'sv';
+	// Smogon has Draft analyses from XY on; earlier generations fall back to OU
+	const META: { [format: string]: string } = {
+		svnatdex: 'national-dex', ssnatdex: 'national-dex', svnatdexubers: 'national-dex-ubers', svaaa: 'almost-any-ability', svvgc: 'vgc',
+		bw: 'ou', dpp: 'ou', adv: 'ou',
+	};
+	return { gen, meta: META[settings.format] || 'draft' };
 }
 
 function json(value: unknown) {
@@ -200,7 +213,9 @@ export function builderRoutes(lg: Router) {
 	});
 
 	/** Score-only view of a series for the battle page. Never includes sets or logs. */
-	function seriesState(m: L.Match, me: number, bestOf: number) {
+	function seriesState(m: L.Match, me: number, settings: L.Settings) {
+		const bestOf = L.bestOfFor(settings, m);
+		const opp = m.p1 === me ? m.p2 : m.p1;
 		const games = L.battlesFor(m.id).filter(b => b.played_at);
 		const [mine, theirs] = m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins];
 		return {
@@ -212,6 +227,12 @@ export function builderRoutes(lg: Router) {
 				return r ? { by: r.requested_by === me ? 'me' : 'opp', reason: r.reason || '' } : null;
 			})(),
 			resets: L.remakeCount(m.id),
+			// The roster check before picking (see L.usesTeraReveal): both rosters as they stand, and the captains'
+			// Tera types once both players are ready
+			...(L.usesTeraReveal(settings) ? {
+				tera: L.teraReveal(m, me),
+				rosters: { mine: rosterOf(m.season_id, me, settings.mod), theirs: rosterOf(m.season_id, opp, settings.mod) },
+			} : {}),
 		};
 	}
 	function myMatch(req: Request) {
@@ -224,7 +245,7 @@ export function builderRoutes(lg: Router) {
 	lg.get('/battle/:matchId/state', (req, res) => {
 		const m = myMatch(req);
 		if (!m) return res.status(404).json({ error: 'Not found' });
-		res.set('cache-control', 'no-store').json(seriesState(m, req.user!.id, L.bestOfFor((req as LReq).settings, m)));
+		res.set('cache-control', 'no-store').json(seriesState(m, req.user!.id, (req as LReq).settings));
 	});
 
 	lg.post('/battle/:matchId/remake', (req, res) => {
@@ -235,7 +256,21 @@ export function builderRoutes(lg: Router) {
 		if (error) return res.status(400).json({ error });
 		notify(league.id);
 		const fresh = one<L.Match>('SELECT * FROM matches WHERE id = ?', m.id)!;
-		res.json(seriesState(fresh, req.user!.id, L.bestOfFor(settings, fresh)));
+		res.json(seriesState(fresh, req.user!.id, settings));
+	});
+
+	lg.post('/battle/:matchId/tera', (req, res) => {
+		const { league, settings } = req as LReq;
+		const m = myMatch(req);
+		if (!m) return res.status(404).json({ error: 'Not found' });
+		if (!L.usesTeraReveal(settings)) return res.status(400).json({ error: 'This league has no Tera reveal.' });
+		let tera: { [id: string]: unknown } = {};
+		try { tera = JSON.parse(String(req.body?.tera || '{}')) || {}; } catch {}
+		const error = req.body?.action === 'unready' ? L.unrevealTera(m, req.user!.id) : L.revealTera(m, req.user!.id, tera);
+		if (error) return res.status(400).json({ error });
+		syncShowdown();
+		notify(league.id);
+		res.json(seriesState(m, req.user!.id, settings));
 	});
 
 	lg.get('/battle/:matchId', (req, res) => {
@@ -250,9 +285,9 @@ export function builderRoutes(lg: Router) {
 		const ctx = {
 			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, label: L.matchLabel(m), format: toID(league.format_name),
 			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id, myName: req.user!.showdown_name,
-			roster, teraMode: settings.teraMode, ...gameOf(settings),
+			roster, oppRoster: rosterOf(season.id, opp, settings.mod), teraMode: settings.teraMode, teraReveal: L.usesTeraReveal(settings), ...gameOf(settings),
 			teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, roster.length),
-			state: seriesState(m, me, L.bestOfFor(settings, m)),
+			state: seriesState(m, me, settings),
 		};
 		render(req, res, `vs ${oppUser.showdown_name}`, 'schedule', '<div id="battle"></div>',
 			`<script>window.BATTLE = ${json(ctx)};</script><script src="/static/sets.js"></script><script src="/static/battle.js"></script>`, true, m.id);

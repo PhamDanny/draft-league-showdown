@@ -1,7 +1,8 @@
 // Battle page. Our own Showdown connection runs a ready check (under the hood: a challenge
 // that the second player to ready up accepts), then Showdown's battle screen is embedded and
 // restyled to match the site. Between games of a series the page moves straight to the next game.
-// Nothing about the opponent's team is fetched here; only the series score comes from the site.
+// Of the opponent's team, only their roster (public) and, in Tera Captains leagues that pick at the battle,
+// the captains' Tera types they revealed come from the site. Their sets and picks never do.
 (async () => {
 	const C = window.BATTLE;
 	const { toID, esc } = Sets;
@@ -35,8 +36,11 @@
 	/** The sets brought to the next game. */
 	const team = () => {
 		const all = prepared();
-		if (!PICKING) return all;
-		return S.pick.species.map(id => all.find(s => entryOf(s.species) === id)).filter(Boolean);
+		// In teambuilder order, not the order picked: the order doesn't matter, so nothing should suggest it does
+		const t = PICKING ? all.filter(s => S.pick.species.includes(entryOf(s.species))) : all;
+		// Captains play the Tera type revealed for the series, even if the set was edited since
+		const tera = S.series.tera?.mine;
+		return tera ? t.map(s => tera[entryOf(s.species)] ? { ...s, teraType: tera[entryOf(s.species)] } : s) : t;
 	};
 	// A lock with nothing in it (the series was started from another browser) would leave no way to play on
 	const lockedIn = () => C.teamPreview === 'match' && S.pick.locked && S.pick.species.length > 0;
@@ -50,6 +54,36 @@
 		savePick();
 	}
 	const teamReady = () => team().length > 0 && (!PICKING || team().length === (lockedIn() ? S.pick.species.length : pickSize()));
+
+	// Roster check: before picking, both players ready up on both rosters and their captains' Tera types.
+	// Once both are ready the rosters and Tera types are locked for the series, barring a remake (see L.usesTeraReveal).
+	const REVEAL = !!C.teraReveal;
+	const myRoster = () => S.series.rosters?.mine || C.roster;
+	const oppRoster = () => S.series.rosters?.theirs || C.oppRoster || [];
+	const myCaptains = () => myRoster().filter(r => r.captain);
+	/** Tera types to send when readying up, from this week's sets; null for a captain with no set prepared. */
+	const teraToReveal = () => Object.fromEntries(myCaptains().map(r => {
+		const s = prepared().find(x => entryOf(x.species) === r.id);
+		return [r.id, s ? s.teraType || D.species[s.species]?.types[0] || null : null];
+	}));
+	const iRevealed = () => !REVEAL || !!S.series.tera?.mine;
+	const bothRevealed = () => !REVEAL || !!S.series.tera?.theirs;
+	async function revealTera(action = 'ready') {
+		const tera = teraToReveal();
+		if (action === 'ready' && Object.values(tera).some(t => !t)) return;
+		try {
+			const r = await fetch(`/l/${C.leagueId}/battle/${C.matchId}/tera`, {
+				method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ action, tera: JSON.stringify(tera) }),
+			});
+			const j = await r.json();
+			if (!r.ok) { S.error = j.error || 'Something went wrong.'; render(); return; }
+			applySeries(j);
+		} catch {
+			S.error = 'Could not reach the site. Try again.';
+			render();
+		}
+	}
 
 	const S = {
 		online: false, // our connection is signed in
@@ -79,7 +113,7 @@
 	function send(msg) { if (ws?.readyState === 1) ws.send(msg); }
 	function readyUp() {
 		const t = team();
-		if (!teamReady()) return;
+		if (!teamReady() || !bothRevealed()) return;
 		send(`|/utm ${JSON.stringify(t.map(s => Sets.toShowdown(D, s)))}`);
 		// Challenging someone who is already challenging us in this format accepts theirs.
 		send(`|/challenge ${C.opp}, ${C.format}`);
@@ -121,6 +155,10 @@
 	function lobby() {
 		const t = team();
 		const g = nextGameNo();
+		// Leagues that pick 6 here "lock in" their picks, so it doesn't read like the roster check's Ready
+		const W = PICKING
+			? { go: 'Lock in', undo: 'Cancel', on: 'Locked in', off: 'Locking in…', done: 'locked in', past: 'locked in', verb: 'lock in' }
+			: { go: `Ready for game ${g}`, undo: 'Not ready', on: 'Ready', off: 'Not ready', done: 'ready', past: 'readied up', verb: 'ready up' };
 		let status, action;
 		if (!S.online) {
 			status = '<span class="muted">Connecting…</span>';
@@ -128,24 +166,26 @@
 		} else if (!prepared().length) {
 			status = `<span>No ${PICKING ? 'sets' : 'team'} for ${esc((C.label || 'Week ' + C.week).replace(/^Week/, 'week'))} yet.</span>`;
 			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Build your team</a>`;
+		} else if (!bothRevealed()) {
+			return rosterCheck();
 		} else if (!teamReady() && lockedIn()) {
 			status = `<span>One of your locked-in Pokémon has no set saved for ${esc((C.label || 'Week ' + C.week).replace(/^Week/, 'week'))}. Restore it in the teambuilder.</span>`;
 			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Open teambuilder</a>`;
 		} else if (!teamReady()) {
-			status = `<span>Pick ${pickSize()} to bring to game ${g}. ${esc(C.oppName)} won't see them until the battle starts.</span>`;
-			action = `<button class="btn primary lg" disabled>Ready for game ${g}</button>`;
+			status = `<span>Pick ${pickSize()} to bring to game ${g}, in any order. You'll both see each other's ${pickSize()} at team preview and choose ${leadsWhat()} there.</span>`;
+			action = `<button class="btn primary lg" disabled>${W.go}</button>`;
 		} else if (S.wantReady) {
-			status = `<span class="bt-wait">You're ready. Waiting for <b>${esc(C.oppName)}</b> to come online</span>`;
-			action = '<button class="btn lg" data-act="unready">Not ready</button>';
+			status = `<span class="bt-wait">You're ${W.done}. Waiting for <b>${esc(C.oppName)}</b> to come online</span>`;
+			action = `<button class="btn lg" data-act="unready">${W.undo}</button>`;
 		} else if (S.myReady) {
-			status = `<span class="bt-wait">Waiting for <b>${esc(C.oppName)}</b> to ready up</span>`;
-			action = '<button class="btn lg" data-act="unready">Not ready</button>';
+			status = `<span class="bt-wait">Waiting for <b>${esc(C.oppName)}</b> to ${W.verb}</span>`;
+			action = `<button class="btn lg" data-act="unready">${W.undo}</button>`;
 		} else if (S.oppReady) {
-			status = `<span><b>${esc(C.oppName)}</b> is ready and waiting for you.</span>`;
-			action = `<button class="btn primary lg pulse" data-act="ready">Ready for game ${g}</button>`;
+			status = `<span><b>${esc(C.oppName)}</b> is ${W.done} and waiting for you.</span>`;
+			action = `<button class="btn primary lg pulse" data-act="ready">${W.go}</button>`;
 		} else {
-			status = '<span class="muted">The game starts as soon as you\'re both ready.</span>';
-			action = `<button class="btn primary lg" data-act="ready">Ready for game ${g}</button>`;
+			status = `<span class="muted">The game starts as soon as you've both ${W.past}.</span>`;
+			action = `<button class="btn primary lg" data-act="ready">${W.go}</button>`;
 		}
 		// Nothing stops a short team, but it's usually an unfinished one
 		const full = Math.min(6, C.roster.length);
@@ -155,7 +195,7 @@
 		const side = (name, ready, sub) => `<div class="bt-side ${ready ? 'ready' : ''}">
 			<span class="bt-dot" aria-hidden="true"></span>
 			<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
-			<span class="pill ${ready ? 'final' : ''}">${ready ? 'Ready' : 'Not ready'}</span>
+			<span class="pill ${ready ? 'final' : ''}">${ready ? W.on : W.off}</span>
 		</div>`;
 		const oppSub = S.oppOnline === false ? 'Offline' : S.oppOnline ? 'Online' : '&nbsp;';
 		return `<section class="panel bt-lobby">
@@ -165,13 +205,68 @@
 				<span class="bt-vs">vs</span>
 				${side(C.oppName, S.oppReady, oppSub)}
 			</div>
-			${PICKING && S.online && prepared().length ? picker() : ''}
 			<div class="bt-cta">${action}<div class="bt-status">${status}</div></div>
 			${S.error ? `<p class="bt-err">${esc(S.error)}</p>` : ''}
+			${PICKING && S.online && prepared().length ? picker() : ''}
+			${REVEAL && S.online && prepared().length ? rosters() : ''}
 		</section>`;
 	}
 
-	/** Choose which prepared sets to bring (Each game / Each match leagues). */
+	/** The ready check on both rosters and the captains' Tera types that opens the series. */
+	function rosterCheck() {
+		const mine = iRevealed(), theirs = !!S.series.tera?.oppRevealed;
+		const missing = myCaptains().filter(r => !teraToReveal()[r.id]);
+		let status, action;
+		if (missing.length && !mine) {
+			status = `<span>Prepare a set for ${missing.map(r => esc(D.species[r.id]?.name || r.id)).join(' and ')} to give your Tera Captain${missing.length === 1 ? '' : 's'} a Tera type.</span>`;
+			action = `<a class="btn primary lg" href="/l/${C.leagueId}/builder#week-${C.week}">Open teambuilder</a>`;
+		} else if (mine) {
+			status = `<span class="bt-wait">Waiting for <b>${esc(C.oppName)}</b> to ready up</span>`;
+			action = '<button class="btn lg" data-act="reveal-unready">Not ready</button>';
+		} else {
+			status = `<span>${theirs ? `<b>${esc(C.oppName)}</b> is ready and waiting for you. ` : ''}Once you're both ready, both rosters and your Tera Captains' Tera types are locked for the series, barring a remake. Then you each pick your 6.</span>`;
+			action = `<button class="btn primary lg ${theirs ? 'pulse' : ''}" data-act="reveal">Ready</button>`;
+		}
+		const side = (name, ready, sub) => `<div class="bt-side ${ready ? 'ready' : ''}">
+			<span class="bt-dot" aria-hidden="true"></span>
+			<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
+			<span class="pill ${ready ? 'final' : ''}">${ready ? 'Ready' : 'Not ready'}</span>
+		</div>`;
+		const oppSub = S.oppOnline === false ? 'Offline' : S.oppOnline ? 'Online' : '&nbsp;';
+		return `<section class="panel bt-lobby">
+			<p class="eyebrow">Roster check</p>
+			<div class="bt-sides">
+				${side(C.myName, mine, `${myRoster().length} Pokémon`)}
+				<span class="bt-vs">vs</span>
+				${side(C.oppName, theirs, oppSub)}
+			</div>
+			<div class="bt-cta">${action}<div class="bt-status">${status}</div></div>
+			${S.error ? `<p class="bt-err">${esc(S.error)}</p>` : ''}
+			${rosters()}
+		</section>`;
+	}
+
+	const teraTag = t => `<span class="type t-${toID(t)}">${esc(t)}</span>`;
+	/** Both full rosters, one column under each player, with the captains' Tera types once they're revealed. */
+	function rosters() {
+		const col = (name, roster, tera, hidden) => `<div class="bt-roster"><b class="bt-rowner">${esc(name)}</b>${roster.map(r => {
+			const sp = D.species[r.id];
+			const t = r.captain ? tera?.[r.id] : null;
+			return `<div class="bt-rmon ${r.captain ? 'cap' : ''}">${sprite(r.id, r.captain ? 'cap' : '')}
+				<span class="bt-rname">${esc(sp?.name || r.id)}${r.captain ? '<small>Tera Captain</small>' : ''}</span>
+				${r.captain ? (t ? teraTag(t) : `<span class="type bt-hidden">${hidden}</span>`) : ''}</div>`;
+		}).join('')}</div>`;
+		const locked = bothRevealed();
+		return `<p class="eyebrow bt-rosters-head">${locked ? 'Rosters · locked for the series' : 'Rosters'}</p>
+			<div class="bt-rosters">
+				${col(C.myName, myRoster(), S.series.tera?.mine || teraToReveal(), 'No set')}
+				<span class="bt-vs" aria-hidden="true">vs</span>
+				${col(C.oppName, oppRoster(), S.series.tera?.theirs, 'Hidden')}
+			</div>`;
+	}
+
+	const leadsWhat = () => C.gameType === 'doubles' ? 'the 4 you play and your leads' : 'your lead';
+	/** Choose which prepared sets to bring (Each game / Each match leagues). The order picked doesn't matter. */
 	function picker() {
 		const all = prepared();
 		const n = pickSize();
@@ -180,11 +275,6 @@
 		const locked = lockedIn();
 		const noChoice = all.length <= 6;
 		const title = locked ? `Your ${chosen.length} for this series` : noChoice ? `Bringing all ${all.length}` : `Pick ${n} · ${chosen.length}/${n}`;
-		const note = locked ? 'Locked in at game 1. They stay the same for every game of the series.' :
-			noChoice ? `You have ${all.length === 6 ? 'exactly 6 sets' : `only ${all.length} set${all.length === 1 ? '' : 's'}`} prepared, so ${all.length === 1 ? 'it comes' : 'they all come'}. Prepare more in the teambuilder to have a choice.` :
-			busy ? 'To change your picks, click Not ready first.' :
-			C.teamPreview === 'match' ? 'These stay locked in for the whole series once game 1 starts.' :
-			`You pick again before every game. ${C.gameType === 'doubles' ? 'The 4 you play and your leads' : 'Leads'} are chosen at team preview once the battle starts.`;
 		return `<div class="bt-pick">
 			<p class="eyebrow">${title}</p>
 			<div class="bt-pickgrid">${all.map(s => {
@@ -192,9 +282,8 @@
 				const off = locked || busy || noChoice || (!on && chosen.length >= n);
 				return `<button type="button" class="tslot bt-pickmon ${on ? 'on' : ''}" data-act="pick" data-species="${esc(entryOf(s.species))}" aria-pressed="${on}" ${off ? 'disabled' : ''}>
 					${sprite(s.species)}<span class="tmeta"><b>${esc(s.nickname || D.species[s.species].name)}</b><small>${Sets.itemIcon(D, s.item)}<span>${esc(s.item || 'No item')}</span></small></span>
-					${on && !locked && !noChoice ? `<span class="pill">${chosen.indexOf(entryOf(s.species)) + 1}</span>` : ''}</button>`;
+					${on && !locked && !noChoice ? '<span class="bt-check" aria-hidden="true">✓</span>' : ''}</button>`;
 			}).join('')}</div>
-			<p class="muted bt-picknote">${note}</p>
 		</div>`;
 	}
 	function togglePick(id) {
@@ -350,6 +439,14 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 			const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
 			win.PS?.prefs?.set?.('theme', dark ? 'dark' : 'light');
 		} catch {}
+		// The player's sound settings, and Showdown's own pixel-sprite option when they've asked for old sprites everywhere
+		try {
+			const P = window.PREFS || {};
+			if (P.music != null && win.PS.prefs.musicvolume !== P.music) win.PS.prefs.set('musicvolume', P.music);
+			if (P.sfx != null && win.PS.prefs.effectvolume !== P.sfx) win.PS.prefs.set('effectvolume', P.sfx);
+			const bw = P.sprites === 'old';
+			if (!!win.PS.prefs.bwgfx !== bw) win.PS.prefs.set('bwgfx', bw);
+		} catch {}
 		if (!doc.getElementById('dls-embed')) {
 			const font = doc.createElement('link');
 			font.rel = 'stylesheet';
@@ -468,6 +565,8 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 		t.closest('details')?.removeAttribute('open');
 		if (a === 'pick') togglePick(t.dataset.species);
 		else if (a === 'ready') readyUp();
+		else if (a === 'reveal') revealTera();
+		else if (a === 'reveal-unready') revealTera('unready');
 		else if (a === 'unready') unready();
 		else if (a === 'next') nextGame();
 		else if (a === 'forfeit') confirmForfeit();

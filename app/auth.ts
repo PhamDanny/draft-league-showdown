@@ -14,6 +14,8 @@ export interface User {
 	showdown_name: string;
 	showdown_id: string;
 	is_admin: number;
+	/** JSON settings, read with prefsOf. */
+	prefs?: string | null;
 }
 
 declare global {

@@ -1,7 +1,7 @@
 // League, season, draft, schedule and series logic. No HTTP here.
 import crypto from 'node:crypto';
 import { all, audit, now, one, run, tx } from './db.ts';
-import { dex, rosterIds, seedPool, teamsFromInputLog, toID } from './dex.ts';
+import { dex, rosterIds, seedPool, teamsFromInputLog, toID, TYPES } from './dex.ts';
 import { seal, unseal } from './seal.ts';
 
 export interface Settings {
@@ -24,6 +24,10 @@ export interface Settings {
 	playoffBestOf: number;
 	playoffReseed: Reseed;
 	teraPreview: boolean;
+	/** Show each Pokémon's item at the battle's team preview, where leads are picked. */
+	itemPreview: boolean;
+	/** Show each Pokémon's ability at the battle's team preview. */
+	abilityPreview: boolean;
 	/** When each player's 6 are chosen; see TEAM_PREVIEW. */
 	teamPreview: TeamPreview;
 	clauses: string[];
@@ -52,6 +56,18 @@ export const RESEED: { [k in Reseed]: { label: string, rule: string } } = {
 	reseed: { label: 'Re-seed', rule: 'After each round, the best seed left plays the worst seed left' },
 	choose: { label: 'Higher seed picks', rule: 'Before each round, the best seed left picks their opponent, then the next best seed left, and so on' },
 };
+
+/** What the battle's team preview shows of each Pokémon, besides its species, in plain words. */
+export function previewShows(settings: Settings) {
+	const shown = [
+		settings.itemPreview && 'items',
+		settings.abilityPreview && 'abilities',
+		settings.teraPreview && genOf(settings.mod) === 9 && settings.teraMode !== 'none' && 'Tera types',
+	].filter(Boolean) as string[];
+	if (!shown.length) return 'Leads are picked seeing only the Pokémon';
+	const list = shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0];
+	return `Leads are picked seeing the Pokémon with their ${list}`;
+}
 
 /** How many sets a player preps for a week. */
 export function teamSize(settings: Settings, rosterSize: number) {
@@ -83,7 +99,7 @@ function preset(format: string, label: string, mod: string, o: {
 		settings: {
 			format, mod, gameType: o.gameType || 'singles', teraMode: o.tera || 'none', maxCaptains: 2, tcBudget: 28,
 			draftType: 'snake', budget: o.budget, rosterMin: o.roster[0], rosterMax: o.roster[1], bestOf: o.bestOf || 1, playoffTeams: 6,
-			playoffBestOf: o.bestOf || 1, playoffReseed: 'fixed', teraPreview: true, teamPreview: 'preselect', clauses: o.clauses || ALL_CLAUSES, trades: true, freeAgency: true,
+			playoffBestOf: o.bestOf || 1, playoffReseed: 'fixed', teraPreview: true, itemPreview: false, abilityPreview: false, teamPreview: 'preselect', clauses: o.clauses || ALL_CLAUSES, trades: true, freeAgency: true,
 			faLimit: 7, tradeDeadline: 0,
 		},
 	};
@@ -746,9 +762,10 @@ export function freeAgents(seasonId: number) {
 		WHERE season_id = ? AND banned = 0 AND species_id NOT IN (SELECT species_id FROM roster WHERE season_id = ?)
 		ORDER BY cost DESC, name`, seasonId, seasonId);
 }
-/** The player's series with a game played that isn't final, if any. */
+/** The player's series that has started (a game played, or both ready at the roster check) and isn't final, if any. */
 export function seriesInProgress(seasonId: number, userId: number) {
-	return one<Match>("SELECT * FROM matches WHERE season_id = ? AND status = 'live' AND (p1 = ? OR p2 = ?) ORDER BY week LIMIT 1", seasonId, userId, userId);
+	return one<Match>(`SELECT * FROM matches WHERE season_id = ? AND (p1 = ? OR p2 = ?) AND (status = 'live' OR (status != 'final'
+		AND (SELECT COUNT(*) FROM series_tera WHERE series_tera.match_id = matches.id) >= 2)) ORDER BY week LIMIT 1`, seasonId, userId, userId);
 }
 
 /** Why roster moves are closed for this player right now, or null. Shared by free agency and trades. */
@@ -1157,7 +1174,77 @@ export function remake(leagueId: number, matchId: number, userId: number, action
 		run('DELETE FROM battles WHERE match_id = ?', matchId);
 		run("UPDATE matches SET p1_wins = 0, p2_wins = 0, winner = NULL, status = 'scheduled', revealed_at = NULL WHERE id = ?", matchId);
 		run("UPDATE remakes SET status = 'accepted', resolved_at = ? WHERE id = ?", t, pending.id);
+		// A remake is for team sheet mistakes, so the Tera reveal starts over too
+		run('DELETE FROM series_tera WHERE match_id = ?', matchId);
 		audit(leagueId, userId, 'remake.accept', `match ${matchId}: ${games.length} game(s) deleted`);
+		return '';
+	});
+}
+
+// ---------- Roster check ----------
+// In Tera Captains leagues where players pick 6 at the battle (teamPreview 'game' or 'match'), a series
+// opens with a ready check on both rosters and the captains' Tera types. Readying up stores the player's
+// Tera types; neither sees the other's until both are ready, and from then on the rosters and Tera types
+// are locked for the series, barring a remake (Showdown rejects a team that differs).
+
+export const TERA_TYPES = [...TYPES, 'Stellar'];
+
+/** Whether this league's series start with the Tera reveal. */
+export function usesTeraReveal(settings: Settings) {
+	return settings.teraMode === 'captains' && (settings.teamPreview === 'game' || settings.teamPreview === 'match');
+}
+
+/** A player's Tera Captains (roster entry ids) this season. */
+function captainIds(seasonId: number, userId: number) {
+	return roster(seasonId, userId).filter(r => r.captain).map(r => r.species_id);
+}
+
+/** What a player revealed for a series; a player without captains has nothing to reveal and counts as done. */
+function revealedTera(match: Match, userId: number): { [id: string]: string } | null {
+	const row = one<{ tera: string }>('SELECT tera FROM series_tera WHERE match_id = ? AND user_id = ?', match.id, userId);
+	if (row) return JSON.parse(row.tera);
+	return captainIds(match.season_id, userId).length ? null : {};
+}
+
+/** The Tera reveal as one player sees it. `theirs` stays null until both have revealed. */
+export function teraReveal(match: Match, me: number) {
+	const opp = match.p1 === me ? match.p2 : match.p1;
+	const mine = revealedTera(match, me), theirs = revealedTera(match, opp);
+	return { mine, theirs: mine && theirs ? theirs : null, oppRevealed: !!theirs };
+}
+
+/** Both players are ready at the roster check, so the series has started. */
+function rostersLocked(matchId: number) {
+	return one<{ n: number }>('SELECT COUNT(*) AS n FROM series_tera WHERE match_id = ?', matchId)!.n >= 2;
+}
+
+/** Takes back a player's ready at the roster check, while the opponent isn't ready yet. Returns an error message or ''. */
+export function unrevealTera(match: Match, userId: number) {
+	return tx(() => {
+		if (match.p1 !== userId && match.p2 !== userId) return 'Not your series.';
+		if (rostersLocked(match.id)) return 'Your rosters are already locked for this series.';
+		run('DELETE FROM series_tera WHERE match_id = ? AND user_id = ?', match.id, userId);
+		return '';
+	});
+}
+
+/** Readies a player up at the roster check, with their captains' Tera types. Returns an error message or ''. */
+export function revealTera(match: Match, userId: number, tera: { [id: string]: unknown }) {
+	return tx(() => {
+		const fresh = one<Match>('SELECT * FROM matches WHERE id = ?', match.id)!;
+		if (fresh.p1 !== userId && fresh.p2 !== userId) return 'Not your series.';
+		if (fresh.status === 'final') return 'This series is already final.';
+		// Once the opponent can see them, they're fixed
+		if (rostersLocked(fresh.id)) return 'Your rosters are already locked for this series.';
+		const captains = captainIds(fresh.season_id, userId);
+		const out: { [id: string]: string } = {};
+		for (const id of captains) {
+			const type = TERA_TYPES.find(t => toID(t) === toID(String(tera?.[id] ?? '')));
+			if (!type) return 'Every Tera Captain needs a Tera type.';
+			out[id] = type;
+		}
+		run(`INSERT INTO series_tera (match_id, user_id, tera, at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (match_id, user_id) DO UPDATE SET tera = excluded.tera, at = excluded.at`, fresh.id, userId, JSON.stringify(out), now());
 		return '';
 	});
 }
@@ -1481,9 +1568,10 @@ export function showdownData() {
 	const leagues = all<League>('SELECT * FROM leagues ORDER BY id');
 	const formats = leagues.map(l => {
 		const s = settingsOf(l);
-		return { leagueId: l.id, name: l.format_name, mod: s.mod, gameType: s.gameType, ruleset: ruleset(s), teraMode: s.teraMode };
+		return { leagueId: l.id, name: l.format_name, mod: s.mod, gameType: s.gameType, ruleset: ruleset(s), teraMode: s.teraMode,
+			itemPreview: !!s.itemPreview, abilityPreview: !!s.abilityPreview };
 	});
-	const rosters: { [formatid: string]: { [userid: string]: { species: string[], captains: string[] } } } = {};
+	const rosters: { [formatid: string]: { [userid: string]: { species: string[], captains: string[], tera?: { [id: string]: string[] } } } } = {};
 	for (const l of leagues) {
 		const season = currentSeason(l.id);
 		if (!season) continue;
@@ -1499,6 +1587,23 @@ export function showdownData() {
 			const ids = entryIds(index, p.species_id, mod);
 			entry.species.push(...ids);
 			if (p.captain && revealed) entry.captains.push(...ids);
+		}
+		// Tera types revealed for a series still being played are the only ones Showdown accepts for those captains.
+		// With two unfinished series at once, either series' type is accepted (each lobby sends its own).
+		if (usesTeraReveal(settingsOf(l))) {
+			for (const r of all<{ tera: string, showdown_id: string }>(`SELECT series_tera.tera, users.showdown_id FROM series_tera
+				JOIN matches ON matches.id = series_tera.match_id JOIN users ON users.id = series_tera.user_id
+				WHERE matches.season_id = ? AND matches.status != 'final' ORDER BY series_tera.at`, season.id)) {
+				const entry = byUser[r.showdown_id];
+				if (!entry) continue;
+				entry.tera ||= {};
+				for (const [id, type] of Object.entries(JSON.parse(r.tera) as { [id: string]: string })) {
+					for (const forme of entryIds(index, id, mod)) {
+						const types = (entry.tera[forme] ||= []);
+						if (!types.includes(type)) types.push(type);
+					}
+				}
+			}
 		}
 		rosters[toID(l.format_name)] = byUser;
 	}

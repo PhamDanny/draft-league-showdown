@@ -7,7 +7,7 @@
 
 	let dexPromise = null;
 	function loadDex(leagueId) {
-		dexPromise ||= fetch(`/l/${leagueId}/builder/dex.json`).then(r => r.json()).then(D => {
+		dexPromise ||= fetch(`/l/${leagueId}/builder/dex.json?sprites=${window.PREFS?.sprites || ''}`).then(r => r.json()).then(D => {
 			D.itemIds = new Map(D.items.map(n => [toID(n), n]));
 			D.natureMap = new Map(D.natures.map(n => [toID(n.name), n]));
 			D.speciesByName = new Map(Object.entries(D.species).map(([id, s]) => [toID(s.name), id]));

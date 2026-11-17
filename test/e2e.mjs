@@ -256,9 +256,11 @@ await bob.req('GET', '/join/' + /\/join\/([\w-]+)/.exec(await (await alice.req('
 await alice.req('POST', league2 + '/admin/settings', {
 	name: 'Preview League', teraMode: 'all', maxCaptains: '0', tcBudget: '28', draftType: 'snake',
 	budget: '200', rosterMin: '8', rosterMax: '8', bestOf: '3', playoffTeams: '2', teamPreview: 'match', clauses: 'Species Clause',
+	itemPreview: '1', abilityPreview: '1',
 });
 assert((await (await alice.req('GET', league2 + '/admin/settings')).text()).includes('<option value="match" selected>'), 'team preview setting saved');
 assert((await (await alice.req('GET', league2 + '/rules')).text()).includes('Each match'), 'rules page shows team preview');
+assert((await (await alice.req('GET', league2 + '/rules')).text()).includes('seeing the Pokémon with their items and abilities'), 'rules page shows what team preview reveals');
 await alice.req('POST', league2 + '/admin/start-draft', { order: 'listed' });
 const plans2 = {
 	Alice: [...plans.Alice, 'dragonite', 'kingambit'], // Dragapult is banned in SV
@@ -400,6 +402,7 @@ for (const p of order) {
 await alice.req('POST', league4 + '/admin/schedule', {});
 const series4 = /\/series\/(\d+)/.exec(await (await alice.req('GET', league4 + '/schedule')).text())[1];
 assert((await (await alice.req('GET', league4 + '/builder')).text()).includes('"gameType":"doubles","level":50'), 'VGC teambuilder plays doubles at level 50');
+assert((await (await alice.req('GET', league4 + '/builder')).text()).includes('"smogonDex":{"gen":"sv","meta":"vgc"}'), 'VGC teambuilder links to the VGC Smogon dex');
 await waitForShowdown();
 const A5 = await connect(alice);
 const B5 = await connect(bob);

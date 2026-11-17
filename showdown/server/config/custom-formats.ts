@@ -4,7 +4,9 @@
  *
  * Each format:
  * - only accepts Pokémon on the player's current roster in that league
- * - in Tera Captains mode, removes the Terastallize option from non-captains in battle
+ * - in Tera Captains mode, removes the Terastallize option from non-captains in battle,
+ *   and holds captains to the Tera types revealed for the series on the league site
+ * - can show items and abilities at team preview, next to Showdown's own Tera Type Preview
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -17,8 +19,10 @@ interface LeagueFormat {
 	ruleset: string[];
 	banlist?: string[];
 	teraMode: 'captains' | 'all' | 'none';
+	itemPreview?: boolean;
+	abilityPreview?: boolean;
 }
-interface RosterEntry { species: string[]; captains: string[] }
+interface RosterEntry { species: string[]; captains: string[]; tera?: { [speciesid: string]: string[] } }
 interface ShowdownData {
 	formats: LeagueFormat[];
 	rosters: { [formatid: string]: { [userid: string]: RosterEntry } };
@@ -38,6 +42,10 @@ function load(): ShowdownData {
 	} catch {
 		return { formats: [], rosters: {} };
 	}
+}
+
+function escapeHTML(str: string) {
+	return ('' + str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function id(str: string) {
@@ -106,10 +114,19 @@ const leagueFormats = load().formats.map(league => {
 				if (!onRoster(species, roster.species)) {
 					problems.push(`${species.name} isn't on your roster.`);
 				}
+				const declared = roster.tera && (roster.tera[species.id] ||
+					(typeof species.battleOnly === 'string' ? roster.tera[id(species.battleOnly)] : undefined));
+				if (declared && !declared.some(t => id(t) === id(set.teraType || ''))) {
+					problems.push(`${species.name}'s Tera type has to be ${declared.join(' or ')}, as revealed for this series.`);
+				}
 			}
 			return problems.length ? problems : null;
 		},
 		onBegin(this: Battle) {
+			if (this.ruleTable.has('teampreview')) {
+				const shown = [league.itemPreview && 'Items', league.abilityPreview && 'Abilities'].filter(Boolean);
+				if (shown.length) this.add('rule', `${shown.join(' and ')} Preview: ${shown.join(' and ')} are shown at Team Preview`);
+			}
 			if (league.teraMode !== 'captains') return;
 			for (const side of this.sides) {
 				const roster = rosterFor(formatid, side.name);
@@ -121,6 +138,26 @@ const leagueFormats = load().formats.map(league => {
 				}
 			}
 			this.add('rule', 'Tera Captains: Only Tera Captains can Terastallize');
+		},
+		// Runs just before the Team Preview rule's own handler, which shows the teams and asks for leads
+		onTeamPreview(this: Battle) {
+			if (!this.ruleTable.has('teampreview') || !(league.itemPreview || league.abilityPreview)) return;
+			for (const side of this.sides) {
+				const rows = side.pokemon.map(pokemon => {
+					const parts: string[] = [];
+					if (league.itemPreview) {
+						const item = this.dex.items.get(pokemon.set.item);
+						parts.push(item.exists ? `<psicon item="${item.id}" /> ${escapeHTML(item.name)}` : 'No item');
+					}
+					if (league.abilityPreview) {
+						const ability = this.dex.abilities.get(pokemon.set.ability);
+						parts.push(escapeHTML(ability.exists ? ability.name : pokemon.set.ability || 'No ability'));
+					}
+					return `<psicon pokemon="${pokemon.species.id}" /> ${parts.join(' &middot; ')}`;
+				});
+				const what = [league.itemPreview && 'Items', league.abilityPreview && 'Abilities'].filter(Boolean).join(' and ');
+				this.add(`raw|<div class="infobox"><strong>${escapeHTML(side.name)}'s ${what.toLowerCase()}:</strong><br />${rows.join('<br />')}</div>`);
+			}
 		},
 	};
 	// The site's ruleset already has Terastal Clause where Tera is off

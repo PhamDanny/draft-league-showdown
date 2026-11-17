@@ -3,6 +3,7 @@
 import { PUBLIC_URL } from './config.ts';
 import { all } from './db.ts';
 import { mon } from './dex.ts';
+import { spritePath } from './prefs.ts';
 import * as L from './league.ts';
 import { emojiMap, emojiName } from './emoji.ts';
 
@@ -49,7 +50,7 @@ export function embedChars(embeds: Embed[]) {
 
 /** Showdown's CDN, not the site's /sprites/ route: PUBLIC_URL may be localhost. */
 export function spriteUrl(speciesId: string, mod: string) {
-	return `https://play.pokemonshowdown.com${mon(speciesId, mod).sprite}`;
+	return `https://play.pokemonshowdown.com${spritePath(mon(speciesId, mod).spriteId, mod)}`;
 }
 
 // ---------- players ----------
@@ -421,7 +422,7 @@ export function rulesEmbed(league: L.League, settings: L.Settings): Embed {
 	const fields = [
 		{ name: 'Format', value: `${f.label}: ${f.game}` },
 		{ name: 'Draft', value: `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon` },
-		{ name: 'Series', value: `Best of ${settings.bestOf}. ${L.TEAM_PREVIEW[settings.teamPreview].rule}.` },
+		{ name: 'Series', value: `Best of ${settings.bestOf}. ${L.TEAM_PREVIEW[settings.teamPreview].rule}. ${L.previewShows(settings)}.` },
 	];
 	if (L.genOf(settings.mod) === 9) {
 		fields.push({ name: 'Tera', value: settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, chosen after the draft from a separate ${settings.tcBudget}-point Tera budget` :

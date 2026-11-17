@@ -14,6 +14,13 @@
 	const teraAllowed = id => B.teraMode === 'all' || isCaptain(id);
 	const allowed = new Set(B.roster.flatMap(r => r.formes));
 	const EV_MAX = 508;
+	// Imported sets keep a Tera type only where this league allows one, and get a default where it does
+	const fixTera = s => { if (!teraAllowed(s.species)) delete s.teraType; else s.teraType ||= D.species[s.species].types[0]; };
+	// Smogon's dex page for a Pokémon, on the metagame closest to this league's format
+	const dexSlug = name => name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+		.replace(/[^a-z0-9 -]/g, '').trim().replace(/[\s-]+/g, '-');
+	const dexLink = sp => B.smogonDex ? `<a class="btn sm" target="_blank" rel="noopener" title="${esc(sp.name)} on Smogon's Pokédex"
+		href="https://www.smogon.com/dex/${B.smogonDex.gen}/pokemon/${dexSlug(sp.name)}/${B.smogonDex.meta ? B.smogonDex.meta + '/' : ''}">Smogon analysis</a>` : '';
 	// Pre-select leagues build the 6 they bring; the others prep a set for every roster Pokémon and pick 6 per game or series
 	const SIZE = B.teamSize || 6;
 	const POPULAR = ['Leftovers', 'Heavy-Duty Boots', 'Choice Scarf', 'Choice Band', 'Choice Specs', 'Life Orb', 'Booster Energy', 'Assault Vest',
@@ -82,7 +89,11 @@
 		const result = ro ? (week.score[0] > week.score[1] ? 'Won' : week.score[0] < week.score[1] ? 'Lost' : 'Tied') : '';
 		const notes = ro ? (data.notes ? `<section class="panel"><h3>Notes</h3><p class="tb-notes-ro">${esc(data.notes)}</p></section>` : '') :
 			`<section class="panel"><h3>Notes</h3><textarea id="tb-notes" class="inp" rows="4" aria-label="Notes">${esc(data.notes || '')}</textarea></section>`;
-		const right = ro ? notes : `<section class="panel" id="tb-calc"></section>${week ? '<section class="panel" id="tb-speed"></section>' : ''}${notes}`;
+		const tools = !week ? '<section class="panel" id="tb-calc"></section>' : `<section class="panel tb-tools">
+			<div class="seg tb-tabs" role="tablist" aria-label="Tools">${[['calc', 'Damage calc'], ['speed', 'Speed tiers']].map(([k, l]) =>
+				`<button type="button" role="tab" data-tool="${k}" class="${tool === k ? 'on' : ''}" aria-selected="${tool === k}">${l}</button>`).join('')}</div>
+			<div id="tb-calc" role="tabpanel" ${tool === 'calc' ? '' : 'hidden'}></div><div id="tb-speed" role="tabpanel" ${tool === 'speed' ? '' : 'hidden'}></div></section>`;
+		const right = ro ? notes : `${tools}${notes}`;
 		// One fixed layout for the buttons under the team (see the UI cleanup spec, 6.2)
 		const acts = ro ? `
 			<button class="btn" type="button" data-act="export">Export</button>
@@ -215,9 +226,12 @@
 		};
 		el.innerHTML = `
 			<div class="sd-card">
-				${ro ? (set.nickname ? `<div class="sd-head"><span class="sd-nick">Nickname ${roText(set.nickname)}</span></div>` : '') : `<div class="sd-head">
+				${ro ? `<div class="sd-head">${set.nickname ? `<span class="sd-nick">Nickname ${roText(set.nickname)}</span>` : ''}<span class="spacer"></span>${dexLink(sp)}<button class="btn sm" type="button" data-act="export-one">Export</button></div>` : `<div class="sd-head">
 					<label class="sd-nick"><span>Nickname</span><input class="inp" data-f="nickname" value="${esc(set.nickname || '')}" placeholder="${esc(sp.name)}" maxlength="18"></label>
 					<span class="spacer"></span>
+					${dexLink(sp)}
+					<button class="btn sm" type="button" data-act="import-one">Import</button>
+					<button class="btn sm" type="button" data-act="export-one">Export</button>
 					<button class="btn sm" type="button" data-act="remove">Delete</button>
 				</div>`}
 				<div class="sd-grid">
@@ -524,6 +538,17 @@
 		return lab === '0' ? '' : lab; // uninvested goes untagged, as on their side
 	}
 
+	let tool = 'calc';
+	try { if (localStorage.getItem('dls-tool') === 'speed') tool = 'speed'; } catch {}
+	function setTool(k) {
+		tool = k;
+		try { localStorage.setItem('dls-tool', k); } catch {}
+		for (const b of root.querySelectorAll('[data-tool]')) { b.classList.toggle('on', b.dataset.tool === k); b.setAttribute('aria-selected', b.dataset.tool === k); }
+		document.getElementById('tb-calc').hidden = k !== 'calc';
+		document.getElementById('tb-speed').hidden = k !== 'speed';
+		if (k === 'speed') restoreSpeedScroll();
+	}
+
 	function renderSpeed() {
 		const el = document.getElementById('tb-speed');
 		if (!el || !week) return;
@@ -579,8 +604,8 @@
 		const sprite = (id, tip) => `<img class="spr xs" src="${esc(D.species[id]?.sprite || '')}" alt="${esc(nameOf(id))}" title="${esc(tip)}" loading="lazy">`;
 		const whose = side => (side === 'me' ? 'Yours' : week.oppName);
 		const opts = [...Object.entries(SPEED_OPP).map(([k, o]) => [k, o.name || o.label]), ...Object.entries(SPEED_EXTRA).map(([k, o]) => [k, o.name])];
-		el.innerHTML = `<details class="fold" ${C?.speedOpen === false ? '' : 'open'} data-fold="speedOpen"><summary><h3>Speed tiers · vs ${esc(week.oppName)}</h3></summary>
-			<div class="spt-bar"><span class="spt-key me">Yours</span><span class="spt-key opp">${esc(week.oppName)}</span><span class="spacer"></span>
+		const filterOpen = !!el.querySelector('.spt-filter')?.open;
+		el.innerHTML = `<div class="spt-bar"><span class="spt-key me">Yours</span><span class="spt-key opp">${esc(week.oppName)}</span><span class="spacer"></span>
 				<details class="spt-filter"><summary class="btn sm" title="Choose which of their speeds to show" aria-label="Filter speed tiers"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M4 8h8M6.5 12h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></summary>
 				<div class="spt-menu"><p class="eyebrow">Their speeds</p>${opts.map(([k, n]) => `<label><input type="checkbox" data-act="speed-show" data-k="${k}" ${speedShow[k] ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div></details></div>
 			${ents.length ? `<div class="spt">
@@ -590,7 +615,15 @@
 					const hi = g.ents[0].spe, lo = g.ents[g.ents.length - 1].spe;
 					return `<div class="spt-tier ${g.side}"><span class="spt-mons">${g.ents.map(e => sprite(e.id, `${whose(g.side)}: ${nameOf(e.id)} · ${e.spe}`)).join('')}</span>${g.tags.map(t => `<span class="spt-tag">${esc(t)}</span>`).join('')}<span class="spacer"></span><span class="num">${hi === lo ? hi : `<span>${hi}</span><i></i><span>${lo}</span>`}</span></div>`;
 				}).join('')}</div>
-			</div>` : '<p class="muted">Add Pokémon to compare.</p>'}</details>`;
+			</div>` : '<p class="muted">Add Pokémon to compare.</p>'}`;
+		if (filterOpen) el.querySelector('.spt-filter').open = true;
+		restoreSpeedScroll();
+	}
+	// Remembered from scroll events, since a hidden tab reads as scrolled to the top
+	let speedScroll = 0;
+	function restoreSpeedScroll() {
+		const list = document.querySelector('#tb-speed .spt');
+		if (list) list.scrollTop = speedScroll;
 	}
 
 	// ---------- damage calc ----------
@@ -729,14 +762,15 @@
 		return FIELD_FLAGS.filter(k => C[k]).length + (C.spikes ? 1 : 0) + (C.weather ? 1 : 0) + (C.terrain ? 1 : 0) + (C.myDefBoost ? 1 : 0) + (C.oppDefBoost ? 1 : 0);
 	}
 	const osetSummary = o => [o.nature, o.item, STATS.filter(k => o.evs[k]).map(k => `${o.evs[k]} ${LABEL[k]}`).join(' / ')].filter(Boolean).join(' · ');
+	const calcHead = () => (week ? '' : '<h3>Damage calc</h3>');
 	function renderCalc() {
 		const el = document.getElementById('tb-calc');
 		if (!el) return;
 		const mine = team()[slot];
-		if (!G) { el.innerHTML = '<h3>Damage calc</h3><p class="muted cempty">The damage calculator didn\'t load.</p>'; return; }
-		if (!mine) { el.innerHTML = '<h3>Damage calc</h3><p class="muted cempty">Pick a Pokémon to run calcs.</p>'; return; }
+		if (!G) { el.innerHTML = calcHead() + '<p class="muted cempty">The damage calculator didn\'t load.</p>'; return; }
+		if (!mine) { el.innerHTML = calcHead() + '<p class="muted cempty">Pick a Pokémon to run calcs.</p>'; return; }
 		if (!C) initCalc();
-		if (!C.opp) { el.innerHTML = '<h3>Damage calc</h3><p class="muted cempty">No opposing Pokémon to calc against yet.</p>'; return; }
+		if (!C.opp) { el.innerHTML = calcHead() + '<p class="muted cempty">No opposing Pokémon to calc against yet.</p>'; return; }
 		const o = C.oset;
 		const osp = D.species[C.opp];
 		const myName = mine.nickname || nameOf(mine.species);
@@ -751,7 +785,7 @@
 		const myTeraOk = teraAllowed(mine.species) && mine.teraType;
 		const nField = fieldCount();
 		el.innerHTML = `
-			<h3>Damage calc</h3>
+			${calcHead()}
 			<div class="cvs">
 				<span class="cvs-mon">${img(mine.species)}<b title="${esc(myName)}">${esc(myName)}</b></span>
 				<span class="cvs-x" aria-hidden="true">vs</span>
@@ -913,6 +947,8 @@
 
 	root.addEventListener('click', e => {
 		if (e.target.dataset?.pick) { setPick(e.target.dataset.pick); return; }
+		const toolBtn = e.target.closest('[data-tool]');
+		if (toolBtn) { setTool(toolBtn.dataset.tool); return; }
 		const sort = e.target.closest('[data-sort]');
 		if (sort) {
 			const key = sort.dataset.sort;
@@ -963,8 +999,22 @@
 			const dlg = dialog(`<h2>Import</h2><textarea class="inp" rows="18" placeholder="Paste a Showdown team"></textarea><p class="muted" id="imp-msg"></p>
 				<div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="button" data-do-import>Import</button></div>`);
 			dlg.querySelector('textarea').focus();
+		} else if (d.act === 'export-one') {
+			const set = team()[slot];
+			if (!set) return;
+			const dlg = dialog(`<h2>Export ${esc(D.species[set.species].name)}</h2><textarea class="inp" rows="12" readonly>${esc(Sets.exportSet(D, set))}</textarea>
+				<div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>Close</button></div>`);
+			dlg.querySelector('textarea').select();
+		} else if (d.act === 'import-one') {
+			if (readOnly() || !team()[slot]) return;
+			const dlg = dialog(`<h2>Import a Pokémon</h2><p class="muted" style="margin:0">Replaces ${esc(D.species[team()[slot].species].name)} in this slot.</p>
+				<textarea class="inp" rows="12" placeholder="Paste one Showdown set"></textarea><p class="muted" id="imp-msg"></p>
+				<div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="button" data-do-import-one>Import</button></div>`);
+			dlg.querySelector('textarea').focus();
 		}
 	});
+
+	root.addEventListener('scroll', e => { if (e.target.classList?.contains('spt')) speedScroll = e.target.scrollTop; }, true);
 
 	root.addEventListener('toggle', e => {
 		const k = e.target.dataset?.fold;
@@ -984,13 +1034,24 @@
 				const r = rosterEntry(s.species).id;
 				if (seen.has(r)) return false;
 				seen.add(r);
-				if (!teraAllowed(s.species)) delete s.teraType;
-				else s.teraType ||= D.species[s.species].types[0];
+				fixTera(s);
 				return true;
 			}).slice(0, SIZE);
 			if (!imported.length) { dlg.querySelector('#imp-msg').textContent = skipped.length ? `Not on your roster: ${skipped.join(', ')}` : 'Nothing to import.'; return; }
 			while (imported.length < SIZE) imported.push(null);
 			data.team = imported; slot = 0; save(); dlg.close(); render();
+		}
+		if (e.target.closest('[data-do-import-one]')) {
+			// One set into the current slot: the first set in the text, which must be on the roster and not already elsewhere on the team
+			const msg = t => { dlg.querySelector('#imp-msg').textContent = t; };
+			const { sets, skipped } = Sets.importTeam(D, dlg.querySelector('textarea').value, allowed);
+			const s = sets[0];
+			if (!s) return msg(skipped.length ? `Not on your roster: ${skipped[0]}` : 'Nothing to import.');
+			const r = rosterEntry(s.species).id;
+			const other = team().findIndex((x, i) => x && i !== slot && rosterEntry(x.species)?.id === r);
+			if (other >= 0) return msg(`${D.species[team()[other].species].name} is already on this team.`);
+			fixTera(s);
+			data.team[slot] = s; save(); dlg.close(); render();
 		}
 	});
 
@@ -1001,7 +1062,6 @@
 			speedShow[d.k] = t.checked;
 			try { localStorage.setItem('dls-speed-show', JSON.stringify(speedShow)); } catch {}
 			renderSpeed();
-			root.querySelector('#tb-speed .spt-filter')?.setAttribute('open', '');
 			return;
 		}
 		if (d.act === 'week') { goWeek(B.weeks.find(w => w.week === Number(t.value))); return; }

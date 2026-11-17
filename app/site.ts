@@ -8,6 +8,7 @@ import { attachUser, authRoutes, requireUser } from './auth.ts';
 import { attachShowdownProxy, showdownRoutes } from './showdown.ts';
 import { pageRoutes } from './pages.ts';
 import { discordRoutes } from './discord.ts';
+import { prefsContext } from './prefs.ts';
 
 export function createSite() {
 	keys.internal; // fail fast if setup hasn't run
@@ -27,6 +28,7 @@ export function createSite() {
 	app.get('/static/calc/calc.js', (_req, res) => res.sendFile(path.join(CALC, 'production.min.js'), { maxAge: '1d' }));
 	app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 	app.use(attachUser);
+	app.use(prefsContext);
 	authRoutes(app);
 	showdownRoutes(app, requireUser);
 	pageRoutes(app);

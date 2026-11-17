@@ -34,6 +34,13 @@ html,body{margin:0;background:transparent;overflow:hidden}
 <script src="/js/battle.js"></script>
 <script>
 window.exports = window;
+// The player's settings from the site page around this frame: Showdown's pixel sprites when they want old sprites, and their volumes
+try {
+	const P = parent.PREFS || {};
+	window.PS = { prefs: { bwgfx: P.sprites === 'old' } };
+	if (P.music != null) BattleSound.setBgmVolume(P.music);
+	if (P.sfx != null) BattleSound.setEffectVolume(P.sfx);
+} catch {}
 window.scene = {
 	battle: null,
 	load(log) {

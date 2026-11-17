@@ -8,7 +8,8 @@ import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
 import { builderRoutes, gameOf } from './builder.ts';
 import * as discord from './discord.ts';
-import { esc, monChip, monLabel, page, setList, sprite } from './views/layout.ts';
+import { esc, monChip, monLabel, page, setList, sprite, spriteSrc } from './views/layout.ts';
+import { prefsOf, savePrefs, type Prefs } from './prefs.ts';
 
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
 
@@ -278,6 +279,22 @@ function commissioner(req: Request, res: Response, next: NextFunction) {
 
 // ---------- pages ----------
 
+/** Display and sound settings on the account page; see prefs.ts. */
+function settingsPanel(p: Prefs) {
+	const opt = (v: string, label: string, cur: string) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
+	const vol = (name: string, label: string, v: number) => `<label class="f"><span class="row">${label}<span class="spacer"></span><span class="num set-vol" data-vol="${name}">${v}%</span></span>
+		<input class="set-range" type="range" name="${name}" min="0" max="100" step="5" value="${v}" oninput="this.form.querySelector('[data-vol=${name}]').textContent=this.value+'%'"></label>`;
+	return `<h2>Settings</h2><section class="panel" style="max-width:480px">
+		<form method="post" action="/account/settings" class="stack" style="gap:10px">
+			<label class="f">Theme<select class="inp" name="theme">${opt('system', 'Match my device', p.theme)}${opt('light', 'Light', p.theme)}${opt('dark', 'Dark', p.theme)}</select></label>
+			<label class="f">Pokémon sprites<select class="inp" name="sprites">${opt('format', "Match the league's generation", p.sprites)}${opt('old', 'Always pixel sprites (classic)', p.sprites)}${opt('new', 'Always 3D models', p.sprites)}</select></label>
+			<p class="muted set-hint">By default, leagues up to Gen 5 show that generation's pixel sprites and newer ones show 3D models. This also applies in battles and replays.</p>
+			${vol('music', 'Battle music', p.music)}
+			${vol('sfx', 'Sound effects', p.sfx)}
+			<button class="btn primary" type="submit">Save settings</button>
+		</form></section>`;
+}
+
 export function pageRoutes(app: Express) {
 	const form = express.urlencoded({ extended: false });
 
@@ -349,8 +366,13 @@ export function pageRoutes(app: Express) {
 				<form method="post" action="/account" class="stack" style="gap:10px">
 					<label class="f">Showdown name<input name="showdown_name" value="${esc(u.showdown_name)}" maxlength="18" required></label>
 					<button class="btn primary" type="submit">Save</button>
-				</form></section>`,
+				</form></section>
+				${settingsPanel(prefsOf(u))}`,
 		});
+	});
+	app.post('/account/settings', requireUser, form, (req, res) => {
+		savePrefs(req.user!.id, req.body);
+		res.redirect('/account?msg=' + encodeURIComponent('Settings saved.'));
 	});
 	app.post('/account', requireUser, form, (req, res) => {
 		const err = setShowdownName(req.user!.id, String(req.body.showdown_name || ''));
@@ -793,7 +815,7 @@ export function pageRoutes(app: Express) {
 			series: { p1: n.get(m.p1), p2: n.get(m.p2), score: [m.p1_wins, m.p2_wins] },
 			players: { p1: n.get(b.p1), p2: n.get(b.p2) }, winner: n.get(b.winner) || null, turns: b.turns,
 			games, fullLog: b.full_log || '', publicLog: b.public_log || '', teams,
-			sprites: Object.fromEntries(['p1', 'p2'].flatMap(side => (teams?.[side]?.team || []).map((set: any) => [toID(set.species), mon(toID(set.species)).sprite]))),
+			sprites: Object.fromEntries(['p1', 'p2'].flatMap(side => (teams?.[side]?.team || []).map((set: any) => [toID(set.species), spriteSrc(toID(set.species))]))),
 			itemSprites: itemSprites(settings.mod),
 			exports: Object.fromEntries(['p1', 'p2'].map(side => [side, (teams?.[side]?.team || []).map((set: any) => exportSet(set))])),
 		};
@@ -1040,12 +1062,11 @@ export function pageRoutes(app: Express) {
 			['Series', `Best of ${settings.bestOf}`],
 			['Playoffs', settings.playoffTeams >= 2 ? `Top ${settings.playoffTeams}, best of ${settings.playoffBestOf}. ${L.RESEED[settings.playoffReseed].label}: ${L.RESEED[settings.playoffReseed].rule.toLowerCase()}` : 'None'],
 			['Standings', 'Series wins, then head-to-head among the tied players, game win %, game differential, strength of victory (the combined series win % of the players you beat), then a coin flip when the playoffs start'],
-			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}`],
+			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}. ${L.previewShows(settings)}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
 			...(hasTera ? [
 				['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, chosen after the draft from a separate ${settings.tcBudget}-point Tera budget` :
 					settings.teraMode === 'all' ? 'Everyone can Terastallize' : 'No Terastallization'],
-				...(settings.teraMode !== 'none' ? [['Tera preview', settings.teraPreview ? 'On' : 'Off']] : []),
 			] as [string, string][] : []),
 			['Clauses', settings.clauses.join(', ') || 'None'],
 			...Object.entries(f.banned).filter(([, list]) => list.length).map(([kind, list]) => [`Banned ${kind}`, list.join(', ')] as [string, string]),
@@ -1218,7 +1239,6 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					${num('maxCaptains', 'Max captains', 0, 6)}
 					${num('tcBudget', 'Tera budget', 0, 200)}
 				</div>
-				<div class="row">${check('teraPreview', 'Tera preview')}</div>
 				</div>
 				<h3>Series</h3>
 				<div class="form">
@@ -1226,6 +1246,8 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					<label class="f">Team preview${sel('teamPreview', settings.teamPreview, Object.entries(L.TEAM_PREVIEW).map(([v, o]) => [v, o.label] as [string, string]))}</label>
 				</div>
 				<p class="muted field-help" id="tp-help">${esc(L.TEAM_PREVIEW[settings.teamPreview].rule)}.</p>
+				<div class="row">${check('itemPreview', 'Show items')}${check('abilityPreview', 'Show abilities')}<span ${hasTera ? '' : 'hidden'}>${check('teraPreview', 'Show Tera types')}</span></div>
+				<p class="muted field-help">What each player sees of the other's 6 at the battle's team preview, where leads are picked.</p>
 				<h3>Playoffs</h3>
 				<div class="form">
 					${num('playoffTeams', 'Playoff teams', 0, 12, playoffsOn)}
@@ -1332,6 +1354,8 @@ document.querySelector('[name=playoffReseed]').addEventListener('change', e => {
 			playoffBestOf: season.final_order ? settings.playoffBestOf : [1, 3, 5].includes(Number(b.playoffBestOf)) ? Number(b.playoffBestOf) : settings.playoffBestOf,
 			playoffReseed: season.final_order || !Object.hasOwn(L.RESEED, String(b.playoffReseed)) ? settings.playoffReseed : b.playoffReseed,
 			teraPreview: b.teraPreview === '1',
+			itemPreview: b.itemPreview === '1',
+			abilityPreview: b.abilityPreview === '1',
 			teamPreview: Object.hasOwn(L.TEAM_PREVIEW, String(b.teamPreview)) ? b.teamPreview : settings.teamPreview,
 			trades: b.trades === '1',
 			freeAgency: b.freeAgency === '1',

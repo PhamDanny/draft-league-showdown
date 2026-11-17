@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS remakes (
 	requested_at INTEGER NOT NULL,
 	resolved_at INTEGER
 );
+-- Tera types a player revealed for their captains before picking their 6 for a series (JSON {rosterSpeciesId: type}).
+-- Shown to the opponent once both have revealed; fixed for the series from then on.
+CREATE TABLE IF NOT EXISTS series_tera (
+	match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+	user_id INTEGER NOT NULL REFERENCES users(id),
+	tera TEXT NOT NULL,
+	at INTEGER NOT NULL,
+	PRIMARY KEY (match_id, user_id)
+);
 -- Battles wiped by a remake; a late end report for one of these is dropped
 CREATE TABLE IF NOT EXISTS discarded_rooms (
 	roomid TEXT PRIMARY KEY,
@@ -228,6 +237,8 @@ addColumn('league_members', 'discord_pings', 'INTEGER NOT NULL DEFAULT 1');
 addColumn('seasons', 'final_order', 'TEXT');
 // A playoff series' position within its round; NULL in the regular season
 addColumn('matches', 'bracket_slot', 'INTEGER');
+// JSON display and sound settings (see prefs.ts); NULL until the player saves them
+addColumn('users', 'prefs', 'TEXT');
 /** Seasons scheduled before the roster table get their picks as their rosters. */
 export function migrateRosters() {
 	db.exec(`INSERT INTO roster (season_id, species_id, user_id, cost, captain, tc_cost, via, acquired_at)

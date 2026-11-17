@@ -38,7 +38,9 @@ export interface MonInfo {
 	id: string;
 	name: string;
 	types: string[];
+	/** Gen 5 sprite; pages pick the generation and style with spritePath (prefs.ts). */
 	sprite: string;
+	spriteId: string;
 	icon: string;
 	bst: number;
 	spe: number;
@@ -54,6 +56,7 @@ export function mon(idOrName: string, mod = 'gen9'): MonInfo {
 			name: s.name || idOrName,
 			types: s.types || [],
 			sprite: `/sprites/gen5/${s.spriteid || key}.png`,
+			spriteId: s.spriteid || key,
 			icon: `/sprites/home-centered/${s.spriteid || key}.png`,
 			bst: s.bst || 0,
 			spe: s.baseStats?.spe || 0,

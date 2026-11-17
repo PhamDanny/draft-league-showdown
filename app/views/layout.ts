@@ -1,14 +1,19 @@
 import type { User } from '../auth.ts';
 import type { League } from '../league.ts';
 import { dex, mon } from '../dex.ts';
+import { prefsOf, spriteContext, spritePath } from '../prefs.ts';
 
 export function esc(value: unknown): string {
 	return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
+/** A Pokémon's sprite in the style for this page: the viewer's setting, else the league's generation. */
+export function spriteSrc(speciesId: string) {
+	const { mod, style } = spriteContext();
+	return spritePath(mon(speciesId, mod).spriteId, mod, style);
+}
 export function sprite(speciesId: string, cls = '') {
-	const m = mon(speciesId);
-	return `<img class="spr ${cls}" src="${esc(m.sprite)}" alt="" loading="lazy">`;
+	return `<img class="spr ${cls}" src="${esc(spriteSrc(speciesId))}" alt="" loading="lazy">`;
 }
 /** An item's icon from Showdown's item sheet (24px cells, 16 per row); empty when there's no item. */
 export function itemIcon(name: string | undefined, mod = 'gen9') {
@@ -85,6 +90,7 @@ function leagueSwitcher(o: PageOpts) {
 
 export function page(o: PageOpts) {
 	const u = o.user;
+	const prefs = prefsOf(u);
 	const top = u ? `
 <header class="top"><div class="wrap ${o.wide ? 'wide' : ''}">
 	<div class="bar">
@@ -94,7 +100,7 @@ export function page(o: PageOpts) {
 		${o.play ? `<a class="btn primary" href="${esc(o.play.href)}" aria-label="${esc(o.play.label)}"><span class="hide-sm">${esc(o.play.label)}</span><span class="show-sm">Play</span></a>` : ''}
 		<div class="menu"><details><summary class="avatar" title="${esc(u.showdown_name)}">${u.avatar ? `<img src="${esc(u.avatar)}" alt="">` : esc(u.showdown_name.slice(0, 1).toUpperCase())}</summary>
 			<div class="drop">
-				<a href="/account">Account</a>
+				<a href="/account">Account &amp; settings</a>
 				${u.is_admin ? '<a href="/leagues/new">New league</a>' : ''}
 				<form method="post" action="/signout"><button type="submit">Sign out</button></form>
 			</div></details></div>
@@ -103,7 +109,7 @@ export function page(o: PageOpts) {
 		.map(([t, label]) => `<a href="/l/${o.league!.id}${t ? '/' + t : ''}" class="${(o.tab ?? '') === t ? 'on' : ''}" ${(o.tab ?? '') === t ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : ''}
 </div></header>` : '';
 	return `<!doctype html>
-<html lang="en"><head>
+<html lang="en"${prefs.theme === 'system' ? '' : ` data-theme="${prefs.theme}"`}><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
@@ -119,6 +125,7 @@ ${o.body}
 </main>
 ${o.league && u ? TABS_SCRIPT : ''}
 ${o.body.includes('data-sets-toggle') || o.scripts?.includes('replay.js') ? SETS_SCRIPT : ''}
+<script>window.PREFS=${JSON.stringify(prefs)};${SPRITE_FALLBACK}</script>
 ${o.scripts || ''}
 </body></html>`;
 }
@@ -145,6 +152,15 @@ export function setList(sets: { set: any, text: string }[], empty = '', title = 
 			<div class="set">${esc(text)}</div></details>`).join('')}
 	</div>`;
 }
+
+// A sprite folder without that Pokémon (an older generation's set lacks later formes) falls back to Gen 5's, which has everything.
+// Covers sprites rendered later by page scripts too.
+const SPRITE_FALLBACK = `document.addEventListener('error', e => {
+	const t = e.target;
+	if (t.tagName !== 'IMG' || !t.classList.contains('spr')) return;
+	const m = /^(.*\/sprites\/)(?!gen5\/)[a-z0-9-]+\/([^/]+)$/.exec(t.src);
+	if (m) t.src = m[1] + 'gen5/' + m[2];
+}, true);`;
 
 // Expand all / Collapse all for every set list on the page (including ones rendered or replaced later).
 const SETS_SCRIPT = `<script>

@@ -552,7 +552,7 @@ test('/draft off-turn, for a drafted Pokémon and for an unaffordable one return
 	const step = await press(alice, near.custom_id);
 	assert.equal(step.type, 7);
 	assert.match(step.data.embeds[0].title, /^Draft Garchomp for \d+\?$/);
-	assert.match(step.data.embeds[0].image.url, /^https:\/\/play\.pokemonshowdown\.com\/sprites\/gen5\/garchomp\.png$/);
+	assert.match(step.data.embeds[0].image.url, /^https:\/\/play\.pokemonshowdown\.com\/sprites\/home\/garchomp\.png$/);
 	assert.equal(pickCount(), before.picks);
 });
 

@@ -319,6 +319,39 @@ test('dropping a Tera Captain frees its Tera points; a pickup is never a captain
 	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon2'], true), null, 'a commissioner can make the pickup a captain');
 });
 
+test('roster check: Tera types hidden until both are ready, locked after, enforced by Showdown, and reset by a remake', () => {
+	const s = season(['A', 'B'], { teraMode: 'captains', maxCaptains: 1, tcBudget: 20, teamPreview: 'game', bestOf: 3 });
+	const [a, b] = s.ids;
+	assert.ok(L.usesTeraReveal(s.settings));
+	assert.ok(!L.usesTeraReveal({ ...s.settings, teamPreview: 'preselect' }), 'not when the 6 are chosen in the teambuilder');
+	run('UPDATE pool SET tc_cost = 10 WHERE season_id = ?', s.fresh().id);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, a, ['mon0'], true), null);
+	assert.equal(L.setCaptains(s.fresh(), s.settings, a, b, ['mon1'], true), null);
+	const m = s.between(a, b);
+	assert.deepEqual(L.teraReveal(m, a), { mine: null, theirs: null, oppRevealed: false });
+	assert.equal(L.revealTera(m, a, {}), 'Every Tera Captain needs a Tera type.');
+	assert.equal(L.revealTera(m, a, { mon0: 'Bogus' }), 'Every Tera Captain needs a Tera type.');
+	assert.equal(L.revealTera(m, a, { mon0: 'fairy', mon1: 'Fire' }), '', 'only their own captains are kept, by type name');
+	assert.deepEqual(L.teraReveal(m, b), { mine: null, theirs: null, oppRevealed: true }, "B can't see A's before revealing");
+	assert.equal(L.revealTera(m, a, { mon0: 'Water' }), '', 'A can change it while B has not revealed');
+	assert.equal(L.unrevealTera(m, a), '', 'A can un-ready while B is not ready');
+	assert.equal(L.teraReveal(m, b).oppRevealed, false);
+	assert.equal(L.seriesInProgress(s.fresh().id, a), undefined, 'one ready player does not lock rosters');
+	assert.equal(L.revealTera(m, a, { mon0: 'Water' }), '');
+	assert.equal(L.revealTera(m, b, { mon1: 'Stellar' }), '');
+	assert.deepEqual(L.teraReveal(m, b), { mine: { mon1: 'Stellar' }, theirs: { mon0: 'Water' }, oppRevealed: true });
+	assert.equal(L.revealTera(m, a, { mon0: 'Fire' }), 'Your rosters are already locked for this series.');
+	assert.equal(L.unrevealTera(m, a), 'Your rosters are already locked for this series.', "can't un-ready once both are ready");
+	assert.equal(L.seriesInProgress(s.fresh().id, a)?.id, m.id, 'both ready starts the series, so roster moves wait');
+	const sd = L.showdownData().rosters[Object.keys(L.showdownData().rosters).find(f => L.showdownData().rosters[f][`a${a}`])];
+	assert.deepEqual(sd[`a${a}`].tera, { mon0: ['Water'] }, 'Showdown gets the revealed type');
+	assert.equal(L.remake(s.leagueId, m.id, a, 'request'), '');
+	assert.equal(L.remake(s.leagueId, m.id, b, 'accept'), '');
+	assert.deepEqual(L.teraReveal(m, a), { mine: null, theirs: null, oppRevealed: false }, 'a remake starts the reveal over');
+	run('UPDATE roster SET captain = 0 WHERE season_id = ? AND user_id = ?', s.fresh().id, b);
+	assert.deepEqual(L.teraReveal(m, a).oppRevealed, true, 'a player with no captains has nothing to reveal');
+});
+
 // ---------- trades ----------
 
 /** Four players with two Pokémon each (mon0–mon7, 10 points), Bo1, three weeks: the deadline is week 2. */
