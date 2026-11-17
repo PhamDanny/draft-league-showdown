@@ -3,7 +3,7 @@
 // Damage calcs run here too (Smogon's calculator, loaded as window.calc), so sets never leave the browser.
 (async () => {
 	const B = window.BUILDER;
-	const { STATS, LABEL, toID, esc } = Sets;
+	const { STATS, LABEL, toID, esc, avatarHtml } = Sets;
 	const root = document.getElementById('builder');
 	root.innerHTML = '<p class="muted">Loading…</p>';
 	const D = await Sets.loadDex(B.leagueId);
@@ -146,7 +146,7 @@
 			const score = done || w.status === 'live' || w.score[0] || w.score[1] ? `${w.score[0]} – ${w.score[1]}` : w.week === B.current ? 'Next' : '—';
 			return `<article class="panel tbh-card ${w.week === B.current && !done ? 'now' : ''}">
 				<header class="tbh-chips">
-					<span class="tbh-chip tbh-team" title="${esc(w.oppTeam)} (${esc(w.oppName)})">${esc(w.oppTeam)}</span>
+					<span class="tbh-chip tbh-team" title="${esc(w.oppTeam)} (${esc(w.oppName)})">${avatarHtml(w.oppAvatar, w.oppName)}<span>${esc(w.oppTeam)}</span></span>
 					<span class="pill ${scoreCls}">${score}</span>
 					<span class="tbh-chip">${esc(stageLabel(w))}</span>
 				</header>
@@ -161,7 +161,7 @@
 		root.innerHTML = `
 			<div class="tbh">
 				<header class="tbh-head">
-					<div><p class="eyebrow">Teambuilder · ${esc(B.leagueName)}</p><h1>${esc(B.myTeam)}</h1></div>
+					<div><p class="eyebrow">Teambuilder · ${esc(B.leagueName)}</p><h1 class="vs">${avatarHtml(B.myAvatar, B.myName, '')}<span>${esc(B.myTeam)}</span></h1></div>
 					${r ? `<p class="tbh-rec" aria-label="Record ${r.sw} wins, ${r.sl} losses, game differential ${diff}">${r.sw} – ${r.sl}<span aria-hidden="true">|</span>${diff}</p>` : ''}
 				</header>
 				<div class="tbh-body">

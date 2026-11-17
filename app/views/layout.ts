@@ -7,6 +7,16 @@ export function esc(value: unknown): string {
 	return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
+type Person = { showdown_name: string, avatar: string | null };
+/** A member's Discord profile picture, or their initial when they have none. `cls` sizes it (sm, lg). */
+export function avatar(u: Person, cls = '') {
+	return `<span class="avatar ${cls}" aria-hidden="true">${u.avatar ? `<img src="${esc(u.avatar)}" alt="" loading="lazy">` : esc(u.showdown_name.slice(0, 1).toUpperCase())}</span>`;
+}
+/** Picture and name together, for lists of league members. */
+export function who(u: Person, cls = 'sm') {
+	return `<span class="who">${avatar(u, cls)}<span>${esc(u.showdown_name)}</span></span>`;
+}
+
 /** A Pokémon's sprite in the style for this page: the viewer's setting, else the league's generation. */
 export function spriteSrc(speciesId: string) {
 	const { mod, style } = spriteContext();

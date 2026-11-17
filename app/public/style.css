@@ -222,7 +222,21 @@ img.spr[src*="/sprites/home/"]{image-rendering:auto}
 img.spr.sm{width:28px;height:28px}
 img.spr.lg{width:72px;height:72px}
 .cell img.spr{width:32px;height:32px;float:right;margin:-4px -4px 0 4px}
-.avatar img{width:32px;height:32px;border-radius:50%}
+.avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover}
+.avatar.sm{width:24px;height:24px;font-size:11px}
+.who{display:inline-flex;align-items:center;gap:8px;min-width:0;vertical-align:middle}
+.who > span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+h1.who{display:flex;gap:12px}
+h1.who .avatar{width:40px;height:40px;font-size:18px}
+.avatar.lg{width:40px;height:40px;font-size:18px}
+.vs{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px}
+h1.vs .avatar,h2.vs .avatar{width:36px;height:36px;font-size:16px}
+.tbh-team{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.tbh-team > span:last-child{overflow:hidden;text-overflow:ellipsis}
+/* A sentence with players in it: keep the pictures in line with the words */
+.moved .who{gap:5px;margin:0 1px}
+.moved .avatar.sm{width:20px;height:20px;font-size:10px}
+.who-list{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px 14px}
 .menu{position:relative}
 .menu details{position:relative}
 .menu summary{list-style:none;cursor:pointer}
@@ -594,6 +608,10 @@ tr.me td:first-child{box-shadow:inset 3px 0 0 var(--sel)}
 @media (max-width:760px){table.standings{min-width:0}}
 /* Schedule rows */
 .rowlink.sched .p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Both players in fixed columns either side of "vs", so they line up from row to row */
+.rowlink.sched .p.pair{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:12px;max-width:440px}
+.rowlink.sched .pair .who{min-width:0}
+@media (max-width:560px){.rowlink.sched .p.pair{grid-template-columns:minmax(0,1fr);gap:6px}.rowlink.sched .pair > .muted{display:none}}
 .rowlink.sched .num{min-width:28px;text-align:right}
 .rowlink.me{background:var(--sel-soft);box-shadow:inset 3px 0 0 var(--sel)}
 .rowlink.me:hover{background:color-mix(in srgb,var(--sel) 16%,var(--surface))}

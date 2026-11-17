@@ -5,7 +5,7 @@
 // the captains' Tera types they revealed come from the site. Their sets and picks never do.
 (async () => {
 	const C = window.BATTLE;
-	const { toID, esc } = Sets;
+	const { toID, esc, avatarHtml } = Sets;
 	const root = document.getElementById('battle');
 	// The UI re-renders; the embedded client lives beside it so it's never moved (that would reload it)
 	root.innerHTML = '<div id="bt-ui"></div><div id="bt-frame"></div>';
@@ -144,7 +144,7 @@
 		return `<div class="bt-head">
 			<div class="bt-title">
 				<a class="eyebrow back" href="/l/${C.leagueId}/series/${C.matchId}">← Results · ${esc(C.label || 'Week ' + C.week)} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</a>
-				<h1><span>${esc(C.myName)}</span> <span class="bt-score num">${S.series.mine}–${S.series.theirs}</span> <span>${esc(C.oppName)}</span></h1>
+				<h1 class="vs"><span class="who">${avatarHtml(C.myAvatar, C.myName, '')}<span>${esc(C.myName)}</span></span> <span class="bt-score num">${S.series.mine}–${S.series.theirs}</span> <span class="who">${avatarHtml(C.oppAvatar, C.oppName, '')}<span>${esc(C.oppName)}</span></span></h1>
 			</div>
 			${pips()}
 			<span class="spacer"></span>
@@ -197,7 +197,7 @@
 		}
 		const side = (name, ready, sub) => `<div class="bt-side ${ready ? 'ready' : ''}">
 			<span class="bt-dot" aria-hidden="true"></span>
-			<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
+			${avatarHtml(name === C.myName ? C.myAvatar : C.oppAvatar, name, 'lg')}<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
 			<span class="pill ${ready ? 'final' : ''}">${ready ? W.on : W.off}</span>
 		</div>`;
 		const oppSub = S.oppOnline === false ? 'Offline' : S.oppOnline ? 'Online' : '&nbsp;';
@@ -232,7 +232,7 @@
 		}
 		const side = (name, ready, sub) => `<div class="bt-side ${ready ? 'ready' : ''}">
 			<span class="bt-dot" aria-hidden="true"></span>
-			<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
+			${avatarHtml(name === C.myName ? C.myAvatar : C.oppAvatar, name, 'lg')}<div><b>${esc(name)}</b><div class="muted bt-sub">${sub}</div></div>
 			<span class="pill ${ready ? 'final' : ''}">${ready ? 'Ready' : 'Not ready'}</span>
 		</div>`;
 		const oppSub = S.oppOnline === false ? 'Offline' : S.oppOnline ? 'Online' : '&nbsp;';

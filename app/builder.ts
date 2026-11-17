@@ -124,6 +124,7 @@ function builderContext(req: Request) {
 	const me = req.user!.id;
 	const n = namesOf(league.id);
 	const teamNames = new Map(L.members(league.id).map(m => [m.id, m.team_name || m.showdown_name] as [number, string]));
+	const avatars = new Map(L.members(league.id).map(m => [m.id, m.avatar] as [number, string | null]));
 	const all = L.matches(season.id);
 	const mine = all.filter(m => m.p1 === me || m.p2 === me);
 	const myRoster = rosterOf(season.id, me, settings.mod);
@@ -137,7 +138,7 @@ function builderContext(req: Request) {
 				.map(x => ({ week: x.week, sets: revealedSets(x.id, opp, settings.mod) })).filter(x => x.sets.length);
 		}
 		return {
-			week: m.week, stage: m.stage, label: L.matchLabel(m), matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?', oppTeam: teamNames.get(opp) || n.get(opp) || '?',
+			week: m.week, stage: m.stage, label: L.matchLabel(m), matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?', oppTeam: teamNames.get(opp) || n.get(opp) || '?', oppAvatar: avatars.get(opp) || null,
 			score: m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins],
 			played: m.status === 'final' ? revealedSets(m.id, me, settings.mod) : null,
 			bestOf: L.bestOfFor(settings, m),
@@ -146,7 +147,7 @@ function builderContext(req: Request) {
 	// Season record for the builder's home view: series won-lost and game differential, as standings count them
 	const st = L.standings(season.id).find(s => s.userId === me);
 	return {
-		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name, myTeam: teamNames.get(me) || req.user!.showdown_name,
+		leagueId: league.id, seasonId: season.id, me, myName: req.user!.showdown_name, myAvatar: req.user!.avatar, myTeam: teamNames.get(me) || req.user!.showdown_name,
 		leagueName: league.name, record: st ? { sw: st.sw, sl: st.sl, diff: st.gw - st.gl } : null,
 		format: toID(league.format_name), teraMode: settings.teraMode, ...gameOf(settings), smogonDex: smogonDexOf(settings),
 		// While Tera Captains are being chosen after the draft, the builder points players at the draft room
@@ -282,10 +283,11 @@ export function builderRoutes(lg: Router) {
 		// A final series stays viewable here until the player moves on, so the last game's result shows.
 		const opp = m.p1 === me ? m.p2 : m.p1;
 		const roster = rosterOf(season.id, me, settings.mod);
-		const oppUser = one<{ showdown_id: string, showdown_name: string }>('SELECT showdown_id, showdown_name FROM users WHERE id = ?', opp)!;
+		const oppUser = one<{ showdown_id: string, showdown_name: string, avatar: string | null }>('SELECT showdown_id, showdown_name, avatar FROM users WHERE id = ?', opp)!;
 		const ctx = {
 			leagueId: league.id, seasonId: season.id, matchId: m.id, week: m.week, label: L.matchLabel(m), format: toID(league.format_name),
 			opp: oppUser.showdown_id, oppName: oppUser.showdown_name, me: req.user!.showdown_id, myName: req.user!.showdown_name,
+			oppAvatar: oppUser.avatar, myAvatar: req.user!.avatar,
 			roster, oppRoster: rosterOf(season.id, opp, settings.mod), teraMode: settings.teraMode, teraReveal: L.usesTeraReveal(settings), ...gameOf(settings),
 			teamPreview: settings.teamPreview, teamSize: L.teamSize(settings, roster.length),
 			state: seriesState(m, me, settings),

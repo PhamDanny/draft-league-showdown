@@ -4,6 +4,10 @@
 (() => {
 	const R = window.REPLAY;
 	const root = document.getElementById('replay');
+	const face = side => {
+		const name = R.players[side] || '?', url = R.avatars?.[side];
+		return `<span class="who"><span class="avatar" aria-hidden="true">${url ? `<img src="${esc(url)}" alt="">` : esc(name.slice(0, 1).toUpperCase())}</span><span>${esc(name)}</span></span>`;
+	};
 	const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 	const toID = t => String(t ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 	const itemIcon = name => {
@@ -357,7 +361,7 @@
 		const [a, b] = R.series.score;
 		return `<div class="rp-head">
 			<div><a class="eyebrow back" href="/l/${R.leagueId}/series/${R.matchId}">← Results · ${esc(R.label || 'Week ' + R.week)} · Game ${R.game} · ${esc(R.series.p1)} ${a}–${b} ${esc(R.series.p2)}</a>
-			<h1>${esc(R.players.p1)} <span class="muted">vs</span> ${esc(R.players.p2)}</h1>
+			<h1 class="vs">${face('p1')} <span class="muted">vs</span> ${face('p2')}</h1>
 			<p class="muted" style="margin:2px 0 0">${R.winner ? `<b class="rp-win">${esc(R.winner)}</b> won` : 'Tie'}${R.turns ? ` · ${R.turns} turns` : ''}</p></div>
 			<span class="spacer"></span>
 			${R.games.length > 1 ? `<div class="rp-group"><span class="sd-lbl">Game</span><nav class="seg" aria-label="Game">${R.games.map(g => `<a class="${g.no === R.game ? 'on' : ''}" href="/l/${R.leagueId}/replay/${g.id}">Game ${g.no}</a>`).join('')}</nav></div>` : ''}

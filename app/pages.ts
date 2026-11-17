@@ -8,7 +8,7 @@ import { syncShowdown } from './showdown.ts';
 import { listen, notify } from './events.ts';
 import { builderRoutes, gameOf } from './builder.ts';
 import * as discord from './discord.ts';
-import { esc, monChip, monLabel, page, setList, sprite, spriteSrc } from './views/layout.ts';
+import { avatar, esc, monChip, who, monLabel, page, setList, sprite, spriteSrc } from './views/layout.ts';
 import { prefsOf, savePrefs, type Prefs } from './prefs.ts';
 
 /**
@@ -225,6 +225,14 @@ function formatSelect(current: string) {
 		`<option value="${k}" ${k === current ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
 }
 
+/** A member's picture and name by user id, for anywhere players are shown (see who in views/layout.ts). */
+function faces(leagueId: number) {
+	const byId = new Map(L.members(leagueId).map(m => [m.id, m]));
+	return (id: number | null | undefined, cls = 'sm') => {
+		const m = id == null ? undefined : byId.get(id);
+		return m ? who(m, cls) : '?';
+	};
+}
 function names(leagueId: number) {
 	const map = new Map<number, string>();
 	for (const m of L.members(leagueId)) map.set(m.id, m.showdown_name);
@@ -414,13 +422,14 @@ export function pageRoutes(app: Express) {
 	lg.get('/', (req, res) => {
 		const { league, season } = req as LReq;
 		const n = names(league.id);
+		const face = faces(league.id);
 		const week = L.currentWeek(season.id);
 		const ms = L.matches(season.id).filter(m => m.week === week);
 		const st = L.standings(season.id);
 		const me = req.user!.id;
 		let main = '';
 		if (season.status === 'setup') {
-			main = `<section class="panel"><h2>Members</h2><div class="list">${L.members(league.id).map(m => `<div>${esc(m.showdown_name)}</div>`).join('')}</div>
+			main = `<section class="panel"><h2>Members</h2><div class="list">${L.members(league.id).map(m => `<div>${who(m)}</div>`).join('')}</div>
 				${league.role === 'commissioner' ? `<div class="row" style="margin-top:12px"><span class="muted">Start the draft from Admin once everyone has joined.</span><span class="spacer"></span><a class="btn primary" href="/l/${league.id}/admin">Admin</a></div>` :
 					'<p class="muted" style="margin:12px 0 0">Waiting for the commissioner to start the draft.</p>'}</section>`;
 		} else if (season.status === 'drafting') {
@@ -448,14 +457,14 @@ export function pageRoutes(app: Express) {
 			let card;
 			if (champ) {
 				card = `<section class="panel your-match champion"><p class="eyebrow">Season ${season.number} champion</p>
-					<div class="row"><h2 style="margin:0">${esc(n.get(champ))}</h2><span class="spacer"></span>
+					<div class="row"><h2 style="margin:0">${face(champ, '')}</h2><span class="spacer"></span>
 					${br ? `<a class="btn" href="/l/${league.id}/playoffs">Bracket</a>` : ''}</div></section>`;
 			} else if (my) {
 				const opp = my.p1 === me ? my.p2 : my.p1;
 				const [a, b] = my.p1 === me ? [my.p1_wins, my.p2_wins] : [my.p2_wins, my.p1_wins];
 				const final = my.status === 'final';
 				card = `<section class="panel your-match"><p class="eyebrow">${esc(L.matchLabel(my))} · Your match</p>
-					<div class="row"><h2 style="margin:0">vs ${esc(n.get(opp))}</h2>${statusPill(my.status)}<span class="num">${my.status === 'scheduled' ? '' : `${a}–${b}`}</span>
+					<div class="row"><h2 style="margin:0" class="vs">vs ${face(opp, '')}</h2>${statusPill(my.status)}<span class="num">${my.status === 'scheduled' ? '' : `${a}–${b}`}</span>
 						<span class="spacer"></span>
 						${final ? `<a class="btn primary" href="/l/${league.id}/series/${my.id}">View Results</a>` :
 							`<a class="btn" href="/l/${league.id}/builder#week-${my.week}">Build team</a><a class="btn primary" href="/l/${league.id}/battle/${my.id}">${esc(playLabel(my))}</a>`}</div></section>`;
@@ -473,7 +482,7 @@ export function pageRoutes(app: Express) {
 			const cut = br ? br.seeds.length : 0;
 			main = `${card}<div class="grid g2 top" style="margin-top:16px">
 				${others.length ? `<section class="panel"><h2>${esc(weekLabel)}</h2><div class="list">${others.map(m => `<a class="rowlink" href="/l/${league.id}/series/${m.id}">
-					<div class="match"><span class="p">${esc(n.get(m.p1))}</span><span class="score num">${score(m)}</span><span class="p r">${esc(n.get(m.p2))}</span></div>
+					<div class="match"><span class="p">${face(m.p1)}</span><span class="score num">${score(m)}</span><span class="p r">${face(m.p2)}</span></div>
 					${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>` : ''}
 				<section class="panel" id="standings"><div class="row panel-head"><h2>Standings</h2><span class="spacer"></span>
 					${br ? `<a href="/l/${league.id}/playoffs">${br.projected ? 'Projected bracket' : 'Bracket'} →</a>` : ''}</div>
@@ -495,9 +504,10 @@ export function pageRoutes(app: Express) {
 	function standingsTable(leagueId: number, rows: L.Standing[], n: Map<number, string>, me: number, full: L.Standing[], cut = 0, wonCol = 'Series') {
 		const mark = (r: L.Standing) => r.tied ? ' <span class="pill" title="Level after every tiebreaker. A coin flip settles it when the playoffs start.">Tied</span>' :
 			r.flip ? ' <span class="pill" title="Placed by a coin flip when the playoffs started">Coin flip</span>' : '';
+		const people = new Map(L.members(leagueId).map(m => [m.id, m]));
 		return `<div class="table-wrap"><table class="standings"><thead><tr><th>#</th><th>Player</th><th class="r">${wonCol}</th><th class="r hide-sm">Games</th><th class="r">Diff</th></tr></thead><tbody>
 		${rows.map(r => `<tr class="${r.userId === me ? 'me' : ''} ${cut && full.indexOf(r) === cut - 1 && cut < full.length ? 'cut' : ''}"><td class="num">${full.indexOf(r) + 1}</td>
-			<td><a href="/l/${leagueId}/team/${r.userId}">${esc(n.get(r.userId))}</a>${mark(r)}</td>
+			<td><a href="/l/${leagueId}/team/${r.userId}">${people.has(r.userId) ? who(people.get(r.userId)!) : esc(n.get(r.userId))}</a>${mark(r)}</td>
 			<td class="r num">${r.sw}–${r.sl}</td><td class="r num hide-sm">${r.gw}–${r.gl}</td>
 			<td class="r num">${r.gw - r.gl > 0 ? '+' : ''}${r.gw - r.gl}</td></tr>`).join('')}
 		</tbody></table></div>`;
@@ -508,6 +518,7 @@ export function pageRoutes(app: Express) {
 	lg.get('/playoffs', (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const n = names(league.id);
+		const face = faces(league.id);
 		const me = req.user!.id;
 		const isComm = league.role === 'commissioner';
 		const br = L.bracket(season, settings);
@@ -523,7 +534,7 @@ export function pageRoutes(app: Express) {
 				const lost = m?.status === 'final' && m.winner && m.winner !== s.userId;
 				const wins = m && m.status !== 'scheduled' ? (m.p1 === s.userId ? m.p1_wins : m.p2_wins) : '';
 				return `<div class="bk-side ${won ? 'won' : ''} ${lost ? 'lost' : ''} ${s.userId === me ? 'me' : ''}"><span class="seed num">${s.seed}</span>
-					<span class="nm">${esc(n.get(s.userId))}</span><span class="spacer"></span><span class="num">${wins}</span></div>`;
+					<span class="nm">${face(s.userId)}</span><span class="spacer"></span><span class="num">${wins}</span></div>`;
 			};
 			const card = (s: L.Slot) => {
 				const inner = s.bye ? `${side(s.a, '', null)}<div class="bk-side wait">Bye</div>` : `${side(s.a, s.waiting[0], s.match)}${side(s.b, s.waiting[1], s.match)}`;
@@ -539,7 +550,7 @@ export function pageRoutes(app: Express) {
 					'<p class="muted" style="margin:0">The round is made once every pick is in.</p>'}</section>` : '';
 			// Seeds still level with a neighbour in the standings: a coin flip decides if they still are at the end
 			const tiedSeeds = br.projected ? L.standings(season.id).filter(r => r.tied && br.seeds.some(s => s.userId === r.userId)) : [];
-			body = `${champ ? `<section class="panel your-match champion"><p class="eyebrow">Season ${season.number} champion</p><h2 style="margin:0">${esc(n.get(champ))}</h2></section>` : ''}
+			body = `${champ ? `<section class="panel your-match champion"><p class="eyebrow">Season ${season.number} champion</p><h2 style="margin:0">${face(champ, '')}</h2></section>` : ''}
 				${br.projected ? `<p class="muted" style="margin:0 0 12px">Projected: the bracket if the season ended today. ${esc(L.RESEED[settings.playoffReseed].rule)}.
 					${tiedSeeds.length ? ` ${esc(tiedSeeds.map(r => n.get(r.userId)).join(', '))} ${tiedSeeds.length === 1 ? 'is' : 'are'} tied with a neighbour in the standings; if that's still true when the season ends, a coin flip decides.` : ''}</p>` :
 					`<p class="muted" style="margin:0 0 12px">${esc(L.RESEED[settings.playoffReseed].rule)}. Best of ${settings.playoffBestOf}.</p>`}
@@ -574,12 +585,12 @@ export function pageRoutes(app: Express) {
 		return req.user!.id;
 	}
 	/** One logged move in words: "A added X, dropped Y" or "A traded X to B for Y". */
-	function moveLine(t: L.Transaction, n: Map<number, string>, monName: (id: string) => string) {
+	function moveLine(t: L.Transaction, face: ReturnType<typeof faces>, monName: (id: string) => string) {
 		const gave: string[] = JSON.parse(t.gave), got: string[] = JSON.parse(t.got);
 		const list = (ids: string[]) => ids.map(id => `<b>${esc(monName(id))}</b>`).join(', ');
-		const what = t.kind === 'trade' ? `${esc(n.get(t.user_id))} traded ${list(gave)} to ${esc(n.get(t.other_id!))} for ${list(got)}` :
-			`${esc(n.get(t.user_id))} ${[got.length ? `added ${list(got)}` : '', gave.length ? `dropped ${list(gave)}` : ''].filter(Boolean).join(', ')}`;
-		return `<div class="row log-row"><span class="num muted">${new Date(t.at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' })}</span><span>${what}</span></div>`;
+		const what = t.kind === 'trade' ? `${face(t.user_id)} traded ${list(gave)} to ${face(t.other_id)} for ${list(got)}` :
+			`${face(t.user_id)} ${[got.length ? `added ${list(got)}` : '', gave.length ? `dropped ${list(gave)}` : ''].filter(Boolean).join(', ')}`;
+		return `<div class="row log-row"><span class="num muted">${new Date(t.at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Los_Angeles' })}</span><span class="moved">${what}</span></div>`;
 	}
 	const poolNames = (seasonId: number) => {
 		const map = new Map(all<{ species_id: string, name: string }>('SELECT species_id, name FROM pool WHERE season_id = ?', seasonId).map(p => [p.species_id, p.name] as [string, string]));
@@ -589,6 +600,7 @@ export function pageRoutes(app: Express) {
 	lg.get('/moves', (req, res) => {
 		const { league, season, settings } = req as LReq;
 		const n = names(league.id);
+		const face = faces(league.id);
 		const me = req.user!.id;
 		const isComm = league.role === 'commissioner';
 		const players = season.status === 'regular' ? L.draftPlayers(season.id) : [];
@@ -630,15 +642,15 @@ export function pageRoutes(app: Express) {
 							<button class="btn sm ${primary ? 'primary' : ''}" type="submit" ${action === 'accept' ? myLive : ''}>${label}</button></form>`;
 					// Accepting is blocked by your own series in progress, not by the player you're viewing
 					const myLive = L.seriesInProgress(season.id, me) || frozen ? 'disabled' : '';
-					const desc = o.to_user === me ? `From ${esc(n.get(o.from_user))}: their ${names2(give)} for your ${names2(get)}` :
-						o.from_user === me ? `To ${esc(n.get(o.to_user))}: your ${names2(give)} for their ${names2(get)}` :
-						`${esc(n.get(o.from_user))} offers ${names2(give)} to ${esc(n.get(o.to_user))} for ${names2(get)}`;
+					const desc = o.to_user === me ? `From ${face(o.from_user)}: their ${names2(give)} for your ${names2(get)}` :
+						o.from_user === me ? `To ${face(o.to_user)}: your ${names2(give)} for their ${names2(get)}` :
+						`${face(o.from_user)} offers ${names2(give)} to ${face(o.to_user)} for ${names2(get)}`;
 					const acts = [
 						o.to_user === me ? btn('decline', 'Decline') + btn('accept', 'Accept', true, `Trade your ${get.map(monName).join(' + ')} for ${n.get(o.from_user)}'s ${give.map(monName).join(' + ')}? This happens right away.`) : '',
 						o.from_user === me ? btn('withdraw', 'Withdraw') : '',
 						isComm && o.from_user !== me && o.to_user !== me ? btn('cancel', 'Cancel', false, 'Cancel this offer?') : '',
 					].join('');
-					return `<div class="row offer"><span>${desc}${o.note ? ` <span class="muted">“${esc(o.note)}”</span>` : ''}</span><span class="spacer"></span>${acts}</div>`;
+					return `<div class="row offer"><span class="moved">${desc}${o.note ? ` <span class="muted">“${esc(o.note)}”</span>` : ''}</span><span class="spacer"></span>${acts}</div>`;
 				};
 				sections.push(`<section class="panel"><h2>Trade offers</h2><div class="list">${offers.map(offerRow).join('')}</div></section>`);
 			}
@@ -685,7 +697,7 @@ export function pageRoutes(app: Express) {
 			}
 			if (cols.length) sections.push(`<div class="grid g2 top">${cols.join('')}</div>`);
 			const log = L.transactions(season.id);
-			sections.push(`<section class="panel"><h2>League log</h2><div class="list">${log.map(t => moveLine(t, n, monName)).join('') || '<div class="muted">No moves yet.</div>'}</div></section>`);
+			sections.push(`<section class="panel"><h2>League log</h2><div class="list">${log.map(t => moveLine(t, face, monName)).join('') || '<div class="muted">No moves yet.</div>'}</div></section>`);
 		}
 		render(req, res, {
 			title: 'Transactions', tab: 'moves', flash: req.query.msg as string,
@@ -738,6 +750,7 @@ export function pageRoutes(app: Express) {
 	lg.get('/schedule', (req, res) => {
 		const { league, season } = req as LReq;
 		const n = names(league.id);
+		const face = faces(league.id);
 		const byWeek = new Map<number, L.Match[]>();
 		for (const m of L.matches(season.id)) {
 			if (!byWeek.has(m.week)) byWeek.set(m.week, []);
@@ -750,7 +763,7 @@ export function pageRoutes(app: Express) {
 			body: `<h1>Schedule</h1>
 			<div class="stack" id="live">${[...byWeek].map(([w, ms]) => `<section class="panel" id="wk${w}"><div class="row panel-head"><h2>${esc(L.matchLabel(ms[0]))}</h2>${w === cur ? '<span class="pill live">Current</span>' : ''}</div>
 				<div class="list">${ms.map(m => `<a class="rowlink sched ${m.p1 === me || m.p2 === me ? 'me' : ''}" href="/l/${league.id}/series/${m.id}">
-					<span class="p">${esc(n.get(m.p1))} vs ${esc(n.get(m.p2))}</span><span class="num">${score(m)}</span>${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>`).join('') ||
+					<span class="p pair">${face(m.p1)}<span class="muted">vs</span>${face(m.p2)}</span><span class="num">${score(m)}</span>${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>`).join('') ||
 				'<p class="muted">The schedule is made when the draft ends.</p>'}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live') + (cur ? `<script>if (!location.hash) document.getElementById('wk${cur}')?.scrollIntoView({ block: 'start' });</script>` : ''),
 		});
@@ -761,11 +774,12 @@ export function pageRoutes(app: Express) {
 		const m = one<L.Match>('SELECT * FROM matches WHERE id = ? AND season_id = ?', Number(req.params.matchId), season.id);
 		if (!m) return res.status(404).send('Not found');
 		const n = names(league.id);
+		const face = faces(league.id);
 		const games = L.battlesFor(m.id).filter(b => b.played_at);
 		const final = m.status === 'final';
 		const teamCol = (uid: number) => {
 			if (!final) {
-				return `<section class="panel"><h2>${esc(n.get(uid))}</h2><div class="bench">${L.roster(season.id, uid).map(r =>
+				return `<section class="panel"><h2>${face(uid)}</h2><div class="bench">${L.roster(season.id, uid).map(r =>
 					monChip(r.species_id, { name: r.name, captain: settings.teraMode === 'captains' && L.captainsRevealed(season) && !!r.captain })).join('')}</div></section>`;
 			}
 			const sets = new Map<string, any>();
@@ -794,7 +808,7 @@ export function pageRoutes(app: Express) {
 		render(req, res, {
 			title: `${n.get(m.p1)} vs ${n.get(m.p2)}`, tab: 'schedule', flash: req.query.msg as string,
 			body: `<a class="eyebrow back" href="/l/${league.id}/schedule#wk${m.week}">← Schedule · ${esc(L.matchLabel(m))} · Bo${bestOf}</a>
-			<div class="row" style="margin-bottom:16px"><h1 style="margin:0">${esc(n.get(m.p1))} ${score(m)} ${esc(n.get(m.p2))}</h1>${statusPill(m.status)}<span class="spacer"></span>
+			<div class="row" style="margin-bottom:16px"><h1 style="margin:0" class="vs">${face(m.p1, '')} ${score(m)} ${face(m.p2, '')}</h1>${statusPill(m.status)}<span class="spacer"></span>
 				${!final && mine ? `<a class="btn primary" href="/l/${league.id}/battle/${m.id}">Play game ${games.length + 1}</a>` : ''}</div>
 
 			<div id="live">
@@ -831,7 +845,9 @@ export function pageRoutes(app: Express) {
 		const data = {
 			leagueId: league.id, matchId: m.id, week: m.week, label: L.matchLabel(m), game: b.game_no, bestOf: L.bestOfFor(settings, m), ...gameOf(settings),
 			series: { p1: n.get(m.p1), p2: n.get(m.p2), score: [m.p1_wins, m.p2_wins] },
-			players: { p1: n.get(b.p1), p2: n.get(b.p2) }, winner: n.get(b.winner) || null, turns: b.turns,
+			players: { p1: n.get(b.p1), p2: n.get(b.p2) },
+			avatars: Object.fromEntries(L.members(league.id).filter(x => x.id === b.p1 || x.id === b.p2).map(x => [x.id === b.p1 ? 'p1' : 'p2', x.avatar])),
+			winner: n.get(b.winner) || null, turns: b.turns,
 			games, fullLog: b.full_log || '', publicLog: b.public_log || '', teams,
 			sprites: Object.fromEntries(['p1', 'p2'].flatMap(side => (teams?.[side]?.team || []).map((set: any) => [toID(set.species), spriteSrc(toID(set.species))]))),
 			itemSprites: itemSprites(settings.mod),
@@ -858,7 +874,7 @@ export function pageRoutes(app: Express) {
 				const r = L.roster(season.id, p.user_id);
 				const pts = r.reduce((a, x) => a + x.cost, 0);
 				return `<a class="panel team-card" href="/l/${league.id}/team/${p.user_id}">
-					<div class="row panel-head"><h2>${esc(p.showdown_name)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
+					<div class="row panel-head"><h2>${who(p)}</h2><span class="spacer"></span><span class="num muted">${pts}/${settings.budget}</span></div>
 					<div class="bench">${r.map(x => monChip(x.species_id, { name: x.name, captain: showCaps(p.user_id) && !!x.captain })).join('')}</div></a>`;
 			}).join('')}</div>`,
 			scripts: LIVE_SCRIPT(league.id, 'live'),
@@ -869,6 +885,7 @@ export function pageRoutes(app: Express) {
 		const { league, season, settings } = req as LReq;
 		const uid = Number(req.params.userId);
 		const n = names(league.id);
+		const face = faces(league.id);
 		if (!n.has(uid)) return res.status(404).send('Not found');
 		const r = L.roster(season.id, uid);
 		const showCaps = settings.teraMode === 'captains' && (L.captainsRevealed(season) || uid === req.user!.id);
@@ -890,16 +907,16 @@ export function pageRoutes(app: Express) {
 		}
 		render(req, res, {
 			title: n.get(uid)!, tab: 'teams',
-			body: `${rec ? `<p class="eyebrow">${rec.sw}–${rec.sl} · ${st.indexOf(rec) + 1}${['st', 'nd', 'rd'][st.indexOf(rec)] || 'th'}</p>` : ''}<h1>${esc(n.get(uid))}</h1>
+			body: `${rec ? `<p class="eyebrow">${rec.sw}–${rec.sl} · ${st.indexOf(rec) + 1}${['st', 'nd', 'rd'][st.indexOf(rec)] || 'th'}</p>` : ''}<h1 class="who">${avatar(L.members(league.id).find(m => m.id === uid)!)}<span>${esc(n.get(uid))}</span></h1>
 			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
 				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && showCaps ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}${x.captain && showCaps && x.tc_cost != null ? ` +${x.tc_cost} Tera` : ''}</td></tr>`).join('')}
 			</tbody></table></div></section>
 			${ms.length ? `<section class="panel"><h2>${settings.bestOf === 1 && settings.playoffBestOf === 1 ? 'Matches' : 'Series'}</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
 				const res2 = m.status === 'final' ? (m.winner === uid ? '<span class="pill w">W</span>' : '<span class="pill l">L</span>') : statusPill(m.status);
-				return `<div class="row"><span class="num muted">${m.stage === 'regular' ? `Wk ${m.week}` : esc(L.matchLabel(m))}</span><a href="/l/${league.id}/series/${m.id}">vs ${esc(n.get(opp))}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
+				return `<div class="row"><span class="num muted">${m.stage === 'regular' ? `Wk ${m.week}` : esc(L.matchLabel(m))}</span><a href="/l/${league.id}/series/${m.id}" class="vs">vs ${face(opp)}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
 			}).join('')}</div></section>` : ''}
-			${moves.length ? `<section class="panel"><h2>Transactions</h2><div class="list">${moves.map(t => moveLine(t, n, poolNames(season.id))).join('')}</div></section>` : ''}
+			${moves.length ? `<section class="panel"><h2>Transactions</h2><div class="list">${moves.map(t => moveLine(t, face, poolNames(season.id))).join('')}</div></section>` : ''}
 			${history.size ? `<section class="panel">${setList([...history.values()].flatMap(sets => [...sets].map(([text, set]) => ({ set, text }))), '', 'Sets')}</section>` : ''}`,
 		});
 	});
@@ -927,7 +944,7 @@ export function pageRoutes(app: Express) {
 			const pts = settings.budget - (state.spent.get(p.user_id) || 0);
 			const sub = choosing ? `<small class="tc-left">${chosen.has(p.user_id) ? 'Tera Captains chosen' : 'Choosing Tera Captains'}</small>` : '';
 			return `<div class="h ph ${p.user_id === me ? 'me' : ''}" title="${esc(p.showdown_name)}">
-				<span class="avatar">${p.avatar ? `<img src="${esc(p.avatar)}" alt="">` : esc(p.showdown_name.slice(0, 1).toUpperCase())}</span>
+				${avatar(p)}
 				<span class="nm">${esc(p.showdown_name)}</span><small><span>${pts} points</span></small>${sub}</div>`;
 		};
 		const pickBySlot = new Map<string, L.Pick>();
@@ -991,7 +1008,7 @@ export function pageRoutes(app: Express) {
 			isComm ? state.players : [], chosen.has(captainFor), req.query.ok === '1');
 		const chosenList = choosing ? `<section class="panel"><h2>Tera Captains</h2>
 			<p class="muted" style="margin:0 0 10px">Everyone's captains are shown when the commissioner locks them and makes the schedule.</p>
-			<div class="list">${state.players.map(p => `<div class="row"><span>${esc(p.showdown_name)}</span><span class="spacer"></span>
+			<div class="list">${state.players.map(p => `<div class="row">${who(p)}<span class="spacer"></span>
 				${chosen.has(p.user_id) ? '<span class="pill final">Chosen</span>' : '<span class="pill">Not yet</span>'}</div>`).join('')}</div>
 			${isComm ? `<p style="margin:12px 0 0"><a href="/l/${league.id}/admin">Lock captains from Admin</a></p>` : ''}</section>` : '';
 
@@ -1133,7 +1150,7 @@ export function pageRoutes(app: Express) {
 			<section class="panel"><h2>Members</h2>
 				<div class="row" style="margin-bottom:10px;flex-wrap:nowrap"><input class="inp" id="invite" readonly value="${esc(invite)}" onclick="this.select()" aria-label="Invite link" style="max-width:520px">
 					<button class="btn" type="button" id="copy-invite">Copy</button></div>
-				<div class="list">${ms.map(m => `<div class="row"><b>${esc(m.showdown_name)}</b>${m.role === 'commissioner' ? '<span class="pill">Commissioner</span>' : ''}<span class="spacer"></span>
+				<div class="list">${ms.map(m => `<div class="row"><b>${who(m)}</b>${m.role === 'commissioner' ? '<span class="pill">Commissioner</span>' : ''}<span class="spacer"></span>
 					${m.id !== req.user!.id && season.status === 'setup' && m.role !== 'commissioner' ? `<form method="post" action="/l/${league.id}/admin/remove" class="inline" ${confirmAttr(`Remove ${m.showdown_name} from the league?`)}><input type="hidden" name="user" value="${m.id}"><button class="btn sm" type="submit">Remove</button></form>` : ''}
 					${m.role !== 'commissioner' ? `<form method="post" action="/l/${league.id}/admin/promote" class="inline" ${confirmAttr(`Make ${m.showdown_name} a commissioner? This can't be undone here.`)}><input type="hidden" name="user" value="${m.id}"><button class="btn sm" type="submit">Make commissioner</button></form>` : ''}</div>`).join('')}</div>
 			</section>
@@ -1145,12 +1162,12 @@ export function pageRoutes(app: Express) {
 						${ms.length < 2 ? '<span class="muted">Needs at least two members.</span>' : ''}</div>
 				</form>` : ''}
 				${season.status === 'drafting' ? `<div class="row">
-					<span>Order: ${players.map(p => esc(p.showdown_name)).join(', ')}</span><span class="spacer"></span>
+					<span class="who-list">Order: ${players.map(p => who(p)).join('')}</span><span class="spacer"></span>
 					${undo}
 					${tcStep ? `<form method="post" action="/l/${league.id}/admin/end-draft" class="inline" ${confirmAttr(`End the draft? Players then choose their Tera Captains, and you make the schedule once they have.${shortNote}`)}><button class="btn primary" type="submit">End draft</button></form>` :
 						`<form method="post" action="/l/${league.id}/admin/schedule" class="inline" ${confirmAttr(`End the draft and generate the schedule? Picks can't be changed afterwards.${shortNote}`)}><button class="btn primary" type="submit">End draft and make schedule</button></form>`}</div>` : ''}
 				${season.status === 'captains' ? `<p style="margin:0 0 10px">The draft is over. Players are choosing their Tera Captains; nobody else sees them until you lock them.</p>
-					<div class="list" style="margin-bottom:12px">${players.map(p => `<div class="row"><span>${esc(p.showdown_name)}</span><span class="spacer"></span>
+					<div class="list" style="margin-bottom:12px">${players.map(p => `<div class="row">${who(p)}<span class="spacer"></span>
 						${chosen.has(p.user_id) ? '<span class="pill final">Chosen</span>' : '<span class="pill">Not yet</span>'}
 						<a class="btn sm" href="/l/${league.id}/draft?for=${p.user_id}">Choose for them</a></div>`).join('')}</div>
 					<div class="row"><span class="spacer"></span>${undo}

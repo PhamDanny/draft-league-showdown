@@ -4,6 +4,8 @@
 	const LABEL = { hp: 'HP', atk: 'Atk', def: 'Def', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
 	const toID = t => String(t ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 	const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+	/** A player's Discord picture, or their initial (same markup as avatar() in app/views/layout.ts). */
+	const avatarHtml = (url, name, cls = 'sm') => `<span class="avatar ${cls}" aria-hidden="true">${url ? `<img src="${esc(url)}" alt="">` : esc(String(name || '?').slice(0, 1).toUpperCase())}</span>`;
 
 	let dexPromise = null;
 	function loadDex(leagueId) {
@@ -147,5 +149,5 @@
 		try { localStorage.setItem(key(leagueId, seasonId, week), JSON.stringify(value)); } catch {}
 	}
 
-	window.Sets = { STATS, LABEL, toID, esc, loadDex, itemIcon, natureMult, calcStat, levelOf, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
+	window.Sets = { STATS, LABEL, toID, esc, avatarHtml, loadDex, itemIcon, natureMult, calcStat, levelOf, stats, blank, toShowdown, exportSet, exportTeam, importTeam, load, save };
 })();
