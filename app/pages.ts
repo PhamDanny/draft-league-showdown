@@ -1095,9 +1095,9 @@ export function pageRoutes(app: Express) {
 		const hasTera = L.genOf(settings.mod) === 9;
 		const rows: [string, string][] = [
 			['Format', `${f.label}: ${f.game}`],
-			[L.pairing(settings.bestOf).One, `Best of ${settings.bestOf}`],
+			['Regular Season', `Best of ${settings.bestOf}`],
 			['Playoffs', settings.playoffTeams >= 2 ? `Top ${settings.playoffTeams}, best of ${settings.playoffBestOf}. ${L.RESEED[settings.playoffReseed].label}: ${L.RESEED[settings.playoffReseed].rule.toLowerCase()}` : 'None'],
-			['Standings', `${L.pairing(settings.bestOf).One} wins, then head-to-head among the tied players, game win %, game differential, strength of victory (the combined ${L.pairing(settings.bestOf).one} win % of the players you beat), then a coin flip when the playoffs start`],
+			['Standings', `${L.pairing(settings.bestOf).One} wins, head-to-head, game win %, game differential, strength of victory, coin flip`],
 			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.previewRule(settings.teamPreview, settings.bestOf)}. ${L.previewShows(settings)}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
 			...(hasTera ? [
@@ -1107,8 +1107,8 @@ export function pageRoutes(app: Express) {
 			['Clauses', settings.clauses.join(', ') || 'None'],
 			...Object.entries(f.banned).filter(([, list]) => list.length).map(([kind, list]) => [`Banned ${kind}`, list.join(', ')] as [string, string]),
 			...(f.other.length ? [['Other rules', f.other.join('. ') + '.'] as [string, string]] : []),
-			['Trades', !settings.trades ? 'Off' : `On, until every ${L.pairing(settings.bestOf).one} through week ${L.captainsRevealed((req as LReq).season) ? L.tradeDeadlineWeek((req as LReq).season.id, settings) : settings.tradeDeadline || 'halfway'}${settings.tradeDeadline ? '' : ' (halfway)'} is final. Each roster has to stay within the roster limits and budget, and a traded Tera Captain stops being one`],
-			['Free agency', !settings.freeAgency ? 'Off' : `On until the playoffs, ${settings.faLimit ? `${settings.faLimit} moves per season` : 'unlimited moves'}. Free agents cost their pool price, and a dropped Pokémon becomes a free agent`],
+			['Trades', !settings.trades ? 'Off' : `On, until every ${L.pairing(settings.bestOf).one} through week ${L.captainsRevealed((req as LReq).season) ? L.tradeDeadlineWeek((req as LReq).season.id, settings) : settings.tradeDeadline || 'halfway'}. Each roster has to stay within the roster limits and budget after every transaction.`],
+			['Free agency', !settings.freeAgency ? 'Off' : `Open until playoffs, ${settings.faLimit ? `${settings.faLimit} moves per season` : 'unlimited moves'}.`],
 		];
 		render(req, res, {
 			title: 'Rules', tab: 'rules',
