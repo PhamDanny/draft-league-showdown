@@ -964,7 +964,7 @@ export function pageRoutes(app: Express) {
 			const m = mon(p.species_id, settings.mod);
 			// Tera price is information only: captains are chosen after the draft
 			const tera = !tc ? '' : p.tc_cost != null ? `<span class="tc-price num" title="${esc(p.name)} can be a Tera Captain for ${p.tc_cost} Tera points">${p.tc_cost}</span>` :
-				`<span class="tc-price none" title="${esc(p.name)} can't be a Tera Captain" aria-label="Can't be a Tera Captain">—</span>`;
+				`<span class="tc-price none" title="${esc(p.name)} can't be a Tera Captain" aria-label="Can't be a Tera Captain">Tera banned</span>`;
 			return `<div class="row" data-mon="${esc(p.species_id)}" data-types="${esc(m.types.join(','))}" data-afford="${budgetFor && !affordableFor(budgetFor, p.cost) ? '0' : '1'}">
 				${sprite(p.species_id, 'sm')}<span class="nm">${esc(p.name)}</span><span class="spacer"></span>${tera}
 				<form method="post" action="/l/${league.id}/draft/pick" class="inline" data-pick data-name="${esc(p.name)}" data-cost="${p.cost}"><input type="hidden" name="species" value="${esc(p.species_id)}">
@@ -1006,8 +1006,8 @@ export function pageRoutes(app: Express) {
 					<select class="switch" id="pool-type" aria-label="Type"><option value="">All types</option>${TYPES.map(t => `<option>${t}</option>`).join('')}</select></div>
 					<input class="inp" style="margin:0 0 10px" placeholder="Search" id="pool-search" aria-label="Search Pokémon" autocomplete="off">
 					${budgetFor ? `<label class="row" style="gap:6px;margin:0 0 10px;font-size:13px"><input type="checkbox" id="pool-afford"> Hide Pokémon ${actingFor && !myTurn ? esc(state.onClock!.showdown_name) + ' can\'t' : 'I can\'t'} afford</label>` : ''}
-					${tc ? `<p class="muted tc-note">Tera Captains are chosen after the draft, from a separate ${settings.tcBudget}-point Tera budget. The Tera column is each Pokémon's captain price; — means it can't be one.</p>` : ''}
-					<div class="pool-list"><div class="row pool-head"><span class="spacer"></span>${tc ? '<span class="ph-tera">Tera</span>' : ''}<span class="ph-draft">Draft</span></div>${poolRows}</div></section>
+					${tc ? `<p class="muted tc-note">Tera Captains are chosen after the draft, from a separate ${settings.tcBudget}-point Tera budget. Some Pokémon are banned from being a Tera Captain.</p>` : ''}
+					<div class="pool-list"><div class="row pool-head"><span class="spacer"></span>${tc ? '<span class="ph-tera">Tera Cost</span>' : ''}<span class="ph-draft">Draft</span></div>${poolRows}</div></section>
 				${amPlayer ? `<section class="panel"><h2>My team</h2>
 					<div class="tiles two">
 						<div><h3>Points left</h3><div class="num">${settings.budget - (state.spent.get(me) || 0)} / ${settings.budget}</div></div>

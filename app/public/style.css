@@ -672,9 +672,9 @@ label.chk{gap:6px;font-size:14px}
 .pool-list .btn.sm{min-width:72px;gap:0;font-variant-numeric:tabular-nums}
 /* Column headings over the Tera price and Draft button; they stay put while the pool scrolls */
 .pool-list .row.pool-head{position:sticky;top:0;z-index:1;background:var(--surface);padding:0 0 6px;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.pool-head .ph-draft{width:72px;text-align:center}.pool-head .ph-tera{width:44px;text-align:center}
+.pool-head .ph-draft{width:72px;text-align:center}.pool-head .ph-tera{width:96px;flex:none;margin-right:12px;text-align:center;white-space:nowrap}
 /* Captain price, for information only: Tera Captains are chosen after the draft */
-.pool-list .tc-price{width:44px;text-align:center;font-size:13px;color:var(--tera)}
+.pool-list .tc-price{width:96px;flex:none;margin-right:12px;text-align:center;white-space:nowrap;font-size:13px;color:var(--tera)}
 .pool-list .tc-price.none{color:var(--muted)}
 /* Tera Captain picker (after the draft) */
 .cap-list label.cap{cursor:pointer}
