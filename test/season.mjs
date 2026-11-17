@@ -428,7 +428,7 @@ test('no trades while either player has a series in progress', () => {
 	const [a, b] = s.ids;
 	const m = L.matches(s.fresh().id).find(m => m.p1 === b || m.p2 === b);
 	run("UPDATE matches SET status = 'live' WHERE id = ?", m.id);
-	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'B has a week 1 series in progress. Trades wait until it\'s final.');
+	assert.equal(s.offer(a, b, ['mon0'], ['mon1']), 'B has a week 1 match in progress. Trades wait until it\'s final.');
 });
 
 test('the trade deadline is halfway by default, closes trades once its week is final, and cancels offers', () => {

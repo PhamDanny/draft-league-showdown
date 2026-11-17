@@ -85,6 +85,9 @@
 		}
 	}
 
+	// A best of 1 is a single match; a best of 3 or 5 is a series
+	const unit = () => S.series.bestOf === 1 ? 'match' : 'series';
+	const Unit = () => S.series.bestOf === 1 ? 'Match' : 'Series';
 	const S = {
 		online: false, // our connection is signed in
 		series: C.state,
@@ -131,7 +134,7 @@
 			const live = !g && i === S.series.games.length && phase() === 'live';
 			out.push(`<span class="pip ${g ? g.result.toLowerCase() : live ? 'live' : ''}" title="Game ${i + 1}${g ? `: ${g.result === 'W' ? 'won' : g.result === 'L' ? 'lost' : 'tie'}` : live ? ': in progress' : ''}">${g ? g.result : ''}</span>`);
 		}
-		return `<span class="pips" aria-label="Series ${S.series.mine}–${S.series.theirs}">${out.join('')}</span>`;
+		return `<span class="pips" aria-label="${Unit()} ${S.series.mine}–${S.series.theirs}">${out.join('')}</span>`;
 	}
 
 	function header() {
@@ -140,7 +143,7 @@
 		const gameNo = r ? r.game : nextGameNo();
 		return `<div class="bt-head">
 			<div class="bt-title">
-				<a class="eyebrow back" href="/l/${C.leagueId}/series/${C.matchId}">← Series · ${esc(C.label || 'Week ' + C.week)} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</a>
+				<a class="eyebrow back" href="/l/${C.leagueId}/series/${C.matchId}">← Results · ${esc(C.label || 'Week ' + C.week)} · Best of ${S.series.bestOf}${p === 'done' ? '' : ` · Game ${gameNo}`}</a>
 				<h1><span>${esc(C.myName)}</span> <span class="bt-score num">${S.series.mine}–${S.series.theirs}</span> <span>${esc(C.oppName)}</span></h1>
 			</div>
 			${pips()}
@@ -148,7 +151,7 @@
 			${p === 'live' ? '<button class="btn danger-ghost" data-act="forfeit">Forfeit</button>' : ''}
 			${p === 'lobby' ? `<a class="btn" href="/l/${C.leagueId}/builder#week-${C.week}">Team</a>` : ''}
 			${p !== 'done' && !seriesOver() && !S.series.remake ? `<div class="menu"><details><summary class="btn" aria-label="More actions" title="More actions">⋯</summary>
-				<div class="drop"><button type="button" data-act="remake" title="Ask to restart the series from game 1">Request a remake…</button></div></details></div>` : ''}
+				<div class="drop"><button type="button" data-act="remake" title="Ask to restart the ${unit()} from game 1">Request a remake…</button></div></details></div>` : ''}
 		</div>`;
 	}
 
@@ -224,7 +227,7 @@
 			status = `<span class="bt-wait">Waiting for <b>${esc(C.oppName)}</b> to ready up</span>`;
 			action = '<button class="btn lg" data-act="reveal-unready">Not ready</button>';
 		} else {
-			status = `<span>${theirs ? `<b>${esc(C.oppName)}</b> is ready and waiting for you. ` : ''}Once you're both ready, both rosters and your Tera Captains' Tera types are locked for the series, barring a remake. Then you each pick your 6.</span>`;
+			status = `<span>${theirs ? `<b>${esc(C.oppName)}</b> is ready and waiting for you. ` : ''}Once you're both ready, both rosters and your Tera Captains' Tera types are locked for the ${unit()}, barring a remake. Then you each pick your 6.</span>`;
 			action = `<button class="btn primary lg ${theirs ? 'pulse' : ''}" data-act="reveal">Ready</button>`;
 		}
 		const side = (name, ready, sub) => `<div class="bt-side ${ready ? 'ready' : ''}">
@@ -257,7 +260,7 @@
 				${r.captain ? (t ? teraTag(t) : `<span class="type bt-hidden">${hidden}</span>`) : ''}</div>`;
 		}).join('')}</div>`;
 		const locked = bothRevealed();
-		return `<p class="eyebrow bt-rosters-head">${locked ? 'Rosters · locked for the series' : 'Rosters'}</p>
+		return `<p class="eyebrow bt-rosters-head">${locked ? `Rosters · locked for the ${unit()}` : 'Rosters'}</p>
 			<div class="bt-rosters">
 				${col(C.myName, myRoster(), S.series.tera?.mine || teraToReveal(), 'No set')}
 				<span class="bt-vs" aria-hidden="true">vs</span>
@@ -274,7 +277,7 @@
 		const busy = S.myReady || S.wantReady;
 		const locked = lockedIn();
 		const noChoice = all.length <= 6;
-		const title = locked ? `Your ${chosen.length} for this series` : noChoice ? `Bringing all ${all.length}` : `Pick ${n} · ${chosen.length}/${n}`;
+		const title = locked ? `Your ${chosen.length} for this ${unit()}` : noChoice ? `Bringing all ${all.length}` : `Pick ${n} · ${chosen.length}/${n}`;
 		return `<div class="bt-pick">
 			<p class="eyebrow">${title}</p>
 			<div class="bt-pickgrid">${all.map(s => {
@@ -303,8 +306,8 @@
 		let action;
 		if (over) {
 			const won = S.series.mine > S.series.theirs;
-			action = `<span class="bt-final ${won ? 'w' : 'l'}">Series ${won ? 'won' : 'lost'} ${S.series.mine}–${S.series.theirs}</span>
-				<a class="btn primary" href="/l/${C.leagueId}/series/${C.matchId}">Series &amp; replays</a>`;
+			action = `<span class="bt-final ${won ? 'w' : 'l'}">${Unit()} ${won ? 'won' : 'lost'} ${S.series.mine}–${S.series.theirs}</span>
+				<a class="btn primary" href="/l/${C.leagueId}/series/${C.matchId}">View Results</a>`;
 		} else {
 			action = `${S.oppReady ? `<span class="muted">${esc(C.oppName)} is ready for game ${nextGameNo()}</span>` : ''}
 				<button class="btn primary ${S.oppReady ? 'pulse' : ''}" data-act="next">Go to game ${nextGameNo()}</button>`;
@@ -321,10 +324,10 @@
 			${remakeBar()}
 			${S.notice ? `<p class="flash">${esc(S.notice)}</p>` : ''}
 			${p === 'lobby' ? lobby() : ''}
-			${p === 'done' ? `<section class="panel bt-lobby"><p class="eyebrow">Series complete</p>
+			${p === 'done' ? `<section class="panel bt-lobby"><p class="eyebrow">${Unit()} complete</p>
 				<h2>${S.series.mine > S.series.theirs ? 'You won' : 'You lost'} ${S.series.mine}–${S.series.theirs}</h2>
 				<p class="muted">Both teams and every replay are now open to the league.</p>
-				<div class="bt-cta"><a class="btn primary lg" href="/l/${C.leagueId}/series/${C.matchId}">Series &amp; replays</a></div></section>` : ''}
+				<div class="bt-cta"><a class="btn primary lg" href="/l/${C.leagueId}/series/${C.matchId}">View Results</a></div></section>` : ''}
 			${p === 'post' ? resultBar() : ''}`;
 		if (menuOpen) { const d = ui.querySelector('.bt-head .menu details'); if (d) d.open = true; }
 		mountFrame();
@@ -338,7 +341,7 @@
 				${r.reason ? `<div class="bt-reason">"${esc(r.reason)}"</div>` : ''}</div><span class="spacer"></span>
 				<button class="btn" data-act="remake-cancel">Withdraw</button></section>`;
 		}
-		return `<section class="panel bt-remake opp"><div><b>${esc(C.oppName)} asked to remake the series.</b>
+		return `<section class="panel bt-remake opp"><div><b>${esc(C.oppName)} asked to remake the ${unit()}.</b>
 			<span class="muted">Every game so far would be deleted and you'd start again from game 1.</span>
 			${r.reason ? `<div class="bt-reason">"${esc(r.reason)}"</div>` : ''}</div><span class="spacer"></span>
 			<button class="btn" data-act="remake-decline">Decline</button><button class="btn primary" data-act="remake-accept">Accept remake</button></section>`;
@@ -508,7 +511,7 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 		const what = n === 0 ? 'nothing played so far counts' :
 			`the ${n === 1 ? 'game' : `${n} games`} played so far ${n === 1 ? 'is' : 'are'} deleted (results, logs and replays), as if ${n === 1 ? 'it' : 'they'} never happened`;
 		dialog(`<h2>Request a remake?</h2>
-			<p>If ${esc(C.oppName)} accepts, the series restarts from game 1 and ${what}.${live ? ' The game in progress ends.' : ''}</p>
+			<p>If ${esc(C.oppName)} accepts, the ${unit()} restarts from game 1 and ${what}.${live ? ' The game in progress ends.' : ''}</p>
 			<p class="muted" style="font-size:13px">Use this for team sheet mistakes or game-breaking bugs.</p>
 			<label class="f">Reason (optional)<textarea class="inp" rows="2" maxlength="300" placeholder="e.g. wrong EVs on Garchomp"></textarea></label>
 			<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn primary" value="ok">Send request</button></div>`,
@@ -517,8 +520,8 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 	function confirmRemakeAccept() {
 		const live = phase() === 'live';
 		dialog(`<h2>Accept the remake?</h2>
-			<p>Every game in this series so far is deleted (results, logs and replays) and you both start again from game 1.${live ? ' The game in progress ends.' : ''} This can't be undone.</p>
-			<div class="row" style="justify-content:flex-end"><button class="btn" value="cancel" autofocus>Keep the series</button><button class="btn danger" value="ok">Remake series</button></div>`,
+			<p>Every game in this ${unit()} so far is deleted (results, logs and replays) and you both start again from game 1.${live ? ' The game in progress ends.' : ''} This can't be undone.</p>
+			<div class="row" style="justify-content:flex-end"><button class="btn" value="cancel" autofocus>Keep the ${unit()}</button><button class="btn danger" value="ok">Remake ${unit()}</button></div>`,
 		() => remakeAction('accept'));
 	}
 
@@ -537,7 +540,7 @@ ${room} .inline-controls p:has(>[data-cmd="/close"]){display:none}
 			S.pick = { ...S.pick, locked: false };
 			savePick();
 			S.error = '';
-			S.notice = 'The series was remade. Starting again from game 1.';
+			S.notice = `The ${unit()} was remade. Starting again from game 1.`;
 		}
 		render();
 	}

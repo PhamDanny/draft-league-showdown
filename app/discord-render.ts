@@ -340,15 +340,16 @@ function matchups(seasonId: number, week: number, names: Map<number, Who>, ids: 
 }
 
 /** The standings table in a code block, so the columns line up. Same order and tiebreaks as the site. */
-export function standingsBlock(seasonId: number, names: Map<number, Who>) {
+export function standingsBlock(seasonId: number, names: Map<number, Who>, bestOf: number) {
 	const rows = L.standings(seasonId);
+	const won = L.pairing(bestOf).Many;
 	// Code blocks render no markdown or mentions; only a backtick could break out of one
 	const nameOf = (uid: number) => cut(teamOf(names.get(uid)).replace(/`/g, "'"), 18);
 	const width = Math.max(6, ...rows.map(r => nameOf(r.userId).length));
-	const lines = [`${'#'.padStart(2)}  ${'Player'.padEnd(width)}  Series  Games  Diff`];
+	const lines = [`${'#'.padStart(2)}  ${'Player'.padEnd(width)}  ${won}  Games  Diff`];
 	rows.forEach((r, i) => {
 		const diff = r.gw - r.gl;
-		lines.push(`${String(i + 1).padStart(2)}  ${nameOf(r.userId).padEnd(width)}  ${`${r.sw}-${r.sl}`.padEnd(6)}  ${`${r.gw}-${r.gl}`.padEnd(5)}  ${diff > 0 ? '+' : ''}${diff}`);
+		lines.push(`${String(i + 1).padStart(2)}  ${nameOf(r.userId).padEnd(width)}  ${`${r.sw}-${r.sl}`.padEnd(won.length)}  ${`${r.gw}-${r.gl}`.padEnd(5)}  ${diff > 0 ? '+' : ''}${diff}`);
 	});
 	return '```\n' + lines.join('\n') + '\n```';
 }
@@ -369,21 +370,21 @@ export function recap(league: L.League, season: L.Season, week: number) {
 	const next = week >= weeksIn(season.id) ? 'Regular season complete.' : `**Week ${week + 1}**\n${matchups(season.id, week + 1, names, ids)}`;
 	const embeds: Embed[] = [
 		{ title: `Week ${week} results`, color: COLOR, description: cut(inWeek(season.id, week).map(m => seriesLine(league.id, m, names)).join('\n'), MAX_DESCRIPTION) },
-		{ title: 'Standings', color: COLOR, description: standingsBlock(season.id, names) },
+		{ title: 'Standings', color: COLOR, description: standingsBlock(season.id, names, L.settingsOf(league).bestOf) },
 	];
-	return { content: cut(`**${md(league.name)}**: week ${week} is final. Teams and replays are open on each series page.\n\n${next}`, 2000), embeds, allowed_mentions: only(ids) };
+	return { content: cut(`**${md(league.name)}**: week ${week} is final. Teams and replays are open on each Results page.\n\n${next}`, 2000), embeds, allowed_mentions: only(ids) };
 }
 
 // ---------- lookups ----------
 
 export function standingsEmbed(league: L.League, season: L.Season): Embed {
-	return { title: `${league.name} standings`, url: `${PUBLIC_URL}/l/${league.id}#standings`, color: COLOR, description: standingsBlock(season.id, who(league.id)) };
+	return { title: `${league.name} standings`, url: `${PUBLIC_URL}/l/${league.id}#standings`, color: COLOR, description: standingsBlock(season.id, who(league.id), L.settingsOf(league).bestOf) };
 }
 
 export function scheduleEmbed(league: L.League, season: L.Season, week: number): Embed {
 	const names = who(league.id);
 	const lines = inWeek(season.id, week).map(m => seriesLine(league.id, m, names));
-	return { title: `Week ${week}`, url: `${PUBLIC_URL}/l/${league.id}/schedule`, color: COLOR, description: cut(lines.join('\n') || 'No series this week.', MAX_DESCRIPTION) };
+	return { title: `Week ${week}`, url: `${PUBLIC_URL}/l/${league.id}/schedule`, color: COLOR, description: cut(lines.join('\n') || `No ${L.pairing(L.settingsOf(league).bestOf).many} this week.`, MAX_DESCRIPTION) };
 }
 
 export function rosterEmbed(league: L.League, season: L.Season, settings: L.Settings, userId: number): Embed {
@@ -422,7 +423,7 @@ export function rulesEmbed(league: L.League, settings: L.Settings): Embed {
 	const fields = [
 		{ name: 'Format', value: `${f.label}: ${f.game}` },
 		{ name: 'Draft', value: `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon` },
-		{ name: 'Series', value: `Best of ${settings.bestOf}. ${L.TEAM_PREVIEW[settings.teamPreview].rule}. ${L.previewShows(settings)}.` },
+		{ name: L.pairing(settings.bestOf).One, value: `Best of ${settings.bestOf}. ${L.previewRule(settings.teamPreview, settings.bestOf)}. ${L.previewShows(settings)}.` },
 	];
 	if (L.genOf(settings.mod) === 9) {
 		fields.push({ name: 'Tera', value: settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, chosen after the draft from a separate ${settings.tcBudget}-point Tera budget` :

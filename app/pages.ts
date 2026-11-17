@@ -11,6 +11,20 @@ import * as discord from './discord.ts';
 import { esc, monChip, monLabel, page, setList, sprite, spriteSrc } from './views/layout.ts';
 import { prefsOf, savePrefs, type Prefs } from './prefs.ts';
 
+/**
+ * Sets as results pages show them. In a Tera Captains league only captains can Terastallize,
+ * so every other Pokémon's set drops its Tera type (from the summary pill and the export alike).
+ */
+function teraShown(settings: L.Settings, seasonId: number, userId: number) {
+	if (settings.teraMode !== 'captains') return (set: any) => set;
+	const entry = L.rosterFormes(seasonId, userId, settings.mod);
+	const captains = new Set(L.roster(seasonId, userId).filter(r => r.captain).map(r => r.species_id));
+	return (set: any) => {
+		const id = pickSpecies(set, settings.mod).id || toID(set.species);
+		return captains.has(entry.get(id) || id) ? set : { ...set, teraType: undefined };
+	};
+}
+
 type LReq = Request & { league: L.League & { role: string }, season: L.Season, settings: L.Settings };
 
 // ---------- live updates (draft room and league pages) ----------
@@ -364,7 +378,7 @@ export function pageRoutes(app: Express) {
 			title: 'Account', flash: req.query.msg as string,
 			body: `${first ? `<a class="eyebrow back" href="/l/${first.id}">← Back to ${esc(first.name)}</a>` : ''}<h1>Account</h1><section class="panel" style="max-width:480px">
 				<form method="post" action="/account" class="stack" style="gap:10px">
-					<label class="f">Showdown name<input name="showdown_name" value="${esc(u.showdown_name)}" maxlength="18" required></label>
+					<label class="f">Display name<input name="showdown_name" value="${esc(u.showdown_name)}" maxlength="18" required></label>
 					<button class="btn primary" type="submit">Save</button>
 				</form></section>
 				${settingsPanel(prefsOf(u))}`,
@@ -443,7 +457,7 @@ export function pageRoutes(app: Express) {
 				card = `<section class="panel your-match"><p class="eyebrow">${esc(L.matchLabel(my))} · Your match</p>
 					<div class="row"><h2 style="margin:0">vs ${esc(n.get(opp))}</h2>${statusPill(my.status)}<span class="num">${my.status === 'scheduled' ? '' : `${a}–${b}`}</span>
 						<span class="spacer"></span>
-						${final ? `<a class="btn primary" href="/l/${league.id}/series/${my.id}">View series</a>` :
+						${final ? `<a class="btn primary" href="/l/${league.id}/series/${my.id}">View Results</a>` :
 							`<a class="btn" href="/l/${league.id}/builder#week-${my.week}">Build team</a><a class="btn primary" href="/l/${league.id}/battle/${my.id}">${esc(playLabel(my))}</a>`}</div></section>`;
 			} else if (ph === 'playoffs' && br) {
 				const picking = br.picking?.picker.userId === me;
@@ -463,7 +477,7 @@ export function pageRoutes(app: Express) {
 					${statusPill(m.status)}<span class="chev" aria-hidden="true">›</span></a>`).join('')}</div></section>` : ''}
 				<section class="panel" id="standings"><div class="row panel-head"><h2>Standings</h2><span class="spacer"></span>
 					${br ? `<a href="/l/${league.id}/playoffs">${br.projected ? 'Projected bracket' : 'Bracket'} →</a>` : ''}</div>
-					${standingsTable(league.id, st, n, me, st, cut)}
+					${standingsTable(league.id, st, n, me, st, cut, L.pairing(settings.bestOf).Many)}
 					${cut && ph === 'regular' ? `<p class="muted field-help" style="margin:8px 0 0">The top ${cut} make the playoffs.</p>` : ''}</section>
 			</div>`;
 		}
@@ -478,10 +492,10 @@ export function pageRoutes(app: Express) {
 	});
 
 	/** `cut`: draw a line under that many rows (the playoff spots). */
-	function standingsTable(leagueId: number, rows: L.Standing[], n: Map<number, string>, me: number, full: L.Standing[], cut = 0) {
+	function standingsTable(leagueId: number, rows: L.Standing[], n: Map<number, string>, me: number, full: L.Standing[], cut = 0, wonCol = 'Series') {
 		const mark = (r: L.Standing) => r.tied ? ' <span class="pill" title="Level after every tiebreaker. A coin flip settles it when the playoffs start.">Tied</span>' :
 			r.flip ? ' <span class="pill" title="Placed by a coin flip when the playoffs started">Coin flip</span>' : '';
-		return `<div class="table-wrap"><table class="standings"><thead><tr><th>#</th><th>Player</th><th class="r">Series</th><th class="r hide-sm">Games</th><th class="r">Diff</th></tr></thead><tbody>
+		return `<div class="table-wrap"><table class="standings"><thead><tr><th>#</th><th>Player</th><th class="r">${wonCol}</th><th class="r hide-sm">Games</th><th class="r">Diff</th></tr></thead><tbody>
 		${rows.map(r => `<tr class="${r.userId === me ? 'me' : ''} ${cut && full.indexOf(r) === cut - 1 && cut < full.length ? 'cut' : ''}"><td class="num">${full.indexOf(r) + 1}</td>
 			<td><a href="/l/${leagueId}/team/${r.userId}">${esc(n.get(r.userId))}</a>${mark(r)}</td>
 			<td class="r num">${r.sw}–${r.sl}</td><td class="r num hide-sm">${r.gw}–${r.gl}</td>
@@ -595,7 +609,7 @@ export function pageRoutes(app: Express) {
 			if (settings.trades) facts.push(tradeClosed && L.phase(season, settings) !== 'draft' ? 'Trades are closed' : `Trades close after week ${deadline}`);
 			const live = L.seriesInProgress(season.id, who);
 			const frozen = L.phase(season, settings) !== 'regular';
-			const blocked = frozen ? 'Rosters are frozen for the playoffs.' : live ? `${self ? 'Finish your' : `${esc(n.get(who))} has a`} ${esc(L.matchLabel(live).toLowerCase())} series ${self ? 'first' : 'in progress'}: no roster moves until it's final.` : '';
+			const blocked = frozen ? 'Rosters are frozen for the playoffs.' : live ? `${self ? 'Finish your' : `${esc(n.get(who))} has a`} ${esc(L.matchLabel(live).toLowerCase())} ${L.pairing(L.bestOfFor(settings, live)).one} ${self ? 'first' : 'in progress'}: no roster moves until it's final.` : '';
 			const off = blocked ? 'disabled' : '';
 			if (blocked) sections.push(`<div class="flash warn">${blocked}</div>`);
 
@@ -757,13 +771,14 @@ export function pageRoutes(app: Express) {
 			const sets = new Map<string, any>();
 			const entry = L.rosterFormes(season.id, uid, settings.mod);
 			const brought: string[] = []; // each game's roster entries, to check the same 6 were kept where the league says so
+			const shown = teraShown(settings, season.id, uid);
 			for (const g of games) {
 				if (!g.teams) continue;
 				const teams = JSON.parse(g.teams);
 				const slot = g.p1 === uid ? 'p1' : 'p2';
 				const team: any[] = teams[slot]?.team || [];
 				brought.push(team.map(s => { const id = pickSpecies(s, settings.mod).id || toID(s.species); return entry.get(id) || id; }).sort().join(','));
-				for (const set of team) {
+				for (const set of team.map(shown)) {
 					const key = exportSet(set);
 					if (!sets.has(key)) sets.set(key, set);
 				}
@@ -785,7 +800,7 @@ export function pageRoutes(app: Express) {
 			<div id="live">
 			${games.length ? `<div class="games">${games.map(g => {
 		const inner = `<p class="eyebrow">Game ${g.game_no}</p><p style="margin:4px 0 0"><b>${g.winner && n.get(g.winner) ? `${esc(n.get(g.winner))} won` : 'Tie'}</b>${g.turns ? ` · ${g.turns} turns` : ''}</p>
-			${final ? '<p class="game-link">Watch replay →</p>' : '<p class="muted game-note">Replay opens when the series is final.</p>'}`;
+			${final ? '<p class="game-link">Watch replay →</p>' : `<p class="muted game-note">Replay opens when the ${L.pairing(bestOf).one} is final.</p>`}`;
 		return final ? `<a class="panel game-card" href="/l/${league.id}/replay/${g.id}">${inner}</a>` : `<div class="panel game-card">${inner}</div>`;
 	}).join('')}</div>` : ''}
 			<div class="grid g2">${teamCol(m.p1)}${teamCol(m.p2)}</div></div>
@@ -810,6 +825,9 @@ export function pageRoutes(app: Express) {
 		const n = names(league.id);
 		const games = L.battlesFor(m.id).filter(g => g.played_at).map(g => ({ id: g.id, no: g.game_no, winner: n.get(g.winner) || null }));
 		const teams = b.teams ? JSON.parse(b.teams) : null;
+		for (const side of ['p1', 'p2'] as const) {
+			if (teams?.[side]?.team) teams[side].team = teams[side].team.map(teraShown(settings, season.id, b[side]));
+		}
 		const data = {
 			leagueId: league.id, matchId: m.id, week: m.week, label: L.matchLabel(m), game: b.game_no, bestOf: L.bestOfFor(settings, m), ...gameOf(settings),
 			series: { p1: n.get(m.p1), p2: n.get(m.p2), score: [m.p1_wins, m.p2_wins] },
@@ -860,10 +878,11 @@ export function pageRoutes(app: Express) {
 		const moves = L.transactions(season.id, uid);
 		// Set history: every set from a final series, grouped by Pokémon
 		const history = new Map<string, Map<string, any>>();
+		const shown = teraShown(settings, season.id, uid);
 		for (const b of all<any>(`SELECT battles.* FROM battles JOIN matches ON matches.id = battles.match_id
 			WHERE matches.season_id = ? AND matches.status = 'final' AND battles.teams IS NOT NULL AND (battles.p1 = ? OR battles.p2 = ?)`, season.id, uid, uid)) {
 			const slot = b.p1 === uid ? 'p1' : 'p2';
-			for (const set of JSON.parse(b.teams)[slot]?.team || []) {
+			for (const set of (JSON.parse(b.teams)[slot]?.team || []).map(shown)) {
 				const id = pickSpecies(set, settings.mod).id || toID(set.species);
 				if (!history.has(id)) history.set(id, new Map());
 				history.get(id)!.set(exportSet(set), set);
@@ -875,7 +894,7 @@ export function pageRoutes(app: Express) {
 			<section class="panel"><div class="table-wrap"><table class="compact"><thead><tr><th>Pokémon</th><th class="r">Pts</th></tr></thead><tbody>
 				${r.map(x => `<tr><td>${monLabel(x.species_id, { small: true })}${x.captain && showCaps ? ' <span class="pill tc">Tera Captain</span>' : ''}</td><td class="r num">${x.cost}${x.captain && showCaps && x.tc_cost != null ? ` +${x.tc_cost} Tera` : ''}</td></tr>`).join('')}
 			</tbody></table></div></section>
-			${ms.length ? `<section class="panel"><h2>Series</h2><div class="list">${ms.map(m => {
+			${ms.length ? `<section class="panel"><h2>${settings.bestOf === 1 && settings.playoffBestOf === 1 ? 'Matches' : 'Series'}</h2><div class="list">${ms.map(m => {
 				const opp = m.p1 === uid ? m.p2 : m.p1;
 				const res2 = m.status === 'final' ? (m.winner === uid ? '<span class="pill w">W</span>' : '<span class="pill l">L</span>') : statusPill(m.status);
 				return `<div class="row"><span class="num muted">${m.stage === 'regular' ? `Wk ${m.week}` : esc(L.matchLabel(m))}</span><a href="/l/${league.id}/series/${m.id}">vs ${esc(n.get(opp))}</a><span class="spacer"></span><span class="num">${m.p1 === uid ? `${m.p1_wins}–${m.p2_wins}` : `${m.p2_wins}–${m.p1_wins}`}</span>${res2}</div>`;
@@ -1059,10 +1078,10 @@ export function pageRoutes(app: Express) {
 		const hasTera = L.genOf(settings.mod) === 9;
 		const rows: [string, string][] = [
 			['Format', `${f.label}: ${f.game}`],
-			['Series', `Best of ${settings.bestOf}`],
+			[L.pairing(settings.bestOf).One, `Best of ${settings.bestOf}`],
 			['Playoffs', settings.playoffTeams >= 2 ? `Top ${settings.playoffTeams}, best of ${settings.playoffBestOf}. ${L.RESEED[settings.playoffReseed].label}: ${L.RESEED[settings.playoffReseed].rule.toLowerCase()}` : 'None'],
-			['Standings', 'Series wins, then head-to-head among the tied players, game win %, game differential, strength of victory (the combined series win % of the players you beat), then a coin flip when the playoffs start'],
-			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.TEAM_PREVIEW[settings.teamPreview].rule}. ${L.previewShows(settings)}`],
+			['Standings', `${L.pairing(settings.bestOf).One} wins, then head-to-head among the tied players, game win %, game differential, strength of victory (the combined ${L.pairing(settings.bestOf).one} win % of the players you beat), then a coin flip when the playoffs start`],
+			['Team preview', `${L.TEAM_PREVIEW[settings.teamPreview].label}: ${L.previewRule(settings.teamPreview, settings.bestOf)}. ${L.previewShows(settings)}`],
 			['Draft', `${settings.draftType === 'snake' ? 'Snake' : 'Linear'}, ${settings.budget} points, ${settings.rosterMin}–${settings.rosterMax} Pokémon`],
 			...(hasTera ? [
 				['Tera', settings.teraMode === 'captains' ? `Tera Captains: up to ${settings.maxCaptains}, chosen after the draft from a separate ${settings.tcBudget}-point Tera budget` :
@@ -1071,7 +1090,7 @@ export function pageRoutes(app: Express) {
 			['Clauses', settings.clauses.join(', ') || 'None'],
 			...Object.entries(f.banned).filter(([, list]) => list.length).map(([kind, list]) => [`Banned ${kind}`, list.join(', ')] as [string, string]),
 			...(f.other.length ? [['Other rules', f.other.join('. ') + '.'] as [string, string]] : []),
-			['Trades', !settings.trades ? 'Off' : `On, until every series through week ${L.captainsRevealed((req as LReq).season) ? L.tradeDeadlineWeek((req as LReq).season.id, settings) : settings.tradeDeadline || 'halfway'}${settings.tradeDeadline ? '' : ' (halfway)'} is final. Each roster has to stay within the roster limits and budget, and a traded Tera Captain stops being one`],
+			['Trades', !settings.trades ? 'Off' : `On, until every ${L.pairing(settings.bestOf).one} through week ${L.captainsRevealed((req as LReq).season) ? L.tradeDeadlineWeek((req as LReq).season.id, settings) : settings.tradeDeadline || 'halfway'}${settings.tradeDeadline ? '' : ' (halfway)'} is final. Each roster has to stay within the roster limits and budget, and a traded Tera Captain stops being one`],
 			['Free agency', !settings.freeAgency ? 'Off' : `On until the playoffs, ${settings.faLimit ? `${settings.faLimit} moves per season` : 'unlimited moves'}. Free agents cost their pool price, and a dropped Pokémon becomes a free agent`],
 		];
 		render(req, res, {
@@ -1157,7 +1176,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 		if (ph === 'regular') {
 			const left = L.matches(season.id).filter(m => m.status !== 'final').length;
 			const size = L.playoffSize(settings, L.draftPlayers(season.id).length);
-			return `<p class="muted" style="margin:0">Regular season, best of ${settings.bestOf}. ${size ? `The top ${size} make the playoffs (best of ${settings.playoffBestOf}), which start by themselves when the last series is final.` : 'No playoffs: the season ends with the regular season.'}</p>
+			return `<p class="muted" style="margin:0">Regular season, best of ${settings.bestOf}. ${size ? `The top ${size} make the playoffs (best of ${settings.playoffBestOf}), which start by themselves when the last ${L.pairing(settings.bestOf).one} is final.` : 'No playoffs: the season ends with the regular season.'}</p>
 				${!left ? `<form method="post" action="/l/${league.id}/admin/start-playoffs" style="margin-top:12px" ${confirmAttr(size ? 'Start the playoffs from the current standings?' : 'End the season?')}>
 					<button class="btn primary" type="submit">${size ? 'Start playoffs' : 'End season'}</button></form>` : ''}`;
 		}
@@ -1222,7 +1241,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					<label class="f">Trade deadline (week)<input type="number" name="tradeDeadline" min="1" max="52" value="${settings.tradeDeadline || ''}" placeholder="Halfway"></label>
 					${num('faLimit', 'Free agent moves per season', 0, 99)}
 				</div>
-				<p class="muted field-help">Trades close once every series through the deadline week is final; blank means halfway${L.captainsRevealed(season) ? ` (week ${Math.ceil(L.regularWeeks(season.id) / 2)})` : ''}. Free agent moves: 0 means unlimited.</p>
+				<p class="muted field-help">Trades close once every ${L.pairing(settings.bestOf).one} through the deadline week is final; blank means halfway${L.captainsRevealed(season) ? ` (week ${Math.ceil(L.regularWeeks(season.id) / 2)})` : ''}. Free agent moves: 0 means unlimited.</p>
 				<h3>Draft</h3>
 				<div class="form">
 					<label class="f">Draft${sel('draftType', settings.draftType, [['snake', 'Snake'], ['linear', 'Linear']])}</label>
@@ -1245,7 +1264,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 					<label class="f">Series${sel('bestOf', String(settings.bestOf), [['1', 'Bo1'], ['3', 'Bo3'], ['5', 'Bo5']])}</label>
 					<label class="f">Team preview${sel('teamPreview', settings.teamPreview, Object.entries(L.TEAM_PREVIEW).map(([v, o]) => [v, o.label] as [string, string]))}</label>
 				</div>
-				<p class="muted field-help" id="tp-help">${esc(L.TEAM_PREVIEW[settings.teamPreview].rule)}.</p>
+				<p class="muted field-help" id="tp-help">${esc(L.previewRule(settings.teamPreview, settings.bestOf))}.</p>
 				<div class="row">${check('itemPreview', 'Show items')}${check('abilityPreview', 'Show abilities')}<span ${hasTera ? '' : 'hidden'}>${check('teraPreview', 'Show Tera types')}</span></div>
 				<p class="muted field-help">What each player sees of the other's 6 at the battle's team preview, where leads are picked.</p>
 				<h3>Playoffs</h3>
@@ -1264,7 +1283,7 @@ document.getElementById('copy-invite').addEventListener('click', async e => {
 document.querySelector('[name=teraMode]').addEventListener('change', e => {
 	document.getElementById('tc-fields').hidden = e.target.value !== 'captains';
 });
-const TP = ${JSON.stringify(Object.fromEntries(Object.entries(L.TEAM_PREVIEW).map(([k, o]) => [k, o.rule]))).replace(/</g, '\\u003c')};
+const TP = ${JSON.stringify(Object.fromEntries(Object.keys(L.TEAM_PREVIEW).map(k => [k, L.previewRule(k as L.TeamPreview, settings.bestOf)]))).replace(/</g, '\\u003c')};
 document.querySelector('[name=teamPreview]').addEventListener('change', e => {
 	document.getElementById('tp-help').textContent = TP[e.target.value] + '.';
 });

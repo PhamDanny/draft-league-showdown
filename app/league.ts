@@ -775,7 +775,7 @@ function moveWindowProblem(season: Season, settings: Settings, userId: number) {
 	if (ph !== 'regular') return 'Rosters are frozen for the playoffs.';
 	if (!draftPlayers(season.id).some(p => p.user_id === userId)) return "That player isn't in this season.";
 	const live = seriesInProgress(season.id, userId);
-	if (live) return `Finish the ${matchLabel(live).toLowerCase()} series first.`;
+	if (live) return `Finish the ${matchLabel(live).toLowerCase()} ${pairing(bestOfFor(settings, live)).one} first.`;
 	return null;
 }
 
@@ -867,7 +867,7 @@ export function tradeProblem(season: Season, settings: Settings, from: number, t
 	for (const uid of [from, to]) {
 		if (!players.some(p => p.user_id === uid)) return `${nameOf(uid)} isn't in this season.`;
 		const live = seriesInProgress(season.id, uid);
-		if (live) return `${nameOf(uid)} has a ${matchLabel(live).toLowerCase()} series in progress. Trades wait until it's final.`;
+		if (live) return `${nameOf(uid)} has a ${matchLabel(live).toLowerCase()} ${pairing(bestOfFor(settings, live)).one} in progress. Trades wait until it's final.`;
 	}
 	const sides: [number, string[], string[]][] = [[from, give, get], [to, get, give]];
 	const rosters = new Map(sides.map(([uid]) => [uid, roster(season.id, uid)]));
@@ -1127,6 +1127,19 @@ export function recordBattleEnd(leagueId: number, users: [number, number], winne
 export function bestOfFor(settings: Settings, match: { stage: string }) {
 	return match.stage === 'regular' ? settings.bestOf : settings.playoffBestOf;
 }
+/** What one pairing is called: a "match" when it's a single game, a "series" when it's a best of 3 or 5. */
+export function pairing(bestOf: number) {
+	return bestOf === 1 ? { one: 'match', many: 'matches', One: 'Match', Many: 'Matches' } : { one: 'series', many: 'series', One: 'Series', Many: 'Series' };
+}
+/** pairing() for one match, from its league's settings. */
+function pairingOf(match: Match) {
+	const league = one<League>('SELECT leagues.* FROM leagues JOIN seasons ON seasons.league_id = leagues.id WHERE seasons.id = ?', match.season_id)!;
+	return pairing(bestOfFor(settingsOf(league), match));
+}
+/** A team preview mode's rule, naming the pairing by its length. */
+export function previewRule(teamPreview: TeamPreview, bestOf: number) {
+	return TEAM_PREVIEW[teamPreview].rule.replace(/series$/, pairing(bestOf).one);
+}
 
 // ---------- remakes ----------
 
@@ -1146,8 +1159,9 @@ export function remakeCount(matchId: number) {
 export function remake(leagueId: number, matchId: number, userId: number, action: string, reason = '') {
 	return tx(() => {
 		const match = one<Match>('SELECT * FROM matches WHERE id = ?', matchId);
-		if (!match || (match.p1 !== userId && match.p2 !== userId)) return 'Not your series.';
-		if (match.status === 'final') return 'This series is already final. Ask a commissioner instead.';
+		if (!match) return 'Not your series.';
+		if (match.p1 !== userId && match.p2 !== userId) return `Not your ${pairingOf(match).one}.`;
+		if (match.status === 'final') return `This ${pairingOf(match).one} is already final. Ask a commissioner instead.`;
 		const pending = pendingRemake(matchId);
 		const t = now();
 		if (action === 'request') {
@@ -1221,8 +1235,8 @@ function rostersLocked(matchId: number) {
 /** Takes back a player's ready at the roster check, while the opponent isn't ready yet. Returns an error message or ''. */
 export function unrevealTera(match: Match, userId: number) {
 	return tx(() => {
-		if (match.p1 !== userId && match.p2 !== userId) return 'Not your series.';
-		if (rostersLocked(match.id)) return 'Your rosters are already locked for this series.';
+		if (match.p1 !== userId && match.p2 !== userId) return `Not your ${pairingOf(match).one}.`;
+		if (rostersLocked(match.id)) return `Your rosters are already locked for this ${pairingOf(match).one}.`;
 		run('DELETE FROM series_tera WHERE match_id = ? AND user_id = ?', match.id, userId);
 		return '';
 	});
@@ -1232,10 +1246,10 @@ export function unrevealTera(match: Match, userId: number) {
 export function revealTera(match: Match, userId: number, tera: { [id: string]: unknown }) {
 	return tx(() => {
 		const fresh = one<Match>('SELECT * FROM matches WHERE id = ?', match.id)!;
-		if (fresh.p1 !== userId && fresh.p2 !== userId) return 'Not your series.';
-		if (fresh.status === 'final') return 'This series is already final.';
+		if (fresh.p1 !== userId && fresh.p2 !== userId) return `Not your ${pairingOf(fresh).one}.`;
+		if (fresh.status === 'final') return `This ${pairingOf(fresh).one} is already final.`;
 		// Once the opponent can see them, they're fixed
-		if (rostersLocked(fresh.id)) return 'Your rosters are already locked for this series.';
+		if (rostersLocked(fresh.id)) return `Your rosters are already locked for this ${pairingOf(fresh).one}.`;
 		const captains = captainIds(fresh.season_id, userId);
 		const out: { [id: string]: string } = {};
 		for (const id of captains) {

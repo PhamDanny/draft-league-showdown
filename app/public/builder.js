@@ -98,7 +98,7 @@
 		const acts = ro ? `
 			<button class="btn" type="button" data-act="export">Export</button>
 			${target ? `<button class="btn" type="button" data-act="copy-to" data-target="${target.week}">Copy to wk ${target.week}</button>` : '<span></span>'}
-			<a class="btn primary" href="/l/${B.leagueId}/series/${week.matchId}">View series</a>` : `
+			<a class="btn primary" href="/l/${B.leagueId}/series/${week.matchId}">View Results</a>` : `
 			<button class="btn" type="button" data-act="import">Import</button>
 			<button class="btn" type="button" data-act="export">Export</button>
 			${B.weeks.length > 1 ? `<select class="inp" data-act="copy" aria-label="Copy a team from another week"><option value="">Copy from…</option>${B.weeks.filter(w => w !== week).map(w =>
@@ -116,7 +116,7 @@
 						<a class="eyebrow tb-back" href="#home">← All weeks</a>
 						${B.weeks.length ? `<label class="f">Week<select class="inp" data-act="week">${B.weeks.map(w =>
 							`<option value="${w.week}" ${w === week ? 'selected' : ''}>${esc(weekLabel(w))}</option>`).join('')}</select></label>` : '<p class="eyebrow">No schedule yet</p>'}
-						${B.teamPreview === 'game' || B.teamPreview === 'match' ? `<p class="muted tb-hint">Prep a set for every Pokémon on your roster. You pick 6 of them ${B.teamPreview === 'game' ? 'before each game' : 'before game 1, and keep them for the series'} on the battle page.</p>` : ''}
+						${B.teamPreview === 'game' || B.teamPreview === 'match' ? `<p class="muted tb-hint">Prep a set for every Pokémon on your roster. You pick 6 of them ${B.teamPreview === 'game' ? 'before each game' : week?.bestOf === 1 ? 'before the game' : 'before game 1, and keep them for the series'} on the battle page.</p>` : ''}
 						<div class="tb-team" id="tb-team"></div>
 						<div class="tb-acts">${acts}</div>
 					</section>
@@ -152,7 +152,7 @@
 				</header>
 				<div class="tbh-mons">${(B.rosters[w.opp] || []).map(rosterImg).join('')}</div>
 				<footer class="tbh-acts">
-					${done ? `<a class="btn" href="/l/${B.leagueId}/series/${w.matchId}">Series</a>` : `<a class="btn" href="/l/${B.leagueId}/battle/${w.matchId}">Play</a>`}
+					${done ? `<a class="btn" href="/l/${B.leagueId}/series/${w.matchId}">Results</a>` : `<a class="btn" href="/l/${B.leagueId}/battle/${w.matchId}">Play</a>`}
 					<a class="btn ${done ? '' : 'primary'}" href="#week-${w.week}">${done ? 'View team' : 'Prep'}</a>
 					<span class="muted tbh-saved">${done ? 'Played' : `${saved}/${SIZE} sets`}</span>
 				</footer>

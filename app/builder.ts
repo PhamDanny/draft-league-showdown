@@ -140,6 +140,7 @@ function builderContext(req: Request) {
 			week: m.week, stage: m.stage, label: L.matchLabel(m), matchId: m.id, status: m.status, opp, oppName: n.get(opp) || '?', oppTeam: teamNames.get(opp) || n.get(opp) || '?',
 			score: m.p1 === me ? [m.p1_wins, m.p2_wins] : [m.p2_wins, m.p1_wins],
 			played: m.status === 'final' ? revealedSets(m.id, me, settings.mod) : null,
+			bestOf: L.bestOfFor(settings, m),
 		};
 	});
 	// Season record for the builder's home view: series won-lost and game differential, as standings count them
