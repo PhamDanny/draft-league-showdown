@@ -13,6 +13,8 @@ npm start
 
 Open http://localhost:8000.
 
+To host it for real on a Linux server with HTTPS, backups and one-command deploys, see [docs/deploy-vps.md](docs/deploy-vps.md).
+
 `npm run setup` downloads Showdown's server and client at the commits in `showdown/pins.json` into `vendor/`, applies this repo's changes, builds both, and creates `data/keys/`. It takes a few minutes the first time.
 
 ### .env
