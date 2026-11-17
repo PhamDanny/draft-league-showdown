@@ -1,0 +1,41 @@
+# Deploys main to the live server (docs/deploy-vps.md, "Deploying changes").
+# The SSH key in DEPLOY_SSH_KEY can only run scripts/deploy.sh on the server:
+# its authorized_keys entry has a forced command, so whatever command is sent is ignored.
+# A deploy restarts the site, which ends battles in progress. To push without
+# deploying, put [skip ci] in the commit message; deploy later from the Actions tab.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'test/**'
+      - '.github/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: github.repository == 'PhamDanny/draft-league-showdown'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run deploy.sh on the server
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ vars.DEPLOY_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes "league@$HOST" deploy

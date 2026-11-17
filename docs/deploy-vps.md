@@ -237,4 +237,23 @@ ssh league "bash draft-league-showdown/scripts/deploy.sh"
 
 **A restart ends any battles in progress.** Deploy when nobody is mid-game. A deploy that re-runs setup takes several minutes, and the battle screen may misbehave during the rebuild.
 
+### Automatic deploys
+
+`.github/workflows/deploy.yml` runs the deploy script on every push to `main`, except pushes that only touch Markdown, `docs/`, `test/` or `.github/`. It can also be run by hand from the repo's **Actions** tab (**Deploy** → **Run workflow**). To push without deploying, put `[skip ci]` in the commit message.
+
+It logs in with its own SSH key, which can do nothing but run `scripts/deploy.sh`. Setup, once:
+
+1. On your PC, make a key with no passphrase: `ssh-keygen -t ed25519 -N "" -f deploy_key`.
+2. Add `deploy_key.pub` to `/home/league/.ssh/authorized_keys` on the server, prefixed so it can only deploy:
+
+   ```
+   command="bash /home/league/draft-league-showdown/scripts/deploy.sh",restrict ssh-ed25519 AAAA... 
+   ```
+
+3. In the GitHub repo, set:
+   - variable `DEPLOY_HOST`: `league.example.com`
+   - variable `DEPLOY_KNOWN_HOSTS`: the output of `ssh-keyscan -t ed25519 league.example.com` (check its fingerprint matches the one you accepted on first login)
+   - secret `DEPLOY_SSH_KEY`: the contents of `deploy_key` (`gh secret set DEPLOY_SSH_KEY < deploy_key`)
+4. Delete `deploy_key` from your PC. To revoke it later, remove its line from `authorized_keys`.
+
 To look at logs from your PC: `ssh league "journalctl -u draft-league -n 200"`.
