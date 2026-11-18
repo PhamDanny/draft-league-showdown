@@ -81,7 +81,7 @@ const wanted = new Map<string, string>(); // species id → mod
 const waiting = new Set<() => void>();
 let draining: Promise<void> | null = null;
 let adopted = false;
-let uploaded = 0;
+let added = 0; // emojis the waiting boards can now show, uploaded or adopted
 // After Discord refuses an upload, nothing is asked again for a while (otherwise each board re-render would retry)
 const RETRY_MS = 10 * 60_000;
 let pausedUntil = 0;
@@ -108,14 +108,14 @@ async function drain(api: Api) {
 	while (wanted.size) {
 		const [speciesId, mod] = wanted.entries().next().value!;
 		wanted.delete(speciesId);
-		if (have.has(speciesId)) continue;
+		if (have.has(speciesId)) { added++; continue; } // adopted from the app just now
 		const png = await iconPng(speciesId, mod);
 		if (!png) continue; // no icon: the board keeps the name
 		const name = emojiName(speciesId);
 		const r = await api('POST', `/applications/${DISCORD_CLIENT_ID}/emojis`, { name, image: `data:image/png;base64,${png.toString('base64')}` });
 		if (r.status === 200 || r.status === 201) {
 			remember(speciesId, r.data.id, r.data.name || name);
-			uploaded++;
+			added++;
 		} else {
 			// Out of slots, a name clash, or Discord refusing: leave the name on the board and stop for now
 			console.error(`Discord: couldn't upload the emoji for ${speciesId} (${r.status}): ${JSON.stringify(r.data)?.slice(0, 200)}`);
@@ -133,12 +133,12 @@ export function requestEmojis(species: string[], mod: string, api: Api, then: ()
 	for (const s of missing) wanted.set(s, mod);
 	waiting.add(then);
 	if (draining) return;
-	uploaded = 0;
+	added = 0;
 	draining = drain(api).catch(e => console.error(`Discord: emoji upload failed: ${e.message}`)).finally(() => {
 		draining = null;
 		const done = [...waiting];
 		waiting.clear();
-		if (uploaded) for (const f of done) f();
+		if (added) for (const f of done) f();
 	});
 }
 
